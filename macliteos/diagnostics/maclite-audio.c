@@ -91,7 +91,14 @@ int main(int argc, char **argv)
         const char *v = argc > 2 && argv[2][0] != '-' ? argv[2] : NULL;
         if (!v) {
             int pct = ml_audio_volume_percent(cnum);
-            if (pct < 0) { fprintf(stderr, "cannot read volume on card%d\n", cnum); return HW_EXIT_FAIL; }
+            if (pct < 0) {
+                if (ml_audio_status_get(&as).readable) {
+                    fprintf(stderr, "cannot read volume on card%d\n", cnum);
+                    return HW_EXIT_FAIL;
+                }
+                fprintf(stderr, "mixer ioctl not performed here (fixture roots): volume is NOT TESTED\n");
+                return HW_EXIT_NOT_TESTED;
+            }
             printf("%d\n", pct);
             return HW_EXIT_PASS;
         }
@@ -109,6 +116,10 @@ int main(int argc, char **argv)
         bool want = !strcmp(cmd, "mute");
         bool applied = false;
         if (!ml_audio_set_mute(cnum, want, &applied)) {
+            if (!ml_audio_status_get(&as).readable) {
+                fprintf(stderr, "mixer ioctl not performed here (fixture roots): mute is NOT TESTED\n");
+                return HW_EXIT_NOT_TESTED;
+            }
             fprintf(stderr, "no mute switch on card%d\n", cnum);
             return HW_EXIT_FAIL;
         }

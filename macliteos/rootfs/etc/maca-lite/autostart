@@ -1,1 +1,7 @@
-# nothing autostarts by default
+# MacLiteOS session autostart (read by /etc/init.d or the initrd supervisor).
+#
+# v0.2 default: start the session with the backend chosen from detected
+# hardware (KMS when a DRM card is bound, fbdev next, headless last) and the
+# performance mode picked from real capability. Nothing else is started by
+# default — no indexer, no telemetry, no cloud agent, no updater (spec §25).
+/usr/bin/mica-comp --session --backend auto

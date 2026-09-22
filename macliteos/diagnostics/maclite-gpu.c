@@ -1,4 +1,4 @@
-/* maclite-gpu — GPU detection and acceleration validation (spec §2).
+/* maclite-gpu — GPU detection and acceleration validation.
  *
  * The rule this tool exists to enforce: never report acceleration because a
  * device node happens to exist. DRM/KMS is PASS only when a card is bound to a
@@ -132,9 +132,9 @@ int main(int argc, char **argv)
     else {
         diag_title("MacLiteOS GPU Diagnostics");
         diag_section("GPU");
-        diag_kv("Vendor", g.present ? "%s (0x%04x)" : "-", g.present ? vendor_name(g.vendor_id) : "", g.vendor_id);
+        diag_kv("Vendor", "%s (0x%04x)", g.present ? vendor_name(g.vendor_id) : "-", g.vendor_id);
         diag_kv("Model", "%s", or_dash(g.device));
-        diag_kv("PCI ID", g.present ? "%s (%04x:%04x)" : "-", g.pci_addr, g.vendor_id, g.device_id);
+        diag_kv("PCI ID", "%s (%04x:%04x)", g.pci_addr, g.vendor_id, g.device_id);
         diag_kv("Driver", "%s", or_dash(g.driver));
         diag_kv("DRM Device", "%s", g.card_node[0] ? g.card_node : "-");
         diag_kv("Render Node", "%s", g.render_node[0] ? g.render_node : "-");

@@ -1,0 +1,29 @@
+# settings.script — Settings > Displays must drive the SAME brightness backend as
+# maclite-brightness (spec §5), and must refuse rather than pretend.
+#
+# On a headless sandbox there is no /sys/class/backlight device, so the honest
+# outcome is what the screenshots pin: the panel says brightness is not on this
+# machine, the +/- buttons are disabled, and clicking them reports a refusal
+# instead of a change that never happened.
+#
+# Window: mica-settings is 640x460 placed at (380,140) on a 1280x800 screen.
+wait 300
+launch mica-settings
+wait 900
+shot settings_01_list.png
+
+click 680 278
+wait 400
+shot settings_02_displays.png
+
+click 827 348
+wait 300
+shot settings_03_minus.png
+
+click 869 348
+wait 300
+shot settings_04_plus.png
+
+key escape
+wait 200
+quit

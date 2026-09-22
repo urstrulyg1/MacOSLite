@@ -3,6 +3,12 @@ root=LABEL=MACLITE_BASE ro      # read-only base image (spec: immutable base)
 quiet rd.maclite=1              # initrd hook starts the session supervisor
 mitigations=off                 # 2010 CPUs: measurable smoothness win; opt-in
 radeon.uvd=1                    # enable UVD2 video decode path (VDPAU/VA-API)
+acpi_backlight=native           # REQUIRED on iMac11,x: without it the kernel
+                                # exposes acpi_video0, whose _BCL interface is a
+                                # documented no-op, and real brightness control
+                                # (radeon_bl0) is not used. maclite-brightness
+                                # flags that device SUSPECT and refuses to write
+                                # to it — see docs/gpu.md + docs/hardware.md
 b43.fwok=1                      # BCM43224 wireless (NOT brcmfmac; see HARDWARE.md)
 maclite.gl=auto                 # auto|on|off: compositor GL backend selection;
                                 # 'off' forces the software raster (tested path)

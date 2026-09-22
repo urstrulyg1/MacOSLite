@@ -1,9 +1,14 @@
 /* maclite-display — display validation (spec §6).
  *
- * Reports what the panel actually advertised (EDID), what KMS offers, and what
- * the desktop selected. `--set` performs a real mode set through the KMS
- * backend; when there is no KMS device the tool says UNSUPPORTED and exits 3
- * rather than pretending the mode changed.
+ * Reports what the panel says about itself (EDID), what KMS offers, which mode
+ * is in use, and — when asked with --set — whether a mode change actually took
+ * effect. Nothing here is inferred from a model name: the numbers come from the
+ * connector's EDID and from sysfs, and a mode set is only PASS when the kernel
+ * reports the requested size back.
+ *
+ *   maclite-display              summary
+ *   maclite-display --modes      every mode per connector, with EDID attribution
+ *   maclite-display --set WxH    ask KMS for a mode and verify it stuck
  */
 #include "diag_common.h"
 #include "../performance/perf_common.h"
@@ -11,9 +16,7 @@
 static void usage(const char *p)
 {
     fprintf(stderr,
-        "usage: %s [--modes] [--set WxH[@hz]] [--json]\n"
-        "  --modes      list every mode each connector offers\n"
-        "  --set WxH    mode-set through KMS (verified by reading the mode back)\n"
+        "usage: %s [--modes] [--set WxH]\n"
         "exit: 0 pass, 1 fail, 2 not tested, 3 unsupported, 4 usage\n", p);
 }
 

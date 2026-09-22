@@ -5,6 +5,8 @@
  * ACPI _BCL interface is a documented no-op in EFI mode, so it is flagged
  * SUSPECT and this tool refuses to write to it — it will never claim a change
  * the panel did not make.
+ *
+ *   get | set N | up | down | list | status
  */
 #include "diag_common.h"
 
@@ -56,7 +58,10 @@ int main(int argc, char **argv)
         hw_report_init(&rep);
         diag_title("MacLiteOS Brightness");
         printf("  %-16s %s\n", "Mechanism:", st.mechanism);
-        if (b) {
+        if (!b) {
+            hw_report_add(&rep, "Brightness", "Control available", true, HW_UNSUPPORTED,
+                          "no backlight device under %s/class/backlight", hw_sysfs_root());
+        } else {
             int pct = -1;
             bool ok = bl_get_percent(&st, &pct);
             printf("  %-16s %s (max %ld)\n", "Device:", b->name, b->max);
@@ -64,30 +69,21 @@ int main(int argc, char **argv)
             printf("  %-16s %s\n", "Writable:", diag_yn(b->writable));
             hw_report_add(&rep, "Brightness", "Control available", true,
                           (b->writable && !b->suspect) ? HW_PASS : (b->suspect ? HW_FAIL : HW_UNSUPPORTED),
-                          "%s", b->suspect ? b->note : bl_kind_name(b->kind));
+                          "%s%s", bl_kind_name(b->kind), b->suspect ? " — documented no-op, refused" : "");
             hw_report_add(&rep, "Brightness", "Current value readable", true,
-                          ok ? HW_PASS : HW_FAIL, ok ? "%d%%" : "brightness/max_brightness unreadable", pct);
-            if (ok) printf("  %-16s %d%%\n", "Current:", pct);
-            else printf("  %-16s unknown\n", "Current:");
-        } else {
-            hw_report_add(&rep, "Brightness", "Control available", true, HW_UNSUPPORTED,
-                          "%s", st.mechanism);
-            printf("  no backlight device on this host\n");
+                          ok ? HW_PASS : HW_FAIL, ok ? "%d%%" : "cannot read brightness", pct);
         }
+        if (b && b->note[0]) printf("  %-16s %s\n", "Note:", b->note);
         printf("\n");
         for (int i = 0; i < rep.n; i++)
-            printf("  %-26s %-10s %s\n", rep.v[i].name, hw_result_str(rep.v[i].result), rep.v[i].evidence);
+            printf("  %-24s %-10s %s\n", rep.v[i].name, hw_result_str(rep.v[i].result), rep.v[i].evidence);
         printf("\nOverall: %s\n", hw_result_str(hw_report_overall(&rep)));
         return hw_report_exit(&rep);
     }
 
-    if (!b) {
-        fprintf(stderr, "no usable backlight device (%s)\n", st.mechanism);
+    if (!b || st.chosen < 0) {
+        fprintf(stderr, "no backlight device: %s\n", st.mechanism);
         return HW_EXIT_UNSUPPORTED;
-    }
-    if (dev && st.chosen >= 0 && strcmp(dev, st.dev[st.chosen].name)) {
-        fprintf(stderr, "note: --device %s is not the preferred device (%s); using it anyway\n",
-                dev, st.dev[st.chosen].name);
     }
 
     int applied = -1;
@@ -127,6 +123,5 @@ int main(int argc, char **argv)
     if (after->note[0]) fprintf(stderr, "detail: %s\n", after->note);
     fprintf(stderr, "mechanism: %s\n", st.mechanism);
     fprintf(stderr, "see docs/gpu.md — on iMac Mid-2010 boot with acpi_backlight=native\n");
-    if (rc == BL_SET_NOT_TESTED) return HW_EXIT_NOT_TESTED;
     return rc == BL_SET_UNSUPPORTED || rc == BL_SET_NO_DEVICE ? HW_EXIT_UNSUPPORTED : HW_EXIT_FAIL;
 }

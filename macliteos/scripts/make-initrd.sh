@@ -20,7 +20,17 @@ mount -t proc proc /proc; mount -t sysfs sysfs /sys; mount -t devtmpfs devtmpfs 
 # load what initrd.list shipped; udev-free on purpose (fast boot, spec §5)
 for m in radeon tg3 b43 snd-hda-intel; do modprobe "$m" 2>/dev/null || true; done
 mount -o ro LABEL=MACLITE_BASE /mnt || echo "recovery: base missing"
-exec /usr/bin/mica-comp --session --drm
+# Recovery mode: no session, just tools on a console (spec §16). This is what
+# the cmdline documents as rd.maclite=recovery.
+case "$(cat /proc/cmdline)" in
+*rd.maclite=recovery*)
+    echo "MacLiteOS recovery shell — run maclite-hardware first"
+    exec /bin/sh
+    ;;
+esac
+# Headless-safe default: the backend chooser picks KMS when a card exists and
+# falls back to fbdev/headless instead of failing, so --backend auto is right.
+exec /usr/bin/mica-comp --session --backend auto
 INIT
 chmod +x "$W/init"
 ( cd "$W" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$OUT" )

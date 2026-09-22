@@ -80,7 +80,9 @@ static int run_live(int samples)
 int main(int argc, char **argv)
 {
     if (diag_flag(argc, argv, "--help")) {
-        fprintf(stderr, "usage: %s [--live] [--frames N] [--windows N] [--software]\n", argv[0]);
+        fprintf(stderr, "usage: %s [--live] [--frames N] [--windows N] [--software] [--fullscreen]\n"
+                        "  --fullscreen  damage the whole screen every frame: the upper bound a\n"
+                        "                fullscreen video or a full-screen drag can cost (spec §9)\n", argv[0]);
         return HW_EXIT_USAGE;
     }
     const char *fr = diag_opt(argc, argv, "--frames");
@@ -88,6 +90,7 @@ int main(int argc, char **argv)
     int frames = fr ? atoi(fr) : 300;
     int windows = wn ? atoi(wn) : 3;
     bool force_sw = diag_flag(argc, argv, "--software");
+    bool fullscreen = diag_flag(argc, argv, "--fullscreen");
     if (diag_flag(argc, argv, "--live")) return run_live(10);
 
     mica_gpu_info g;
@@ -126,9 +129,12 @@ int main(int argc, char **argv)
     }
     double setup_ms = ml_elapsed_ms(t_start);
 
-    /* damage set: one moving window (like a drag) + the menu-bar clock */
+    /* damage set: one moving window (like a drag) + the menu-bar clock, or the
+     * whole screen when --fullscreen is asked for (worst case: every pixel is
+     * recomposited, which is what a fullscreen video window costs) */
     ml_rect dmg[2];
     int ndmg = 2;
+    if (fullscreen) { dmg[0] = ml_rect_make(0, 0, W, H); ndmg = 1; }
     struct rusage ru0, ru1;
     getrusage(RUSAGE_SELF, &ru0);
     uint64_t t0 = ml_now_ns();
@@ -141,8 +147,10 @@ int main(int argc, char **argv)
     for (int i = 0; i < frames; i++) {
         next += 16666667ull;                        /* 60 Hz target */
         uint64_t f0 = ml_now_ns();
-        dmg[0] = ml_rect_make(120 + (i * 7) % (W - 820), 140 + (i * 3) % 200, 700, 460);
-        dmg[1] = ml_rect_make(W - 220, 0, 220, 26);
+        if (!fullscreen) {
+            dmg[0] = ml_rect_make(120 + (i * 7) % (W - 820), 140 + (i * 3) % 200, 700, 460);
+            dmg[1] = ml_rect_make(W - 220, 0, 220, 26);
+        }
         for (int k = 0; k < ndmg; k++) {
             ml_ctx cc;
             ml_ctx_init(&cc, fb, dmg[k]);
@@ -152,7 +160,7 @@ int main(int argc, char **argv)
                 if (!ml_rect_intersects(r, dmg[k])) continue;
                 ml_blit(&cc, wins[w], ml_rect_make(0, 0, 700, 460), r.x, r.y, 255);
             }
-            if (k == 1) {
+            if (!fullscreen && k == 1) {
                 ml_fill_rect(&cc, dmg[1], ml_rgba(16, 18, 26, 190));
                 ml_draw_text(&cc, font, dmg[1].x + 10, 18, "Tue 22 Sep  14:26", 13, ml_rgb(238, 242, 250));
             }
@@ -193,7 +201,8 @@ int main(int argc, char **argv)
     printf("Present backend:     %s (%s)\n", ml_disp_kind_name(disp.kind), disp.note);
     printf("Resolution:          %dx%d\n", W, H);
     printf("Refresh:             %d Hz\n", ml_display_refresh_hz(&disp));
-    printf("Scene:               %d windows + wallpaper, damage-only repaint\n\n", windows);
+    printf("Scene:               %d windows + wallpaper, %s\n\n", windows,
+           fullscreen ? "FULL-SCREEN damage every frame (worst case)" : "damage-only repaint");
     printf("Startup Time:        %.1f ms (surfaces + scene, once)\n", setup_ms);
     printf("Frames:              %d\n", frames);
     printf("Average FPS:         %.2f\n", frames / (wall_ms / 1000.0));

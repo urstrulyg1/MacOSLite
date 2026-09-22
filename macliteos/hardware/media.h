@@ -62,4 +62,30 @@ typedef struct {
 bool ml_video_test_run(ml_vtest *out, const char *codec, int width, int height,
                        int frames, bool want_hw, int *exit_rc);
 
+/* ---- playback performance (spec §9) --------------------------------- */
+/* Seeks are real: the stream is a real file, the seek is a real -ss offset and
+ * the measurement is the wall time until the first frame after the seek comes
+ * out of the decoder. */
+typedef struct {
+    bool ran;
+    int rc;
+    int width, height, frames;
+    double duration_s;
+    double seek_s;
+    double seek_ms;         /* time to first decoded frame after seeking */
+    double video_ms;        /* decoding the whole video stream */
+    double audio_ms;        /* decoding the whole audio stream */
+    double skew_ms;         /* video_ms - audio_ms over the same timeline */
+    bool hw_used;
+    char decoder_line[160];
+    char note[220];
+} ml_vperf;
+
+/* AV-sync honesty note: true lip-sync is a clock/sink question that cannot be
+ * asserted from a headless decode — this measures decode-completion skew of the
+ * two streams, which is what a compositor-side sync bug shows up as, and says so
+ * in the note. */
+bool ml_video_perf_run(ml_vperf *out, const char *codec, int width, int height,
+                       int frames, double seek_s);
+
 #endif /* MICA_MEDIA_H */

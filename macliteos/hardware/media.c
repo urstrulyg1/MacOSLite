@@ -161,6 +161,48 @@ ml_cap ml_codec_capability(uint32_t vendor, uint32_t device, uint32_t codec,
 }
 
 /* ----------------------------------------------------------- test runner -- */
+
+/* Did the decoder really use a hardware path? This is the one claim the whole
+ * tool must never get wrong, so it is deliberately strict: a hardware decoder
+ * name has to appear on the stream/decoder line the decoder itself prints
+ * (`vdpau (h264_vdpau)`, `h264_vaapi`, `h264_cuvid`, ...). The word "hwaccel"
+ * alone proves nothing — ffmpeg echoes the requested option whether or not a
+ * hardware path engaged — and a failure line vetoes the claim outright. */
+static bool decode_used_hardware(const char *log)
+{
+    static const char *tokens[] = {
+        "_vdpau", "_vaapi", "_cuvid", "_qsv", "_dxva2", "_d3d11va",
+        "_videotoolbox", "_v4l2m2m", "_mediacodec", "_nvdec", "_amf",
+    };
+    static const char *veto[] = {
+        "No usable", "not supported", "Failed to", "failed to", "unsupported",
+        "Cannot load", "cannot load", "No device", "no device found",
+        "Impossible to convert", "hardware accelerator failed",
+    };
+    bool claimed = false;
+    for (const char *l = log; l && *l; ) {
+        const char *nl = strchr(l, '\n');
+        size_t len = nl ? (size_t)(nl - l) : strlen(l);
+        /* only lines that state what the decoder actually chose */
+        bool informative = strstr(l, "Stream #") != NULL ||
+                           strstr(l, "Using ") != NULL ||
+                           strstr(l, "->") != NULL ||
+                           strstr(l, "pix_fmt") != NULL;
+        if (informative) {
+            for (size_t t = 0; t < ML_ARRAY_SIZE(tokens); t++) {
+                const char *hit = strstr(l, tokens[t]);
+                if (hit && (size_t)(hit - l) < len) { claimed = true; break; }
+            }
+        }
+        for (size_t v = 0; v < ML_ARRAY_SIZE(veto); v++) {
+            const char *hit = strstr(l, veto[v]);
+            if (hit && (size_t)(hit - l) < len) return false;
+        }
+        l = nl ? nl + 1 : NULL;
+    }
+    return claimed;
+}
+
 static double rusage_ms(const struct rusage *r)
 {
     return (double)r->ru_utime.tv_sec * 1000.0 + (double)r->ru_utime.tv_usec / 1000.0 +
@@ -278,8 +320,7 @@ bool ml_video_test_run(ml_vtest *out, const char *codec, int width, int height,
         if (e) *e = 0;
         snprintf(out->decoder_line, sizeof out->decoder_line, "%s", q);
     }
-    out->hw_used = strstr(log, "hwaccel") != NULL || strstr(log, "vdpau") != NULL ||
-                   strstr(log, "vaapi") != NULL;
+    out->hw_used = decode_used_hardware(log);
     out->ran = true;
     out->wall_ms = wall;
     out->cpu_ms = cpu;
@@ -293,4 +334,114 @@ bool ml_video_test_run(ml_vtest *out, const char *codec, int width, int height,
     unlink(src);
     if (exit_rc) *exit_rc = rc;
     return rc == 0;
+}
+
+/* ---------------------------------------------------- playback performance -- */
+
+/* run a command with wait4 rusage accounting and capture the log */
+static int run_measured(const char *cmd, char *log, size_t loglen, double *wall_ms, double *cpu_ms)
+{
+    char full[1024];
+    snprintf(full, sizeof full, "( %s ) 2>&1", cmd);
+    if (log && loglen) log[0] = 0;
+    pid_t pid = fork();
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, 1); close(devnull); }
+        execl("/bin/sh", "sh", "-c", full, (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0) return -1;
+    int status = 0;
+    struct rusage ru;
+    memset(&ru, 0, sizeof ru);
+    uint64_t t0 = ml_now_ns();
+    wait4(pid, &status, 0, &ru);
+    if (wall_ms) *wall_ms = ml_elapsed_ms(t0);
+    if (cpu_ms) *cpu_ms = rusage_ms(&ru);
+    int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (log && loglen) {
+        snprintf(full, sizeof full, "%s 2>&1 | head -c %zu", cmd, loglen - 1);
+        run_capture(full, log, loglen, NULL, NULL);
+    }
+    return rc;
+}
+
+bool ml_video_perf_run(ml_vperf *out, const char *codec, int width, int height,
+                       int frames, double seek_s)
+{
+    memset(out, 0, sizeof *out);
+    out->width = width;
+    out->height = height;
+    out->frames = frames;
+    out->seek_s = seek_s;
+
+    ml_dec_state dec;
+    ml_decoder_probe(&dec);
+    if (!dec.present || dec.kind != ML_DEC_FFMPEG) {
+        snprintf(out->note, sizeof out->note,
+                 "%s: playback performance needs ffmpeg to drive the decode (spec §9)", dec.note);
+        return false;
+    }
+
+    /* A stream with BOTH a video and an audio track, so the two decode paths can
+     * be timed against the same timeline. */
+    char src[128], cmd[1024];
+    snprintf(src, sizeof src, "/tmp/maclite-perf-%s-%dx%d.mp4", codec, width, height);
+    const char *enc = !strcasecmp(codec, "h264") ? "libx264"
+                    : !strcasecmp(codec, "mpeg4") ? "mpeg4"
+                    : !strcasecmp(codec, "mpeg2") ? "mpeg2video" : NULL;
+    if (!enc) {
+        snprintf(out->note, sizeof out->note, "no encoder known for %s", codec);
+        return false;
+    }
+    double dur = frames / 30.0;
+    snprintf(cmd, sizeof cmd,
+             "%s -y -loglevel error -f lavfi -i testsrc2=size=%dx%d:rate=30:duration=%.2f "
+             "-f lavfi -i sine=frequency=440:duration=%.2f -c:v %s -pix_fmt yuv420p -c:a aac "
+             "-shortest '%s'", dec.path, width, height, dur, dur, enc, src);
+    double w = 0;
+    int rc = run_capture(cmd, out->decoder_line, sizeof out->decoder_line, &w, NULL);
+    if (rc != 0 || !ml_file_exists(src)) {
+        snprintf(out->note, sizeof out->note, "cannot build a %s A/V stream (ffmpeg exit %d): %.100s",
+                 codec, rc, out->decoder_line);
+        return false;
+    }
+
+    /* 1. seek: decode exactly one frame after an offset, timed */
+    snprintf(cmd, sizeof cmd, "%s -hide_banner -loglevel error -ss %.2f -i '%s' -frames:v 1 -f null -",
+             dec.path, seek_s, src);
+    double cpu = 0;
+    out->rc = run_measured(cmd, NULL, 0, &out->seek_ms, &cpu);
+
+    /* 2. whole-stream decode, video only and audio only, for the skew */
+    snprintf(cmd, sizeof cmd, "%s -hide_banner -loglevel error -i '%s' -map 0:v:0 -f null -", dec.path, src);
+    run_measured(cmd, NULL, 0, &out->video_ms, &cpu);
+    snprintf(cmd, sizeof cmd, "%s -hide_banner -loglevel error -i '%s' -map 0:a:0 -f null -", dec.path, src);
+    run_measured(cmd, NULL, 0, &out->audio_ms, &cpu);
+    out->skew_ms = out->video_ms - out->audio_ms;
+    out->duration_s = dur;
+
+    /* 3. did the hardware path engage for these runs? same strict rule as above */
+    char log[4096];
+    snprintf(cmd, sizeof cmd, "%s -hide_banner -loglevel info -hwaccel auto -i '%s' -f null -", dec.path, src);
+    run_capture(cmd, log, sizeof log, NULL, NULL);
+    out->hw_used = decode_used_hardware(log);
+    {
+        char *q = strstr(log, "Video: ");
+        if (q) {
+            char *e = strchr(q, '\n');
+            if (e) *e = 0;
+            snprintf(out->decoder_line, sizeof out->decoder_line, "%s", q);
+        }
+    }
+
+    out->ran = true;
+    snprintf(out->note, sizeof out->note,
+             "%dx%d, %.1f s stream: seek to %.1f s -> first frame in %.0f ms; "
+             "decode video %.0f ms vs audio %.0f ms (skew %.0f ms, decode completion only — "
+             "true A/V sync is a human check on hardware)",
+             width, height, dur, seek_s, out->seek_ms, out->video_ms, out->audio_ms, out->skew_ms);
+    unlink(src);
+    return true;
 }

@@ -1,1 +1,9 @@
-mode=balanced
+# MacLiteOS system defaults (v0.2). Everything here is overridable at runtime;
+# nothing here adds a daemon or a permanent background job.
+mode=balanced                   # beautiful|balanced|performance (auto-picked on
+                                # first boot from detected GPU/CPU/RAM, then
+                                # remembered; user choice always wins)
+backend=auto                    # auto|kms|fbdev|headless
+brightness_backend=auto         # auto|radeon_bl0|acpi_video0|... (see maclite-brightness list)
+acpi_backlight=native           # must match boot/kernel-cmdline.txt on iMac11,x
+hwdec=auto                      # auto|vdpau|vaapi|none (maclite-video-test shows what engaged)

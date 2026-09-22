@@ -5,10 +5,14 @@
  * anything that could not be exercised prints NOT TESTED and keeps the overall
  * verdict honest.
  *
+ * Rows that need a live kernel (mixer ioctls, addresses, DNS, file writes) are
+ * reported NOT TESTED under fixture roots, because a fixture tree cannot answer
+ * them — see the shared rules in hardware/{audio,hwprobe}.c.
+ *
  *   maclite-hardware            fast report (no decode round trip)
  *   maclite-hardware --full     also run the 1080p H.264 decode measurement
  *   maclite-hardware --tsv      machine readable
- * exit: 0 PASS, 1 FAIL, 2 PARTIAL (something unverified), 3 UNSUPPORTED
+ * exit: 0 PASS, 1 FAIL, 2 NOT TESTED/PARTIAL, 3 UNSUPPORTED
  */
 #include "diag_common.h"
 #include <sys/statvfs.h>
@@ -72,7 +76,15 @@ int main(int argc, char **argv)
     mica_storage_state sto;
     mica_storage_probe(&sto);
     char sev[192];
-    hw_report_add(&rep, "System", "Storage", true, storage_result(&sto, sev, sizeof sev), "%s", sev);
+    const bool fx = hw_using_fixture();
+    /* The filesystem write test and statvfs always run on the host that is
+     * executing this binary. With fixture roots that host is not the machine
+     * being described, so the row is reported for what it is. */
+    hw_result st_res = fx ? HW_NOT_TESTED : storage_result(&sto, sev, sizeof sev);
+    if (fx)
+        snprintf(sev, sizeof sev, "fixture mode: %d block device(s) listed, no filesystem write attempted",
+                 sto.n);
+    hw_report_add(&rep, "System", "Storage", true, st_res, "%s", sev);
 
     /* ---- GPU ---- */
     mica_gpu_info g;
@@ -228,7 +240,8 @@ int main(int argc, char **argv)
         }
         hw_result o = hw_report_overall(&rep);
         printf("\nOverall:\n  %s\n", o == HW_PASS ? "PASS" : o == HW_FAIL ? "FAIL" : "PARTIAL");
-        printf("\n(exit %d — 0 PASS, 1 FAIL, 2 PARTIAL, 3 UNSUPPORTED)\n", hw_report_exit(&rep));
+        printf("\n(exit code %d; contract: 0 every required check PASSED, 1 a required check FAILED,\n"
+               " 2 NOT TESTED here, 3 UNSUPPORTED, 4 usage)\n", hw_report_exit(&rep));
     }
     return hw_report_exit(&rep);
 }

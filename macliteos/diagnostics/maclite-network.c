@@ -1,78 +1,75 @@
 /* maclite-network — link, addressing, DNS and reachability (spec §10).
  *
- *   maclite-network              report + run the connectivity checks
- *   maclite-network --up IFACE   bring an interface up   (needs CAP_NET_ADMIN)
- *   maclite-network --down IFACE bring an interface down
- *
  * Reads sysfs/procfs and does real work for the checks: a DNS lookup through
- * getaddrinfo() and a TCP connect to the resolver's port 53. Nothing is
- * inferred from "an interface exists".
+ * the resolver, a TCP connect, and the interface state. There is no daemon and
+ * no polling loop; --up/--down are one-shot ioctls for scripted checks.
+ *
+ *   maclite-network                 report + checks
+ *   maclite-network --host NAME     use another name for the resolution check
+ *   maclite-network --up IFACE      bring an interface up (needs CAP_NET_ADMIN)
+ *   maclite-network --down IFACE    take it down
  */
 #include "diag_common.h"
-#include "ml/util.h"
+#include <net/if.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sys/ioctl.h>
-#include <net/if.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <errno.h>
 
-static bool tcp_reachable(const char *host, int port, int timeout_ms)
+/* One-shot link state change: SIOCSIFFLAGS. Returns false with errno set when
+ * the process lacks CAP_NET_ADMIN. */
+static bool set_link(const char *iface, bool up)
 {
-    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM };
-    struct addrinfo *ai = NULL;
-    char portstr[8];
-    snprintf(portstr, sizeof portstr, "%d", port);
-    if (getaddrinfo(host, portstr, &hints, &ai) != 0 || !ai) return false;
-    int fd = socket(ai->ai_family, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s < 0) return false;
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof ifr);
+    snprintf(ifr.ifr_name, sizeof ifr.ifr_name, "%s", iface);
     bool ok = false;
-    if (fd >= 0) {
-        int r = connect(fd, ai->ai_addr, ai->ai_addrlen);
-        if (r == 0) ok = true;
-        else if (errno == EINPROGRESS) {
-            fd_set wf;
-            FD_ZERO(&wf);
-            FD_SET(fd, &wf);
-            struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
-            if (select(fd + 1, NULL, &wf, NULL, &tv) > 0) {
-                int err = 0;
-                socklen_t l = sizeof err;
-                getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &l);
-                ok = (err == 0);
-            }
-        }
-        close(fd);
+    if (ioctl(s, SIOCGIFFLAGS, &ifr) == 0) {
+        if (up) ifr.ifr_flags |= IFF_UP;
+        else    ifr.ifr_flags &= (short)~IFF_UP;
+        ok = ioctl(s, SIOCSIFFLAGS, &ifr) == 0;
     }
-    freeaddrinfo(ai);
+    close(s);
+    return ok;
+}
+
+/* TCP connect with a timeout — the honest "is anything out there" check. A UDP
+ * DNS packet would be answered by a cached local stub and prove less. */
+static bool tcp_reachable(const char *ip, int port, int timeout_ms)
+{
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, ip, &sa.sin_addr) != 1) return false;
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (fd < 0) return false;
+    int rc = connect(fd, (struct sockaddr *)&sa, sizeof sa);
+    if (rc == 0) { close(fd); return true; }
+    if (errno != EINPROGRESS) { close(fd); return false; }
+    struct pollfd p = { .fd = fd, .events = POLLOUT };
+    bool ok = poll(&p, 1, timeout_ms) == 1;
+    if (ok) {
+        int err = 0;
+        socklen_t l = sizeof err;
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &l) != 0 || err != 0) ok = false;
+    }
+    close(fd);
     return ok;
 }
 
 static bool name_resolves(const char *host)
 {
-    struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
-    struct addrinfo *ai = NULL;
-    int r = getaddrinfo(host, "80", &hints, &ai);
+    struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM }, *ai = NULL;
+    int rc = getaddrinfo(host, NULL, &hints, &ai);
     if (ai) freeaddrinfo(ai);
-    return r == 0;
-}
-
-static bool set_link(const char *iface, bool up)
-{
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) return false;
-    struct ifreq ifr;
-    memset(&ifr, 0, sizeof ifr);
-    snprintf(ifr.ifr_name, sizeof ifr.ifr_name, "%s", iface);
-    bool ok = false;
-    if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0) {
-        if (up) ifr.ifr_flags |= IFF_UP;
-        else ifr.ifr_flags &= ~(short)IFF_UP;
-        ok = ioctl(fd, SIOCSIFFLAGS, &ifr) == 0;
-    }
-    close(fd);
-    return ok;
+    return rc == 0;
 }
 
 /* Returns true when a DHCP client has published a lease directory — that is
@@ -167,11 +164,12 @@ int main(int argc, char **argv)
                                                 : (l.has_ip4 ? l.ip4 : "no IPv4 address on the primary interface"));
         char ev[192];
         bool lease = dhcp_lease_found(pri, ev, sizeof ev);
-        bool link_local = strncmp(pri->ip4, "169.254.", 8) == 0;
+        bool link_local = pri->has_ip4 && strncmp(pri->ip4, "169.254.", 8) == 0;
         hw_report_add(&rep, "Connectivity", "DHCP", true,
                       fixture ? HW_NOT_TESTED : (link_local ? HW_FAIL : (lease ? HW_PASS : HW_PARTIAL)),
                       "%s%s", fixture ? "fixture mode: lease state of this host is not the modelled machine. " : "",
-                      fixture ? "read /run/systemd/netif/leases on the real machine" : (link_local ? "link-local 169.254.x address: no lease was obtained. " : ev));
+                      fixture ? "read /run/systemd/netif/leases on the real machine"
+                              : (link_local ? "link-local 169.254.x address: no lease was obtained. " : ev));
         hw_report_add(&rep, "Connectivity", "Gateway", false,
                       n.have_gateway ? HW_PASS : HW_FAIL, "%s", n.have_gateway ? n.gateway : "no default route");
     } else {
