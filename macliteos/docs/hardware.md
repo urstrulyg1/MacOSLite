@@ -38,6 +38,28 @@ platform traps that bit v0.1 thinking —
   reports it `UNSUPPORTED (disabled by policy)` rather than shipping a power
   button that appears to work (docs/hardware.md).
 
+The depth layer added on top of that table:
+
+* `maclite-cpu` (`hardware/cpu.c`) answers the §1/§6/§7 questions from this
+  machine's own `/proc/cpuinfo`, sysfs and firmware root: exact part, topology,
+  Turbo Boost, cpufreq governor and available governors, idle states, thermal
+  source, microcode revision running versus the revision this image ships, and
+  whether any monitoring daemon is running. It refuses to write a governor that
+  is not in the machine's own `available_governors`, and refuses to write
+  anything at all against fixture roots.
+* `maclite-drivers` (`hardware/driver.c` + `drivers/catalog/`) resolves the §4
+  chain from the real PCI id and installs only the newest release that still
+  *covers this hardware*, with a SHA-256 check per file, a snapshot before each
+  write and a rollback that restores it. The policy is docs/drivers.md; the
+  catalog is data, so "Mesa 25 is newer but regresses RV730" is one `breaks`
+  line rather than a paragraph of prose.
+* `maclite-hardware` now prints the §31 section order
+  (CPU/GPU/Display/Audio/Network/USB/Storage/Optical/SDXC/FireWire/Camera/
+  Multimedia/Power) and keeps `NOT TESTED` distinct from `PASS` in every one of
+  them — Optical "Disc", SDXC "Read/write", FireWire "Device test", Camera
+  "Capture" and the microcode comparison are all shaped so that an untestable
+  check cannot be mistaken for a working one.
+
 Status: **the table above is datasheet/kernel-driver knowledge. The detection
 code that consumes it is fixture-verified (`tests/fixtures/make_sysfs.py` builds
 faithful iMac11,2 / iMac11,3 trees from recorded `/sys` values), but nothing

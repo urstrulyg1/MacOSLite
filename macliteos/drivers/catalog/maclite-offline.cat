@@ -1,0 +1,215 @@
+# MacLiteOS trusted offline catalog — iMac Mid-2010 (21.5-inch) support set.
+#
+# This file is data, not code: it says which release of each component this
+# image ships, which hardware ids that release supports, and (when the release
+# is pinned) the SHA-256 of every file. `maclite-drivers` reads it and picks the
+# newest release whose targets still cover the machine in front of it — a newer
+# release that drops RV730 support is selected *against*, not installed anyway.
+#
+# Grammar (see hardware/driver.h for the API, docs/drivers.md for the prose):
+#
+#   repo <name>                  repository id
+#   key <path or URL>            signing key; a URL is refused at verify time
+#   package <name> <version>     starts a component; repeat the name for more
+#                                releases of the same component
+#     kind firmware|microcode|drm|mesa|kernel|other
+#     status stable|testing|broken|in-kernel
+#     target <id>                pci:V:D | gpu:V:D | cpu:sig=HEX | cpu:NAME |
+#                                codec:NAME | dmi:NAME | bt:NAME | cam:NAME |
+#                                sdcard:NAME | firewire:NAME | sata:NAME
+#     breaks <id>                this release no longer supports <id>
+#     requires kernel>=X mesa>=Y
+#     provider <who ships it>
+#     install <prefix>           destination prefix under the install root
+#     driver <name>              for status in-kernel: the driver that must be bound
+#     file <path> sha256=<hex> [size=<n>]
+#     note "..."                 why this line exists; read by humans only
+#
+# Where a digest says "unpinned" the file must still be present and is hashed,
+# but `update` refuses to install it without --allow-unpinned and the report
+# says integrity NOT TESTED. Never guess a digest into this file.
+
+catalog-version 1
+repo maclite-offline
+# No key line: this catalog ships inside the image, so the image's own signature
+# is the trust anchor. Section 28's "trusted repository" rule applies to the
+# *online* catalog, which must name a key or maclite-drivers reports provenance
+# NOT TESTED and refuses to install from it.
+
+# ---------------------------------------------------------------- graphics --
+# Mesa's r600 Gallium driver. 25.x moved RV730 UVD handling around; on this
+# machine we stay on the newest release that still exposes the VDPAU path the
+# player uses. The 25.0.0 entry exists so the "newest is not automatically
+# right" rule is exercised by the fixtures as well as by real catalogs: it is
+# newer, it still claims to support both GPUs, and it is still declined.
+package mesa-r600 24.0.9
+  kind mesa
+  status stable
+  provider mesa
+  target gpu:1002:9490
+  target gpu:1002:68c1
+  requires mesa>=20.0.0
+  install usr/lib/x86_64-linux-gnu/dri
+  file r600_dri.so sha256=unpinned
+  note "Gallium r600. GL 3.3 / GLES2 on RV730 + Redwood; VDPAU decode via UVD2."
+
+package mesa-r600 25.0.0
+  kind mesa
+  status broken
+  provider mesa
+  target gpu:1002:9490
+  target gpu:1002:68c1
+  breaks gpu:1002:9490
+  note "Upstream marked this release broken. It ships r600 code that regresses RV730 (HD 4670)
+        VDPAU decode — that is what the breaks line records — so the resolver declines it on a
+        21.5-inch Mid-2010 even though it is the newest version in the catalog."
+
+# The kernel's radeon DRM driver. Not a file to install: it is a kernel config
+# decision, and MacLiteOS ships it built in (CONFIG_DRM_RADEON=y). The resolver
+# verifies that it is *bound*, not that a package exists.
+package radeon-drm 6.6.30
+  kind drm
+  status in-kernel
+  driver radeon
+  provider linux
+  target gpu:1002:9490
+  target gpu:1002:68c1
+  label "Radeon DRM (kernel)"
+  note "UVD2 via radeon.uvd=1 on the cmdline; modeset + KMS + backlight (radeon_bl0)."
+
+package radeon-firmware 6.6.30
+  kind firmware
+  status stable
+  provider linux-firmware
+  target gpu:1002:9490
+  target gpu:1002:68c1
+  install lib/firmware
+  file radeon/RV730_uvd.bin sha256=unpinned
+  file radeon/RV730_pfp.bin sha256=unpinned
+  file radeon/RV730_me.bin sha256=unpinned
+  file radeon/R700_rlc.bin sha256=unpinned
+  note "R600/RV7xx microcode and UVD firmware. KMS still comes up without them, but UVD decode
+        stays off and the kernel logs a firmware load failure — that is the plainest way this
+        machine ends up decoding H.264 on the CPU."
+
+# ------------------------------------------------------------------- Wi-Fi --
+# BCM43224 (AirPort Extreme) needs b43's external firmware. The three files are
+# what the kernel requests at probe time; a missing one shows up as
+# 'b43-phy0 ERROR: Firmware file "b43/ucode29_mimo.fw" not found'.
+package b43-firmware 2015-12-15
+  kind firmware
+  status stable
+  provider linux-firmware
+  target pci:14e4:4353
+  target pci:14e4:432b
+  target pci:14e4:4358
+  install lib/firmware
+  file b43/ucode29_mimo.fw sha256=unpinned
+  file b43/ucode29_mimo_ps.fw sha256=unpinned
+  file b43/pcm5.fw sha256=unpinned
+  note "PCIe N-PHY rev 29. brcmfmac does not cover this part; the closed wl driver is not an
+        option on a libre, size-capped image."
+
+package b43-kernel 6.6.30
+  kind kernel
+  status in-kernel
+  driver b43
+  provider linux
+  target pci:14e4:4353
+  label "b43 (kernel module)"
+  note "b43 is a module (CONFIG_B43=m) because it is only needed on machines with this chip."
+
+# --------------------------------------------------------------- Bluetooth --
+# Apple's BCM2046B1 is driven by btusb with an in-driver patch upload: there is
+# no .hcd file to ship. The resolver still records it, because a machine whose
+# controller is a *different* Broadcom part does need a file and the catalog
+# must be able to say so (see the BCM20702 line below, unused on this iMac).
+package btusb-bcm2046 6.6.30
+  kind kernel
+  status in-kernel
+  driver btusb
+  provider linux
+  target bt:BCM2046
+  label "Bluetooth (btusb)"
+  note "Bluetooth 2.1+EDR. MacLiteOS keeps the stack unloaded until something asks for it
+        (spec §14), so this is usually not bound while idle."
+
+package bcm20702-firmware 2023-01-01
+  kind firmware
+  status stable
+  provider linux-firmware
+  target bt:BCM20702
+  install lib/firmware
+  file brcm/BCM20702A1-05ac-8286.hcd sha256=unpinned
+  note "Only for the Bluetooth 4.0 part on later Macs; present so the catalog demonstrates
+        that a controller *with* a firmware requirement is handled differently."
+
+# ---------------------------------------------------------------- Ethernet --
+package tg3-kernel 6.6.30
+  kind kernel
+  status in-kernel
+  driver tg3
+  provider linux
+  target pci:14e4:1684
+  label "Ethernet (tg3)"
+  note "10/100/1000BASE-T. No firmware file for this part."
+
+# -------------------------------------------------------------- peripherals --
+package sdhci-kernel 6.6.30
+  kind kernel
+  status in-kernel
+  driver sdhci-pci
+  provider linux
+  target sdcard:BCM57765
+  label "SDXC reader (sdhci-pci)"
+  note "The card slot. Cards are mounted on demand; the reader itself needs nothing extra."
+
+package uvc-kernel 6.6.30
+  kind kernel
+  status in-kernel
+  driver uvcvideo
+  provider linux
+  target cam:iSight
+  label "iSight camera (uvcvideo)"
+  note "UVC class device: no proprietary software, no blob."
+
+package firewire-kernel 6.6.30
+  kind kernel
+  status in-kernel
+  driver firewire_ohci
+  provider linux
+  target firewire:FW643
+  label "FireWire 800 (firewire_ohci)"
+  note "In-tree. MacLiteOS does not start anything for it: §17 only asks that support be
+        reported honestly, not that a subsystem be added for it."
+
+package snd-hda-kernel 6.6.30
+  kind kernel
+  status in-kernel
+  driver snd_hda_intel
+  provider linux
+  target codec:ALC889
+  label "Audio (snd-hda-intel)"
+  note "ALC889 with the Apple pin layout (two internal amplifiers, headphone/optical jack)."
+
+# ---------------------------------------------------------------- microcode --
+# Matched by CPUID signature, so a blob for another stepping can never be
+# selected. The revision is what the report compares against /proc/cpuinfo.
+package intel-ucode-clarkdale 20231112
+  kind microcode
+  status stable
+  provider intel
+  target cpu:sig=00020655
+  install lib/firmware/intel-ucode
+  file 06-25-05 sha256=unpinned
+  note "Clarkdale (i3-540/i3-550/i5-680) microcode. The initrd copy at /boot/maclite-ucode/<sig>
+        is what the bootloader applies as an early update."
+
+package intel-ucode-lynnfield 20231112
+  kind microcode
+  status stable
+  provider intel
+  target cpu:sig=000106e5
+  install lib/firmware/intel-ucode
+  file 06-1e-05 sha256=unpinned
+  note "Lynnfield (i7-870, the 27-inch option). Same mechanism, different signature."

@@ -5,6 +5,32 @@ Everything below was measured **in the development sandbox** (Debian 12,
 Numbers from a real iMac do not exist yet and will be added here, labelled,
 when the hardware is in hand (docs/testing.md).
 
+## Performance modes and automatic reduction (§24)
+
+The compositor starts in the mode `mica_pick_mode()` derives from the detected
+GPU: no KMS → performance, no hardware renderer → balanced, fewer than two cores
+or under 1 GB RAM → balanced, otherwise beautiful. `--mode` and `MICA_MODE` pin
+it, and so do scripted sessions and screenshots, because a report has to render
+the same way twice.
+
+From then on the mode can only go *down*. The frame loop already calls a frame
+dropped when it arrives later than 25 ms, and it feeds that same measurement to
+`hw_mode_step()` (hardware/hwprobe.c): thirty net-slow frames step the ladder
+down one level, notify the user and full-damage the screen, and the streak
+starts over — so a machine that is *still* too slow reaches `performance`
+rather than sitting at `balanced` being slow. Fast frames decay the streak, one
+hiccup does nothing, the decision is one-way so nothing can oscillate, and there
+is no timer, sampler or daemon involved.
+
+The policy is a pure function so it is unit-tested without a compositor
+(`test_hardware.c::test_mode_step`: 29 slow frames do nothing, the 30th steps
+once, a fast frame decays, the second step lands on `performance`, the ladder
+stops there, a frozen/pinned mode never moves). `honesty:mode` in
+scripts/run-tests.sh holds the other half: with no KMS and no GL renderer the
+compositor must log `mode=performance` (the pick really came from detection),
+and `MICA_MODE=beautiful` must log `mode=beautiful` (a pin beats the picker).
+`maclite-gpu` reports the live mode and how many steps §24 took.
+
 ## Compositing cost (maclite-ui-benchmark, software path)
 
 | scenario                | resolution | mean full frame | p95    | worst  | 60 Hz budget |

@@ -8,6 +8,7 @@
  */
 #include "diag_common.h"
 #include "../performance/perf_common.h"
+#include "../hardware/media.h"
 
 static const char *vendor_name(uint32_t vid)
 {
@@ -92,6 +93,31 @@ int main(int argc, char **argv)
     hw_report_add(&rep, "Acceleration", "Software Rendering Fallback", false, HW_PASS,
                   "always available: damage-tracking CPU raster (measured by maclite-gpu-benchmark)");
 
+    /* ---- video acceleration (spec §3: the report has a Video section) --- */
+    ml_hwdec_state hd;
+    ml_hwdec_probe(&hd);
+    char vdetail[192];
+    ml_cap vcap = ml_codec_capability(g.vendor_id, g.device_id, ML_CODEC_H264, &hd,
+                                      vdetail, sizeof vdetail);
+    {
+        char codecs[128] = "";
+        ml_codec_list(g.decode_mask, codecs, sizeof codecs);
+        hw_report_add(&rep, "Video", "Silicon", false, g.decode_mask ? HW_PASS : HW_UNSUPPORTED,
+                      g.decode_mask ? "decoder for %.90s; driver exposes %.12s"
+                                    : "no fixed-function video decoder in this GPU",
+                      codecs[0] ? codecs : "(none listed)", g.accel_api[0] ? g.accel_api : "no API");
+    }
+    hw_report_add(&rep, "Video", "H.264 decode", true,
+                  vcap == ML_CAP_HW ? HW_PASS : vcap == ML_CAP_UNKNOWN ? HW_NOT_TESTED : HW_UNSUPPORTED,
+                  "%s", vdetail);
+    hw_report_add(&rep, "Video", "Decode API", false,
+                  (hd.vdpau_lib || hd.vaapi_lib) ? HW_PASS : HW_NOT_TESTED, "%.120s",
+                  hd.vdpau_lib || hd.vaapi_lib
+                      ? (hd.probed ? hd.detail : "a decode client library is installed; no runtime query ran")
+                      : "no VDPAU/VA-API client library on this machine");
+    hw_report_add(&rep, "Video", "1080p playback", false, HW_NOT_TESTED,
+                  "measured by maclite-video-test h264 1920x1080 --perf, not from a datasheet");
+
     /* ---- display ------------------------------------------------------- */
     if (drm.primary >= 0) {
         mica_connector *c = &drm.c[drm.primary];
@@ -119,6 +145,15 @@ int main(int argc, char **argv)
         hw_report_add(&rep, "Compositor", "Hardware Accelerated", true,
                       st.accel ? HW_PASS : HW_PARTIAL, "%s",
                       st.accel ? "GPU compositing" : "CPU raster into GPU-scanned-out buffer");
+        hw_report_add(&rep, "Compositor", "Performance mode", true,
+                      st.mode_pinned ? HW_PASS : HW_PARTIAL,
+                      "%s%s", mica_mode_name(st.mode),
+                      st.mode_pinned ? " (chosen explicitly)"
+                                     : " (picked from the detected GPU)");
+        hw_report_add(&rep, "Compositor", "Effect reduction", false, HW_PASS,
+                      st.mode_steps ? "%u step(s) down: frames were over the %.0f ms bar"
+                                    : "none needed (%u step(s))",
+                      st.mode_steps, 25.0);
         hw_report_add(&rep, "Compositor", "Frame pacing", false, HW_PASS,
                       "%.2f fps, mean %u us, worst %u us, %llu dropped",
                       st.fps_x100 / 100.0, st.frame_us, st.worst_us, (unsigned long long)st.dropped);
@@ -131,7 +166,7 @@ int main(int argc, char **argv)
     if (tsv) { hw_report_print_tsv(&rep); }
     else {
         diag_title("MacLiteOS GPU Diagnostics");
-        diag_section("GPU");
+        diag_section("Graphics");
         diag_kv("Vendor", "%s (0x%04x)", g.present ? vendor_name(g.vendor_id) : "-", g.vendor_id);
         diag_kv("Model", "%s", or_dash(g.device));
         diag_kv("PCI ID", "%s (%04x:%04x)", g.pci_addr, g.vendor_id, g.device_id);
@@ -151,6 +186,16 @@ int main(int argc, char **argv)
         if ((c = hw_report_find(&rep, "Acceleration", "Hardware Rendering")))
             diag_res("Hardware Rendering", c->result, "%s", c->evidence);
         diag_res("Software Rendering Fallback", HW_PASS, "AVAILABLE");
+        putchar('\n');
+        diag_section("Video");
+        if ((c = hw_report_find(&rep, "Video", "Silicon")))
+            diag_res("Video Engine", c->result, "%s", c->evidence);
+        if ((c = hw_report_find(&rep, "Video", "H.264 decode")))
+            diag_res("H.264 Decode", c->result, "%s", c->evidence);
+        if ((c = hw_report_find(&rep, "Video", "Decode API")))
+            diag_res("Decode API", c->result, "%s", c->evidence);
+        if ((c = hw_report_find(&rep, "Video", "1080p playback")))
+            diag_res("1080p Playback", c->result, "%s", c->evidence);
         putchar('\n');
         diag_section("Display");
         if (drm.primary >= 0) {
@@ -172,6 +217,9 @@ int main(int argc, char **argv)
         if (have_live) {
             diag_kv("GPU Backend", "%s", st.backend == 1 ? "kms" : st.backend == 2 ? "fbdev" : "headless");
             diag_kv("Hardware Accelerated", "%s", diag_yn(st.accel != 0));
+            diag_kv("Performance Mode", "%s%s", mica_mode_name(st.mode),
+                    st.mode_pinned ? " (pinned)" : "");
+            diag_kv("Auto-reduced", "%s", st.mode_steps ? "yes" : "no");
             diag_kv("Target FPS", "60");
             diag_kv("Measured", "%.2f fps, worst frame %u us", st.fps_x100 / 100.0, st.worst_us);
         } else {

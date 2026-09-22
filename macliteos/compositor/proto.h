@@ -84,7 +84,9 @@ typedef struct {
     uint32_t frame_us;          /* mean composite+present time */
     uint32_t worst_us;
     uint32_t damage_px_last;
-    uint32_t mode;
+    uint32_t mode;              /* current performance mode (MODE_*) */
+    uint32_t mode_steps;        /* times §24 reduced the effects this run */
+    uint32_t mode_pinned;       /* 1 = an explicit --mode/MICA_MODE chose it */
     uint32_t nclients, nwindows;
     uint32_t backend;           /* 0 headless, 1 drm, 2 fbdev */
     uint32_t accel;             /* 0 software, 1 gl */

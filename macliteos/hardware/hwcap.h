@@ -54,6 +54,11 @@ hw_check *hw_report_add(hw_report *r, const char *group, const char *name, bool 
                         hw_result res, const char *evidence_fmt, ...) ML_PRINTF_LIKE(6, 7);
 void hw_report_note(hw_report *r, const char *group, const char *name,
                     const char *evidence_fmt, ...) ML_PRINTF_LIKE(4, 5);
+/* Replace the evidence of a row that was already added — used when the caller
+ * only learns the wording after a later probe (a policy check that found
+ * nothing, for instance). */
+hw_check *hw_report_set_evidence(hw_report *r, const char *group, const char *name,
+                                 const char *evidence_fmt, ...) ML_PRINTF_LIKE(4, 5);
 const hw_check *hw_report_find(const hw_report *r, const char *group, const char *name);
 hw_result hw_report_overall(const hw_report *r);       /* PARTIAL when anything is not PASS */
 int hw_report_exit(const hw_report *r);
@@ -93,6 +98,33 @@ const hw_gpu_cap *hw_gpu_lookup(uint32_t vendor, uint32_t device);
 size_t hw_gpu_db_size(void);
 const hw_gpu_cap *hw_gpu_db_at(size_t i);
 
+/* ---- non-GPU device database ----------------------------------------- */
+/* Same idea as the GPU table, for the rest of the machine (spec §12, §14, §16,
+ * §17, §20): a PCI/USB id is turned into "what is it, which kernel driver binds
+ * it, which firmware file must be present". Detection reports the ID it actually
+ * read; this table only *names* what that ID is and what it needs — it is never
+ * used to invent a device. The firmware field is what
+ * `maclite-drivers check` looks for in the filesystem. */
+typedef enum {
+    HW_DEV_WIFI = 0, HW_DEV_ETHERNET, HW_DEV_BLUETOOTH, HW_DEV_CAMERA,
+    HW_DEV_SDCARD, HW_DEV_FIREWIRE, HW_DEV_SATA, HW_DEV_AUDIO, HW_DEV_OPTICAL,
+} hw_dev_role;
+const char *hw_dev_role_name(hw_dev_role r);
+
+typedef struct {
+    uint32_t vendor, device;
+    hw_dev_role role;
+    const char *model;       /* "BCM43224 AirPort Extreme (802.11a/b/g/n)" */
+    const char *driver;      /* kernel driver that must bind it */
+    const char *firmware;    /* space separated firmware paths, "" when none */
+    const char *note;        /* the trap worth writing down for this part */
+} hw_dev_cap;
+
+const hw_dev_cap *hw_dev_lookup(uint32_t vendor, uint32_t device, hw_dev_role role);
+const hw_dev_cap *hw_dev_find_any(uint32_t vendor, uint32_t device);   /* role not needed */
+size_t hw_dev_db_size(void);
+const hw_dev_cap *hw_dev_db_at(size_t i);
+
 /* ---- backend selection ----------------------------------------------- */
 typedef enum { ML_PRESENT_HEADLESS = 0, ML_PRESENT_KMS, ML_PRESENT_FBDEV } ml_present_kind;
 const char *ml_present_name(ml_present_kind k);
@@ -120,6 +152,11 @@ const char *hw_sysfs_root(void);     /* $ML_SYSFS_ROOT or "/sys"   */
 const char *hw_proc_root(void);      /* $ML_PROC_ROOT  or "/proc"  */
 const char *hw_dev_root(void);       /* $ML_DEV_ROOT   or "/dev"   */
 const char *hw_etc_root(void);       /* $ML_ETC_ROOT   or "/etc"   */
+/* Firmware and driver-store roots. The resolver has to be testable without
+ * writing to /lib/firmware on a build host, and an offline image can ship its
+ * firmware somewhere else entirely, so both are overridable. */
+const char *hw_fw_root(void);        /* $ML_FW_ROOT    or "/lib/firmware" */
+const char *hw_lib_root(void);       /* $ML_LIB_ROOT   or "/usr/lib" */
 /* Join a root with a relative path. Returns a pointer into a small rotating
  * ring of static buffers, so use it immediately and never free it. Probes only
  * run at startup or on explicit user action, never in the render path. */
@@ -128,6 +165,8 @@ const char *hw_sys(const char *rel);
 const char *hw_proc(const char *rel);
 const char *hw_dev(const char *rel);
 const char *hw_etc(const char *rel);
+const char *hw_fw(const char *rel);  /* firmware files, e.g. "b43/ucode29_mimo.fw" */
+const char *hw_lib(const char *rel);
 bool hw_using_fixture(void);         /* true when any root override is set */
 
 #endif /* MICA_HWCAP_H */

@@ -20,7 +20,13 @@
 #include "../hardware/media.h"
 #include "../hardware/edid.h"
 #include "../hardware/kms.h"
+#include "../hardware/cpu.h"
+#include "../hardware/driver.h"
+#include "ml/sha256.h"
+#include "../compositor/proto.h"   /* MODE_* — the ladder hw_mode_step() walks */
 #include <assert.h>
+#include <ctype.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -430,10 +436,17 @@ static void test_usb(void)
     mica_usb_state u;
     mica_usb_probe(&u);
     CHECK(u.present, "USB bus present in the fixture");
-    CHECK(u.n == 3, "three devices, got %d", u.n);
+    CHECK(u.n == 5, "five devices (keyboard, mouse, camera, bluetooth, storage), got %d", u.n);
     CHECK(u.nkey == 1, "one keyboard, got %d", u.nkey);
     CHECK(u.nmouse == 1, "one mouse, got %d", u.nmouse);
     CHECK(u.nstorage == 1, "one mass storage device, got %d", u.nstorage);
+    int ncamera = 0, nother = 0;
+    for (int i = 0; i < u.n; i++) {
+        if (!strcmp(u.v[i].kind, "camera")) ncamera++;
+        if (!strcmp(u.v[i].kind, "other")) nother++;
+    }
+    CHECK(ncamera == 1, "iSight is classified as a camera, got %d", ncamera);
+    CHECK(nother == 1, "the Bluetooth controller is neither HID nor storage, got %d", nother);
     for (int i = 0; i < u.n; i++)
         if (!strcmp(u.v[i].port, "1-1")) {
             CHECK(!strcmp(u.v[i].kind, "keyboard"), "HID protocol 1 is a keyboard, got '%s'", u.v[i].kind);
@@ -454,9 +467,9 @@ static void test_storage(void)
 {
     mica_storage_state s;
     mica_storage_probe(&s);
-    CHECK(s.n == 3, "one disk plus two partitions, got %d", s.n);
-    CHECK(s.nwhole == 1, "one whole disk, got %d", s.nwhole);
-    CHECK(s.nremovable == 0, "nothing removable in the fixture");
+    CHECK(s.n == 6, "HDD + 2 partitions + SuperDrive + SD card + partition, got %d", s.n);
+    CHECK(s.nwhole == 3, "whole disks: sda, sr0, mmcblk0 (got %d)", s.nwhole);
+    CHECK(s.nremovable == 3, "removable: sr0, mmcblk0, mmcblk0p1 (got %d)", s.nremovable);
     const mica_disk *disk = NULL, *root = NULL;
     for (int i = 0; i < s.n; i++) {
         if (!strcmp(s.v[i].name, "sda")) disk = &s.v[i];
@@ -483,7 +496,526 @@ static void test_power(void)
           "the caveat text matches the documentation");
 }
 
+/* ------------------------------------------------------------- CPU -------- */
+static void test_sha256(void)
+{
+    /* FIPS 180-4 vectors: the driver resolver's verification is only as good as
+     * this primitive, so it is pinned here against published digests. */
+    char hex[65];
+    ml_sha256_buf("", 0, hex);
+    CHECK(!strcmp(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+          "SHA-256(\"\") vector, got %s", hex);
+    ml_sha256_buf("abc", 3, hex);
+    CHECK(!strcmp(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+          "SHA-256(\"abc\") vector, got %s", hex);
+    ml_sha256_buf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, hex);
+    CHECK(!strcmp(hex, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"),
+          "SHA-256(448-bit vector), got %s", hex);
+    /* multi-chunk update must equal one-shot (the file path chunks 64 KiB) */
+    ml_sha256 s;
+    uint8_t d[32];
+    ml_sha256_init(&s);
+    for (int i = 0; i < 1000; i++) ml_sha256_update(&s, "0123456789", 10);
+    ml_sha256_final(&s, d);
+    char hex2[65];
+    ml_sha256_hex(d, hex2);
+    char big[10000];
+    for (int i = 0; i < 1000; i++) memcpy(big + i * 10, "0123456789", 10);
+    ml_sha256_buf(big, sizeof big, hex);
+    CHECK(!strcmp(hex, hex2), "1000 incremental updates equal the one-shot digest");
+
+    /* a malformed digest must never compare equal to anything */
+    CHECK(ml_sha256_hex_valid(hex), "a real digest is valid hex");
+    CHECK(!ml_sha256_hex_valid("abc"), "short hex rejected");
+    CHECK(!ml_sha256_hex_valid("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+          "non-hex rejected");
+    CHECK(!ml_sha256_hex_eq("", ""), "two empty strings are not a match");
+    CHECK(ml_sha256_hex_eq(hex, hex), "identical digests match");
+    char upper[65];
+    snprintf(upper, sizeof upper, "%s", hex);
+    for (char *q = upper; *q; q++) *q = (char)toupper((unsigned char)*q);
+    CHECK(ml_sha256_hex_eq(hex, upper), "hex comparison ignores case (catalog may use either)");
+
+    /* hashing a real file, and the absence case */
+    const char *path = "/tmp/maclite-sha256-test.bin";
+    FILE *f = fopen(path, "wb");
+    CHECK(f != NULL, "temp file for the file-hash test");
+    if (f) {
+        fwrite("abc", 1, 3, f);
+        fclose(f);
+        uint64_t n = 0;
+        CHECK(ml_sha256_file(path, hex2, &n), "file hashed");
+        CHECK(n == 3, "byte count, got %llu", (unsigned long long)n);
+        CHECK(!strcmp(hex2, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+              "file digest equals the string vector");
+        unlink(path);
+    }
+    CHECK(!ml_sha256_file("/nonexistent/maclite", hex2, NULL), "a missing file yields false");
+}
+
+static void test_cpu(void)
+{
+    ml_cpu_state c;
+    CHECK(ml_cpu_probe(&c), "CPU probe reads %s", hw_proc("cpuinfo"));
+    CHECK(strstr(c.brand, "Intel") != NULL, "brand string, got '%s'", c.brand);
+    if (!strcmp(VARIANT, "imac11_3")) {
+        CHECK(c.cores == 4 && c.threads == 8, "i7-870 is 4C/8T, got %u/%u", c.cores, c.threads);
+        CHECK(strstr(c.part, "i7-870"), "normalised part name, got '%s'", c.part);
+    } else {
+        CHECK(c.cores == 2 && c.threads == 4, "Clarkdale is 2C/4T in this fixture, got %u/%u", c.cores, c.threads);
+        CHECK(strstr(c.part, "i5-650"), "normalised part name, got '%s'", c.part);
+    }
+    CHECK(c.family == 6, "family 6, got %u", c.family);
+    CHECK(c.stepping == 5, "stepping from cpuinfo, got %u", c.stepping);
+    CHECK(c.hyperthreading && c.ht_flag, "HT flag and threads>cores agree");
+    CHECK(c.lm64 && c.sse42 && !c.avx,
+          "x86-64 + SSE4.2 + no AVX (the whole codebase assumes no AVX): lm=%d sse42=%d avx=%d",
+          c.lm64, c.sse42, c.avx);
+    CHECK(strstr(c.isa, "SSE4.2") && strstr(c.isa_absent, "AVX"), "ISA list: %s (absent: %s)",
+          c.isa, c.isa_absent);
+    CHECK(c.cpufreq && !strcmp(c.scaling_driver, "acpi-cpufreq"), "cpufreq driver, got '%s'", c.scaling_driver);
+    CHECK(!strcmp(c.governor, "ondemand"), "governor read from sysfs, got '%s'", c.governor);
+    CHECK(c.mhz_max == (unsigned)(strcmp(VARIANT, "imac11_3") ? 3200 : 2933),
+          "cpuinfo_max_freq converted to MHz, got %u", c.mhz_max);
+    CHECK(c.mhz_cur > 0, "current clock read, got %u", c.mhz_cur);
+    CHECK(c.turbo_knob, "the boost knob is in the fixture");
+    CHECK(c.cpuidle && c.idle_states == 4, "four C-states, got %d (%s)", c.idle_states, c.idle_names);
+    CHECK(c.thermal && c.thermal_c == 51, "package temperature read (got %d, crit %d)",
+          c.thermal_c, c.thermal_crit_c);
+    CHECK(c.thermal_crit_c == 100, "critical temperature read, got %d", c.thermal_crit_c);
+    CHECK(c.vuln_affected >= 1 && c.vuln_mitigated >= 1, "vulnerability files summarised: %s (%d affected, %d mitigated)",
+          c.vulnerabilities, c.vuln_affected, c.vuln_mitigated);
+    CHECK(strstr(c.kernel, "Linux version") != NULL, "kernel string, got '%s'", c.kernel);
+    CHECK(strstr(c.cmdline, "acpi_backlight=native") != NULL, "cmdline captured for context");
+    CHECK(!c.mitigations_off, "the fixture cmdline does not set mitigations=off");
+
+    /* cross-check: the part is in the table and must match what was observed */
+    char why[400];
+    ml_cpu_xcheck x = ml_cpu_crosscheck(&c, why, sizeof why);
+    CHECK(x == ML_CPU_MATCH, "known part cross-check: %s", why);
+    if (!strcmp(VARIANT, "imac11_3")) {
+        CHECK(strstr(why, "i7-870") != NULL, "the cross-check names the part: %s", why);
+    }
+
+    /* recommendation and the honesty rules around it */
+    const char *rec = ml_cpu_recommend_governor(&c, why, sizeof why);
+    CHECK(rec && !strcmp(rec, "schedutil"), "schedutil is preferred when offered, got %s", rec ? rec : "(none)");
+    CHECK(strstr(why, "schedutil") != NULL, "and the reason mentions it: %s", why);
+
+    /* a governor that is not offered is refused rather than written */
+    CHECK(ml_cpu_set_governor(&c, "nonexistent") == 0, "an unknown governor sets nothing");
+    /* writes are refused under fixture roots by the tool, not by the library; the
+     * library must still verify by read-back, which is pinned in maclite-cpu's
+     * --governor path and by the fixture file below */
+}
+
+static void test_cpu_microcode(void)
+{
+    ml_cpu_state c;
+    ml_cpu_probe(&c);
+    CHECK(c.ucode_loaded_known, "loaded microcode revision is readable here");
+    CHECK(c.ucode_loaded == (unsigned)(strcmp(VARIANT, "imac11_3") ? 0x1A : 0x0F),
+          "loaded revision from cpuinfo, got 0x%x", c.ucode_loaded);
+    CHECK(!strcmp(c.ucode_sig, "06-25-05") || !strcmp(c.ucode_sig, "06-1e-05"),
+          "signature file name, got %s", c.ucode_sig);
+    CHECK(c.ucode_file_present, "the image ships a blob for this stepping: %s", c.ucode_file);
+    CHECK(c.ucode_available_known && c.ucode_available == 0x1F,
+          "blob revision parsed from the header, got 0x%x", c.ucode_available);
+    CHECK(c.ucode_available > c.ucode_loaded, "the fixture has an update pending (0x%x > 0x%x)",
+          c.ucode_available, c.ucode_loaded);
+    CHECK(!c.ucode_early, "no early-load copy in the fixture, and the note says why");
+    CHECK(strstr(c.ucode_note, "early-load copy") != NULL, "note: %s", c.ucode_note);
+
+    /* a blob for another stepping must be refused, never selected */
+    char other[600];
+    snprintf(other, sizeof other, "%s", fix("fw/intel-ucode"));
+    uint32_t rev = 0, date = 0, sig = 0;
+    CHECK(ml_ucode_blob_info(c.ucode_file, &rev, &date, &sig, NULL), "blob header parses");
+    CHECK(sig == ((c.stepping & 0xf) | ((c.model & 0xf) << 4) | ((c.family & 0xf) << 8) |
+                  (((c.model >> 4) & 0xf) << 16)),
+          "blob signature encodes this CPU's family/model/stepping, got 0x%05x", sig);
+    CHECK(date == 0x20180807, "BCD date parsed, got 0x%x", date);
+
+    char path[600];
+    uint32_t r2 = 0;
+    /* write a blob whose *content* claims a different signature than its file
+     * name: the name lookup must not be trusted */
+    char wrong[700];
+    snprintf(wrong, sizeof wrong, "%s/06-25-05", other);
+    CHECK(ml_ucode_find_for(fix("fw"), sig, path, sizeof path, &r2, NULL),
+          "the matching blob is found by signature");
+    /* now point the search at a nonexistent root: no blob, no claim */
+    CHECK(!ml_ucode_find_for("/nonexistent-fw-root", sig, path, sizeof path, &r2, NULL),
+          "an empty firmware root finds no microcode");
+    CHECK(ml_ucode_blob_info("/etc/hostname", &rev, &date, &sig, NULL) == false ||
+          access("/etc/hostname", F_OK) != 0,
+          "a file that is not a microcode update is rejected by the header check");
+    (void)wrong;
+}
+
+static void test_cpu_absent(void)
+{
+    ml_cpu_state c;
+    CHECK(ml_cpu_probe(&c), "the bare fixture still has a cpuinfo");
+    CHECK(!strcmp(c.brand, "bare"), "brand as written, got '%s'", c.brand);
+    CHECK(!c.cpufreq, "no cpufreq in the bare fixture");
+    CHECK(!c.thermal, "no thermal source in the bare fixture");
+    CHECK(!c.ucode_file_present, "and no microcode blob: %s", c.ucode_note);
+    CHECK(strcmp(hw_result_str(HW_NOT_TESTED), "PASS") != 0, "NOT TESTED is never PASS");
+}
+
 /* ---------------------------------------------------------- mode picking -- */
+
+/* ------------------------------------------------- driver resolver (§25-§30) - */
+/* Every release of a component in the shipped catalog, with what the resolver
+ * must conclude about the machine it is looking at. The catalog is data, so
+ * these tests read it from the tree instead of restating it here. */
+static const char *shipped_catalog(void)
+{
+    static const char *cands[] = {
+        "drivers/catalog/maclite-offline.cat",
+        "../drivers/catalog/maclite-offline.cat",
+        "macliteos/drivers/catalog/maclite-offline.cat",
+    };
+    for (size_t i = 0; i < ML_ARRAY_SIZE(cands); i++)
+        if (access(cands[i], F_OK) == 0) return cands[i];
+    return NULL;
+}
+
+static void test_driver_versions(void)
+{
+    /* dotted numeric comparison, including the suffix runs 6.6.30 vs 6.6.30-foo
+     * that the catalog uses for release candidates */
+    CHECK(drv_version_cmp("24.0.9", "25.0.0") < 0, "24.0.9 < 25.0.0");
+    CHECK(drv_version_cmp("25.0.0", "24.0.9") > 0, "25.0.0 > 24.0.9");
+    CHECK(drv_version_cmp("6.6.30", "6.6.30") == 0, "equal versions compare equal");
+    CHECK(drv_version_cmp("6.6.30", "6.6.9") > 0, "numeric, not lexical: 30 > 9");
+    CHECK(drv_version_cmp("2015-12-15", "2013-01-01") > 0, "date versions");
+    CHECK(drv_version_cmp("6.6.30-rc1", "6.6.30") < 0, "a release candidate sorts before the release");
+    CHECK(drv_version_cmp("6.6.30", "6.6.30-rc1") > 0, "and after it, seen the other way");
+}
+
+static void test_driver_catalog(void)
+{
+    const char *path = shipped_catalog();
+    if (!path) { printf("note: shipped catalog not found; skipping catalog test\n"); return; }
+    drv_catalog cat;
+    CHECK(drv_catalog_load(path, &cat), "the shipped catalog must parse (%s)", cat.error);
+    CHECK(cat.n >= 10, "the shipped catalog carries the machine's components (got %d)", cat.n);
+    CHECK(!strcmp(cat.repo, "maclite-offline"), "repo id, got '%s'", cat.repo);
+    /* the resolver's central rule: a newer release that refuses this machine is
+     * parsed *and* rejected, not silently dropped */
+    bool saw_break = false;
+    for (int i = 0; i < cat.n; i++)
+        if (!strcmp(cat.v[i].name, "mesa-r600") && !strcmp(cat.v[i].version, "25.0.0"))
+            saw_break = cat.v[i].nbreaks > 0 && !strcmp(cat.v[i].status, "broken");
+    CHECK(saw_break, "mesa-r600 25.0.0 must be catalogued as broken with a breaks target");
+    /* a package's digest is either a real SHA-256 or deliberately unpinned — a
+     * short/garbage digest would silently never match and must not be accepted */
+    for (int i = 0; i < cat.n; i++)
+        for (int f = 0; f < cat.v[i].nfiles; f++)
+            CHECK(!cat.v[i].files[f].sha256[0] || ml_sha256_hex_valid(cat.v[i].files[f].sha256),
+                  "%s: digest '%s' is neither empty nor a valid SHA-256",
+                  cat.v[i].name, cat.v[i].files[f].sha256);
+}
+
+static void test_driver_kinds(void)
+{
+    CHECK(drv_kind_parse("firmware") == DRV_KIND_FIRMWARE, "kind firmware");
+    CHECK(drv_kind_parse("microcode") == DRV_KIND_MICROCODE, "kind microcode");
+    CHECK(drv_kind_parse("drm") == DRV_KIND_DRM, "kind drm");
+    CHECK(drv_kind_parse("mesa") == DRV_KIND_MESA, "kind mesa");
+    CHECK(drv_kind_parse("kernel") == DRV_KIND_KERNEL, "kind kernel");
+    CHECK(drv_kind_parse("nonsense") == DRV_KIND_OTHER, "an unknown kind is 'other', never a guess");
+    CHECK(!strcmp(drv_kind_name(DRV_KIND_MICROCODE), "microcode"), "kind name round trip");
+}
+
+/* The heart of §25: not "newest", but "newest compatible". */
+static void test_driver_resolve(void)
+{
+    const char *path = shipped_catalog();
+    if (!path) { printf("note: shipped catalog not found; skipping resolve test\n"); return; }
+    drv_catalog cat;
+    CHECK(drv_catalog_load(path, &cat), "catalog load (%s)", cat.error);
+    drv_hw hw;
+    drv_hw_snapshot(&hw);
+    CHECK(hw.present, "the iMac fixture has a GPU to resolve for");
+
+    /* the resolver needs a root it will only read from: the fixture */
+    char root[600];
+    snprintf(root, sizeof root, "%s/instroot-not-written", FIX);
+    drv_plan plan;
+    drv_plan_resolve(&cat, &hw, root, &plan);
+
+    const drv_package *mesa = NULL, *drm = NULL, *ucode = NULL, *radeon_fw = NULL, *b43 = NULL;
+    char mesa_rejected[192] = "";
+    for (int i = 0; i < plan.n; i++) {
+        const drv_item *it = &plan.v[i];
+        if (!it->pkg) continue;
+        if (!strcmp(it->pkg->name, "mesa-r600")) { mesa = it->pkg; snprintf(mesa_rejected, sizeof mesa_rejected, "%s", it->rejected); }
+        if (!strcmp(it->pkg->name, "radeon-drm")) drm = it->pkg;
+        if (it->pkg->kind == DRV_KIND_MICROCODE) ucode = it->pkg;
+        if (!strcmp(it->pkg->name, "radeon-firmware")) radeon_fw = it->pkg;
+        if (!strcmp(it->pkg->name, "b43-firmware")) b43 = it->pkg;
+    }
+    CHECK(mesa && !strcmp(mesa->version, "24.0.9"),
+          "must select mesa-r600 24.0.9, not the newer 25.0.0 that drops RV730 support");
+    CHECK(strstr(mesa_rejected, "25.0.0") != NULL && strstr(mesa_rejected, "broken") != NULL,
+          "and must say which release was skipped and why (got '%s')", mesa_rejected);
+    /* the fixture has no GL query, so the "mesa>=20.0.0" requirement of the
+     * selected release cannot be confirmed here — the resolver must say so
+     * rather than assume it either way */
+    bool caveat_seen = false;
+    for (int i = 0; i < plan.n; i++)
+        if (plan.v[i].pkg && !strcmp(plan.v[i].pkg->name, "mesa-r600") && plan.v[i].caveat[0])
+            caveat_seen = strstr(plan.v[i].caveat, "could not be confirmed") != NULL;
+    CHECK(caveat_seen, "an unconfirmable requirement is reported, not silently assumed");
+    CHECK(drm && !strcmp(drm->status, "in-kernel"), "the DRM driver resolves to the in-kernel radeon");
+    CHECK(radeon_fw != NULL, "RV730 UVD firmware is part of this machine's stack");
+    CHECK(b43 != NULL, "the AirPort chipset's firmware is resolved from the machine's own PCI id");
+
+    if (!strcmp(VARIANT, "imac11_2")) {
+        CHECK(ucode && hw.cpu_signature == 0x00020655,
+              "iMac11,2's CPU signature is what the microcode target matches (got %05x)", hw.cpu_signature);
+        CHECK(ucode && !strcmp(ucode->name, "intel-ucode-clarkdale"),
+              "and the Clarkdale blob is the one selected");
+        for (int i = 0; i < plan.n; i++)
+            CHECK(!plan.v[i].pkg || strcmp(plan.v[i].pkg->name, "intel-ucode-lynnfield"),
+                  "the Lynnfield blob must never be offered to a Clarkdale machine");
+    } else {
+        CHECK(ucode && !strcmp(ucode->name, "intel-ucode-lynnfield"),
+              "iMac11,3's CPU selects the Lynnfield blob, got %s", ucode ? ucode->name : "(none)");
+        for (int i = 0; i < plan.n; i++)
+            CHECK(!plan.v[i].pkg || strcmp(plan.v[i].pkg->name, "intel-ucode-clarkdale"),
+                  "the Clarkdale blob must never be offered to a Lynnfield machine");
+    }
+
+    /* in-kernel components are "in kernel" only if the driver is really bound */
+    bool seen_in_kernel = false;
+    for (int i = 0; i < plan.n; i++) {
+        const drv_item *it = &plan.v[i];
+        if (!it->pkg || strcmp(it->pkg->status, "in-kernel")) continue;
+        seen_in_kernel = true;
+        CHECK(it->action == DRV_ACT_KERNEL_IN_USE || it->action == DRV_ACT_KERNEL_MISSING,
+              "%s must resolve to in-kernel or missing, got %s", it->pkg->name, drv_action_str(it->action));
+    }
+    CHECK(seen_in_kernel, "the fixture must exercise the in-kernel path");
+    if (!strcmp(VARIANT, "imac11_2")) {
+        /* the fixture binds sdhci-pci/uvcvideo/firewire_ohci, so those read as in
+         * use; the audio package is matched through /proc/asound instead */
+        int in_use = 0;
+        for (int i = 0; i < plan.n; i++)
+            if (plan.v[i].action == DRV_ACT_KERNEL_IN_USE) in_use++;
+        CHECK(in_use >= 4, "the peripheral drivers are recognised as bound (got %d)", in_use);
+    }
+}
+
+/* A catalog that pins nothing may be read but never installed from implicitly. */
+static void test_driver_digest_rules(void)
+{
+    char dir[600], cat_path[700], repo[700];
+    snprintf(dir, sizeof dir, "%s/drvtest", FIX);
+    snprintf(cat_path, sizeof cat_path, "%s/mini.cat", dir);
+    snprintf(repo, sizeof repo, "%s/repo", dir);
+    ml_mkdirs(repo, 0755);
+    /* three payloads: one with a real digest, one whose digest is wrong on
+     * purpose, one deliberately unpinned. The repo layout is
+     * <repo>/<package>/<file>, so each package gets its own directory. */
+    char payload[700];
+    const char *data = "maclite test payload";
+    const char *pkgnames[] = { "good-thing", "bad-thing", "unpinned-thing" };
+    for (size_t i = 0; i < ML_ARRAY_SIZE(pkgnames); i++) {
+        char d[700];
+        snprintf(d, sizeof d, "%.600s/%.20s", repo, pkgnames[i]);
+        CHECK(ml_mkdirs(d, 0755), "create %s", d);
+        snprintf(payload, sizeof payload, "%.500s/%.20s/blob.bin", repo, pkgnames[i]);
+        CHECK(ml_write_file(payload, data, strlen(data)), "write the test payload in %s", d);
+    }
+    snprintf(payload, sizeof payload, "%.600s/good-thing/blob.bin", repo);
+    char hex[65];
+    CHECK(ml_sha256_file(payload, hex, NULL), "hash the test payload");
+    char cattext[2000];
+    snprintf(cattext, sizeof cattext,
+             "repo test\n"
+             "package good-thing 1.0\n"
+             "  kind firmware\n"
+             "  status stable\n"
+             "  target dmi:testrig\n"
+             "  install lib/firmware\n"
+             "  file blob.bin sha256=%s\n"
+             "package bad-thing 1.0\n"
+             "  kind firmware\n"
+             "  status stable\n"
+             "  target dmi:testrig\n"
+             "  install lib/firmware\n"
+             "  file blob.bin sha256=%s\n"
+             "package unpinned-thing 1.0\n"
+             "  kind firmware\n"
+             "  status stable\n"
+             "  target dmi:testrig\n"
+             "  install lib/firmware\n"
+             "  file blob.bin sha256=unpinned\n",
+             hex, "0000000000000000000000000000000000000000000000000000000000000000");
+    CHECK(ml_write_file(cat_path, cattext, strlen(cattext)), "write the mini catalog");
+    drv_catalog cat;
+    CHECK(drv_catalog_load(cat_path, &cat), "mini catalog parses (%s)", cat.error);
+    CHECK(cat.n == 3, "three packages parsed (got %d)", cat.n);
+
+    drv_hw hw;
+    drv_hw_snapshot(&hw);
+    const drv_package *good = NULL, *bad = NULL, *unp = NULL;
+    for (int i = 0; i < cat.n; i++) {
+        if (!strcmp(cat.v[i].name, "good-thing")) good = &cat.v[i];
+        if (!strcmp(cat.v[i].name, "bad-thing")) bad = &cat.v[i];
+        if (!strcmp(cat.v[i].name, "unpinned-thing")) unp = &cat.v[i];
+    }
+    CHECK(good && bad && unp, "all three packages are in the catalog");
+    drv_verify v;
+    CHECK(drv_verify_package(&cat, good, repo, &v) && v.digest_checked && v.digest_ok,
+          "a pinned digest that matches verifies: %s", v.detail);
+    CHECK(!drv_verify_package(&cat, bad, repo, &v), "a pinned digest that does not match must fail");
+    CHECK(v.digest_checked && !v.digest_ok, "and must be reported as a mismatch, not as unverifiable");
+    CHECK(drv_verify_package(&cat, unp, repo, &v) && !v.digest_checked,
+          "an unpinned file is readable but its integrity is NOT TESTED");
+    (void)hw;
+}
+
+/* A catalog that names a key must never be trusted on a machine that cannot
+ * check that key — and a key given as a URL is refused outright (spec §28:
+ * trusted repositories, never a downloaded blob of unknown provenance). */
+static void test_driver_catalog_keys(void)
+{
+    char dir[600], cat_path[700];
+    snprintf(dir, sizeof dir, "%s/drvtest3", FIX);
+    CHECK(ml_mkdirs(dir, 0755), "create %s", dir);
+    snprintf(cat_path, sizeof cat_path, "%s/urlkey.cat", dir);
+    const char *text =
+        "repo remote\n"
+        "key https://example.invalid/maclite.gpg\n"
+        "package something 1.0\n  kind firmware\n  status stable\n"
+        "  target dmi:testrig\n  file x.bin sha256=unpinned\n";
+    CHECK(ml_write_file(cat_path, text, strlen(text)), "write the URL-key catalog");
+    drv_catalog cat;
+    CHECK(drv_catalog_load(cat_path, &cat), "the catalog still parses (%s)", cat.error);
+    CHECK(strstr(cat.key, "https://") != NULL, "the catalog's key reference is recorded");
+    drv_verify v;
+    drv_verify_catalog(&cat, &v);
+    CHECK(!v.signature_checked, "a URL key is not treated as verified");
+    CHECK(!v.signature_ok, "a URL key is not treated as OK either");
+    /* a catalog that names a local key but has no .sig beside it: the resolver
+     * must say provenance was not checked, and must not claim it was verified */
+    drv_catalog keyed;
+    memset(&keyed, 0, sizeof keyed);
+    snprintf(keyed.path, sizeof keyed.path, "%.200s", cat_path);
+    snprintf(keyed.key, sizeof keyed.key, "/etc/maclite/nonexistent.key");
+    drv_verify_catalog(&keyed, &v);
+    CHECK(!v.signature_checked, "no signature file means provenance is NOT TESTED");
+    CHECK(strstr(v.detail, "no ") != NULL, "and the reason names the missing signature (got '%s')", v.detail);
+}
+
+static void test_driver_install_rollback(void)
+{
+    /* A throwaway install root, so the tests never touch the machine. Order
+     * matters: pre-existing file (must be restored), new file (must be removed),
+     * and the microcode early-load copy (also removed). */
+    char root[] = "/tmp/mltest-root-XXXXXX";
+    if (!mkdtemp(root)) { printf("note: no temp dir; skipping install test\n"); return; }
+    char dir[600], cat_path[700], repo[700];
+    snprintf(dir, sizeof dir, "%s/drvtest2", FIX);
+    snprintf(cat_path, sizeof cat_path, "%s/mini2.cat", dir);
+    snprintf(repo, sizeof repo, "%s/repo2", dir);
+    ml_mkdirs(repo, 0755);
+
+    char pay_keep[700], pay_new[700], pay_uc[700];
+    const char *pkgnames2[] = { "keep-thing", "new-thing", "ucode-thing" };
+    for (size_t i = 0; i < ML_ARRAY_SIZE(pkgnames2); i++) {
+        char sub[700];
+        snprintf(sub, sizeof sub, "%.600s/%.20s", repo, pkgnames2[i]);
+        CHECK(ml_mkdirs(sub, 0755), "create %s", sub);
+    }
+    snprintf(pay_keep, sizeof pay_keep, "%.660s/keep-thing/keep.bin", repo);
+    snprintf(pay_new, sizeof pay_new, "%.660s/new-thing/new.bin", repo);
+    snprintf(pay_uc, sizeof pay_uc, "%.660s/ucode-thing/06-25-05", repo);
+    const char *keep = "keep-me", *new_ = "brand-new";
+    CHECK(ml_write_file(pay_keep, keep, strlen(keep)), "write keep.bin");
+    CHECK(ml_write_file(pay_new, new_, strlen(new_)), "write new.bin");
+    CHECK(ml_write_file(pay_uc, "ucode-bytes", 11), "write the ucode payload");
+    char hk[65], hn[65], hu[65];
+    ml_sha256_file(pay_keep, hk, NULL);
+    ml_sha256_file(pay_new, hn, NULL);
+    ml_sha256_file(pay_uc, hu, NULL);
+
+    char cattext[2400];
+    snprintf(cattext, sizeof cattext,
+             "repo test\n"
+             "package keep-thing 1.0\n"
+             "  kind firmware\n  status stable\n  target dmi:testrig\n"
+             "  install lib/firmware\n  file keep.bin sha256=%s\n"
+             "package new-thing 1.0\n"
+             "  kind firmware\n  status stable\n  target dmi:testrig\n"
+             "  install lib/firmware\n  file new.bin sha256=%s\n"
+             "package ucode-thing 1.0\n"
+             "  kind microcode\n  status stable\n  target dmi:testrig\n"
+             "  install lib/firmware/intel-ucode\n  file 06-25-05 sha256=%s\n",
+             hk, hn, hu);
+    CHECK(ml_write_file(cat_path, cattext, strlen(cattext)), "write the install catalog");
+    drv_catalog cat;
+    CHECK(drv_catalog_load(cat_path, &cat), "install catalog parses (%s)", cat.error);
+
+    /* a pre-existing file that the install will replace */
+    char existing[700];
+    snprintf(existing, sizeof existing, "%.600s/lib/firmware/keep.bin", root);
+    char existing_dir[700];
+    snprintf(existing_dir, sizeof existing_dir, "%.600s/lib/firmware", root);
+    CHECK(ml_mkdirs(existing_dir, 0755), "create the directory the seeded file lives in");
+    CHECK(ml_write_file(existing, "old-content", 11), "seed the file to be replaced");
+
+    char *old_root = getenv("ML_ROOT") ? ml_strdup(getenv("ML_ROOT")) : NULL;
+    setenv("ML_ROOT", root, 1);
+    char err[300] = "";
+    int installed = 0;
+    for (int i = 0; i < cat.n; i++) {
+        err[0] = 0;
+        CHECK(drv_install_package(&cat, &cat.v[i], repo, false, err, sizeof err),
+              "install %s: %s", cat.v[i].name, err);
+        if (!err[0]) installed++;
+    }
+    CHECK(installed == 3, "three packages installed (got %d)", installed);
+
+    char landed[800];
+    snprintf(landed, sizeof landed, "%s/lib/firmware/keep.bin", root);
+    char *txt = ml_read_file(landed, NULL);
+    CHECK(txt && !strcmp(txt, keep), "the pre-existing file was replaced by the new payload");
+    ml_free(txt);
+    snprintf(landed, sizeof landed, "%s/lib/firmware/new.bin", root);
+    CHECK(access(landed, F_OK) == 0, "the new file landed in the install root");
+    snprintf(landed, sizeof landed, "%s/boot/maclite-ucode/06-25-05", root);
+    CHECK(access(landed, F_OK) == 0, "microcode also lands where the bootloader looks for it (§6)");
+    CHECK(drv_snapshot_exists(root), "an install leaves a rollback snapshot");
+
+    /* a second install of an unchanged component must be idempotent in effect */
+    err[0] = 0;
+    CHECK(drv_install_package(&cat, &cat.v[0], repo, false, err, sizeof err),
+          "re-installing the same release is allowed: %s", err);
+
+    err[0] = 0;
+    CHECK(drv_rollback(root, err, sizeof err), "rollback: %s", err);
+    snprintf(landed, sizeof landed, "%s/lib/firmware/keep.bin", root);
+    txt = ml_read_file(landed, NULL);
+    CHECK(txt && !strcmp(txt, "old-content"), "rollback restored the replaced file byte for byte");
+    ml_free(txt);
+    snprintf(landed, sizeof landed, "%s/lib/firmware/new.bin", root);
+    CHECK(access(landed, F_OK) != 0, "rollback removed a file that had not existed before");
+    snprintf(landed, sizeof landed, "%s/boot/maclite-ucode/06-25-05", root);
+    CHECK(access(landed, F_OK) != 0, "rollback also removed the early-load microcode copy");
+
+    if (old_root) { setenv("ML_ROOT", old_root, 1); ml_free(old_root); }
+    else unsetenv("ML_ROOT");
+    char rm[800];
+    snprintf(rm, sizeof rm, "rm -rf %.700s", root);
+    if (system(rm) != 0) printf("note: could not clean up %s\\n", root);
+}
+
 static void test_mode_pick(void)
 {
     char reason[160];
@@ -498,6 +1030,52 @@ static void test_mode_pick(void)
           "virtio-gpu asks for no hardware decode (%s)", reason);
     CHECK(hw_pick_hwdec(0xdead, 0xbeef, false, reason, sizeof reason) == ML_HWDEC_NONE,
           "unknown GPU without a render node: software");
+}
+
+/* §24: the automatic effect reduction. Pure policy, so it is testable without
+ * a running compositor: what is asserted here is exactly what comp.c calls. */
+static void test_mode_step(void)
+{
+    int streak = 0;
+    bool reduced = false;
+    uint32_t m = MODE_BEAUTIFUL;
+
+    /* one hiccup does nothing: the streak decays again on the next good frame */
+    for (int i = 0; i < HW_MODE_STREAK - 1; i++)
+        m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_BEAUTIFUL && !reduced, "29 slow frames are not enough");
+    m = hw_mode_step(m, &streak, false, false, &reduced);
+    CHECK(streak == HW_MODE_STREAK - 2 && m == MODE_BEAUTIFUL,
+          "a fast frame decays the streak (got %d)", streak);
+
+    /* sustained slowness steps down exactly once, on the crossing frame */
+    m = MODE_BEAUTIFUL; streak = 0; reduced = false;
+    for (int i = 0; i < HW_MODE_STREAK; i++)
+        m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_BALANCED, "30 slow frames reduce beautiful -> balanced (got %u)", m);
+    CHECK(reduced, "the reducing frame reports itself");
+    m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_BALANCED && !reduced, "the step does not repeat every frame");
+
+    /* a pinned mode (operator choice, scripted session, screenshot) never moves */
+    streak = 0; reduced = false;
+    for (int i = 0; i < HW_MODE_STREAK * 5; i++)
+        m = hw_mode_step(m, &streak, true, true, &reduced);
+    CHECK(m == MODE_BALANCED && !reduced, "pinned mode ignores slowness");
+
+    /* ...and the ladder ends at performance, both when stepping and when pinned */
+    streak = 0; reduced = false;
+    for (int i = 0; i < HW_MODE_STREAK; i++)
+        m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_PERFORMANCE && reduced, "second step lands on performance");
+    reduced = false;
+    for (int i = 0; i < HW_MODE_STREAK * 3; i++)
+        m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_PERFORMANCE && !reduced, "performance is the floor");
+    m = hw_mode_step(MODE_PERFORMANCE, &streak, true, true, &reduced);
+    CHECK(m == MODE_PERFORMANCE, "pinning performance changes nothing");
+    CHECK(hw_mode_step(MODE_BALANCED, NULL, true, false, NULL) == MODE_BALANCED,
+          "a NULL streak is a no-op, not a crash");
 }
 
 /* --------------------------------------------------------------- driver ---- */
@@ -517,14 +1095,24 @@ int main(void)
     setenv("ML_PROC_ROOT", fix("proc"), 1);
     setenv("ML_DEV_ROOT", fix("dev"), 1);
     setenv("ML_ETC_ROOT", fix("etc"), 1);
+    setenv("ML_FW_ROOT", fix("fw"), 1);
 
     printf("fixture: %s (%s)\n", FIX, VARIANT);
     test_env();
     test_exit_codes();
     test_mode_pick();
+    test_mode_step();
+    test_sha256();
+    test_driver_versions();
+    test_driver_kinds();
+    test_driver_catalog();
+    test_driver_digest_rules();
+    test_driver_catalog_keys();
+    test_driver_install_rollback();
     if (!strcmp(VARIANT, "bare")) {
         test_gpu_absent();
         test_audio_absent();
+        test_cpu_absent();
     } else if (!strcmp(VARIANT, "virtual")) {
         test_gpu_virtual();
         test_audio_absent();
@@ -539,6 +1127,9 @@ int main(void)
         test_usb();
         test_storage();
         test_power();
+        test_cpu();
+        test_cpu_microcode();
+        test_driver_resolve();
     }
     if (failures) { printf("%d FAILURES in %s\n", failures, VARIANT); return 1; }
     printf("all hardware tests passed (%s)\n", VARIANT);

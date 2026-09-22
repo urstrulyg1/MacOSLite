@@ -13,7 +13,6 @@
 static mica_client *G;
 static mica_win *WIN;
 static int PANEL;             /* -1 = list */
-static ml_source *refresh;
 
 /* Displays panel state. The brightness slider talks to the SAME backend
  * maclite-brightness uses (hardware/backlight.c), so the panel and the tool can
@@ -31,6 +30,22 @@ static const char *PANELS[][2] = {
     { "About This Mac", "app-about" },
 };
 #define NPANELS ((int)ML_ARRAY_SIZE(PANELS))
+
+static void draw(void);
+
+/* The compositor may reduce the effects on its own (§24) after this window was
+ * drawn. It broadcasts EV_MODE when that happens, so the Performance panel
+ * follows the compositor instead of showing the mode the user last clicked —
+ * an on-demand redraw, not a poll: the woken event loop is the only thing that
+ * makes this run. */
+static void on_event(mica_client *c, const msg_event *e)
+{
+    (void)c;
+    if (e->kind == EV_MODE) {
+        G->info.mode = e->a;
+        draw();
+    }
+}
 
 static void row(ml_ctx *c, ml_font *f, int y, const char *label, const char *value)
 {
@@ -197,6 +212,7 @@ int main(void)
     if (!WIN) return 1;
     mica_win_place(WIN, 380, 140);
     WIN->on_input = input;
+    G->on_event = on_event;
     PANEL = -1;
     draw();
     return mica_run(G);

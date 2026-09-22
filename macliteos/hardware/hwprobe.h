@@ -15,7 +15,9 @@ typedef struct {
     char vendor[32], device[64], driver[32];
     uint32_t vendor_id, device_id;
     char pci_addr[16];          /* 0000:01:00.0 */
-    uint64_t vram_bytes;        /* 0 = unknown */
+    uint32_t pci_revision;      /* revision register, 0 when unreadable */
+    uint32_t subsystem_vendor, subsystem_device;
+    uint64_t vram_bytes;        /* 0 = unknown (mem_info_vram_total) */
     bool present;
     bool has_kms;               /* a /dev/dri/cardN bound to this device */
     char card_node[64];         /* /dev/dri/card0 */
@@ -25,7 +27,16 @@ typedef struct {
     char accel_api[16];         /* "vdpau" | "vaapi" | "none" */
     uint32_t decode_mask;       /* ML_CODEC_* the silicon has (capability DB) */
     char db_model[64];          /* model from the capability DB, "" when unknown */
-    char gallium[16];           /* mesa driver name */
+    char gallium[16];           /* mesa driver name (r600 / radeonsi / ...) */
+    /* Mesa presence and version: the version is only ever taken from a real GL
+     * query (the version string a GL context reports). File presence proves the
+     * driver is installed, not which release it is. */
+    bool mesa_present;
+    char mesa_version[40];
+    char dri_module[64];        /* e.g. "r600_dri.so", "" when not found */
+    char vdpau_driver[64];      /* e.g. "libvdpau_r600.so", "" when not found */
+    bool firmware_required;     /* the GPU needs a firmware file to initialise */
+    char firmware_note[160];
     /* GL facts — only ever filled by a real query, never inferred */
     bool gl_probed;
     char gl_vendor[48], gl_version[32], gl_renderer[96];
@@ -93,6 +104,18 @@ typedef struct {
     uint64_t rx_bytes, tx_bytes;
     char ssid[64];
     int wifi_level;             /* -1 unknown */
+    /* exact chipset: read from the device's own ids, then named by the device
+     * database. `chipset` stays empty when the id is unknown — an unnamed chip
+     * is reported as unknown rather than assumed to be the AirPort part. */
+    bool has_pci_ids;
+    uint32_t vendor_id, device_id;
+    char chipset[64];
+    char chip_driver[24];
+    char firmware[192];         /* space separated paths that must exist */
+    bool firmware_present;      /* all of them were found under the fw root */
+    char chip_note[192];
+    int speed_mbps;             /* ethtool-style link speed, -1 unknown */
+    char duplex[8];
 } mica_net_iface;
 
 typedef struct {
@@ -120,6 +143,11 @@ typedef struct {
     char iface[16], state[16], ip4[48], evidence[176];
 } ml_link_status;
 ml_link_status ml_net_link_status(const mica_net_state *n);
+
+/* Basename of the driver bound to a sysfs device directory ("" when unbound).
+ * Public because the driver resolver asks the same question of parts the GPU
+ * probe never looks at (SATA, card reader, FireWire, audio codec controller). */
+void ml_bound_driver(const char *sysfs_dev_dir, char *out, size_t outlen);
 
 /* ---- USB ------------------------------------------------------------- */
 typedef struct {
@@ -204,6 +232,21 @@ bool mica_input_probe(mica_input_state *out);
 typedef enum { GL_HW = 0, GL_SW, GL_NONE, GL_UNKNOWN } gl_probe_result;
 gl_probe_result mica_gl_probe(mica_gpu_info *g);
 const char *gl_probe_name(gl_probe_result r);
+
+/* §24 responsiveness guard. The compositor calls this once per presented frame
+ * with how long that frame took; the streak is caller-owned state.
+ *
+ * The mode can only ever move DOWN the effect ladder (BEAUTIFUL -> BALANCED ->
+ * PERFORMANCE), one step per HW_MODE_STREAK frames that were over the bar, so
+ * nothing here can oscillate and a single hiccup does nothing. A pinned mode
+ * (the operator chose one, or a scripted session/screenshot must render the
+ * same way twice) never changes. *reduced is set on exactly the frame that
+ * performs a reduction, so the caller can notify the user once per step.
+ * Returns the mode to use for the next frame. */
+#define HW_SLOW_FRAME_NS 25000000ull   /* the same >25 ms bar as "dropped" */
+#define HW_MODE_STREAK   30            /* consecutive-ish slow frames per step */
+uint32_t hw_mode_step(uint32_t mode, int *streak, bool frame_slow, bool pinned,
+                      bool *reduced);
 
 /* Suggests a performance mode from real capability (spec §18).
  * Returns MODE_* from compositor/proto.h (0/1/2). */
