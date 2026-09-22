@@ -233,6 +233,21 @@ typedef enum { GL_HW = 0, GL_SW, GL_NONE, GL_UNKNOWN } gl_probe_result;
 gl_probe_result mica_gl_probe(mica_gpu_info *g);
 const char *gl_probe_name(gl_probe_result r);
 
+/* §24 responsiveness guard. The compositor calls this once per presented frame
+ * with how long that frame took; the streak is caller-owned state.
+ *
+ * The mode can only ever move DOWN the effect ladder (BEAUTIFUL -> BALANCED ->
+ * PERFORMANCE), one step per HW_MODE_STREAK frames that were over the bar, so
+ * nothing here can oscillate and a single hiccup does nothing. A pinned mode
+ * (the operator chose one, or a scripted session/screenshot must render the
+ * same way twice) never changes. *reduced is set on exactly the frame that
+ * performs a reduction, so the caller can notify the user once per step.
+ * Returns the mode to use for the next frame. */
+#define HW_SLOW_FRAME_NS 25000000ull   /* the same >25 ms bar as "dropped" */
+#define HW_MODE_STREAK   30            /* consecutive-ish slow frames per step */
+uint32_t hw_mode_step(uint32_t mode, int *streak, bool frame_slow, bool pinned,
+                      bool *reduced);
+
 /* Suggests a performance mode from real capability (spec §18).
  * Returns MODE_* from compositor/proto.h (0/1/2). */
 uint32_t mica_pick_mode(const mica_gpu_info *g, const mica_cpu_info *c);

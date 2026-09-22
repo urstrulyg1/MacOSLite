@@ -23,6 +23,7 @@
 #include "../hardware/cpu.h"
 #include "../hardware/driver.h"
 #include "ml/sha256.h"
+#include "../compositor/proto.h"   /* MODE_* — the ladder hw_mode_step() walks */
 #include <assert.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -1031,6 +1032,52 @@ static void test_mode_pick(void)
           "unknown GPU without a render node: software");
 }
 
+/* §24: the automatic effect reduction. Pure policy, so it is testable without
+ * a running compositor: what is asserted here is exactly what comp.c calls. */
+static void test_mode_step(void)
+{
+    int streak = 0;
+    bool reduced = false;
+    uint32_t m = MODE_BEAUTIFUL;
+
+    /* one hiccup does nothing: the streak decays again on the next good frame */
+    for (int i = 0; i < HW_MODE_STREAK - 1; i++)
+        m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_BEAUTIFUL && !reduced, "29 slow frames are not enough");
+    m = hw_mode_step(m, &streak, false, false, &reduced);
+    CHECK(streak == HW_MODE_STREAK - 2 && m == MODE_BEAUTIFUL,
+          "a fast frame decays the streak (got %d)", streak);
+
+    /* sustained slowness steps down exactly once, on the crossing frame */
+    m = MODE_BEAUTIFUL; streak = 0; reduced = false;
+    for (int i = 0; i < HW_MODE_STREAK; i++)
+        m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_BALANCED, "30 slow frames reduce beautiful -> balanced (got %u)", m);
+    CHECK(reduced, "the reducing frame reports itself");
+    m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_BALANCED && !reduced, "the step does not repeat every frame");
+
+    /* a pinned mode (operator choice, scripted session, screenshot) never moves */
+    streak = 0; reduced = false;
+    for (int i = 0; i < HW_MODE_STREAK * 5; i++)
+        m = hw_mode_step(m, &streak, true, true, &reduced);
+    CHECK(m == MODE_BALANCED && !reduced, "pinned mode ignores slowness");
+
+    /* ...and the ladder ends at performance, both when stepping and when pinned */
+    streak = 0; reduced = false;
+    for (int i = 0; i < HW_MODE_STREAK; i++)
+        m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_PERFORMANCE && reduced, "second step lands on performance");
+    reduced = false;
+    for (int i = 0; i < HW_MODE_STREAK * 3; i++)
+        m = hw_mode_step(m, &streak, true, false, &reduced);
+    CHECK(m == MODE_PERFORMANCE && !reduced, "performance is the floor");
+    m = hw_mode_step(MODE_PERFORMANCE, &streak, true, true, &reduced);
+    CHECK(m == MODE_PERFORMANCE, "pinning performance changes nothing");
+    CHECK(hw_mode_step(MODE_BALANCED, NULL, true, false, NULL) == MODE_BALANCED,
+          "a NULL streak is a no-op, not a crash");
+}
+
 /* --------------------------------------------------------------- driver ---- */
 int main(void)
 {
@@ -1054,6 +1101,7 @@ int main(void)
     test_env();
     test_exit_codes();
     test_mode_pick();
+    test_mode_step();
     test_sha256();
     test_driver_versions();
     test_driver_kinds();

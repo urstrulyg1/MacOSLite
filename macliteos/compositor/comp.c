@@ -111,8 +111,9 @@ static struct {
      * if the frames keep arriving late. The counter is the same one the report
      * uses; there is no timer and no sampling thread. */
     int slow_streak;
-    bool mode_pinned;           /* an explicit --mode or MICA_MODE wins over auto */
-    bool auto_reduced;
+    bool mode_pinned;           /* an explicit --mode/MICA_MODE won over the picker */
+    bool mode_frozen;           /* scripted/shot run: reduce nothing mid-run */
+    uint32_t mode_steps;        /* how many times §24 has reduced the effects */
     uint64_t frame_us_sum, frame_us_worst;
     uint64_t pts[64];
     int pts_n, pts_i;
@@ -148,7 +149,8 @@ static struct {
 } C;
 
 /* ---------------------------------------------------------------- utils -- */
-static void notify(const msg_notify *n);   /* defined below; the frame loop uses it */
+static void notify(const msg_notify *n);        /* defined below; the frame loop uses these */
+static void broadcast_event(uint32_t kind, uint32_t a, uint32_t b, const char *text);
 
 static void damage_add(ml_rect r)
 {
@@ -361,25 +363,32 @@ static void present(void)
     uint64_t now = ml_now_ns();
     if (C.last_present_ns) {
         uint64_t dt = now - C.last_present_ns;
-        if (dt > 25000000ull) C.dropped++;        /* >25ms gap = a dropped frame */
+        bool slow = dt > HW_SLOW_FRAME_NS;
+        if (slow) C.dropped++;        /* >25ms gap = a dropped frame */
         /* Sustained slowness (not one hiccup, which every machine has) steps the
-         * mode down once. Responsiveness outranks eye candy (§24), and the
-         * decision is one-way so the machine cannot oscillate between modes. */
-        if (dt > 25000000ull) C.slow_streak++;
-        else if (C.slow_streak > 0) C.slow_streak--;
-        if (!C.mode_pinned && !C.auto_reduced && C.slow_streak >= 30 &&
-            C.mode < MODE_PERFORMANCE) {
-            C.mode++;
-            C.auto_reduced = true;
-            C.slow_streak = 0;
-            ML_INFO("auto-reducing effects to %s: %llu dropped frame(s) in a row",
-                    mica_mode_name(C.mode), (unsigned long long)C.dropped);
+         * mode down. Responsiveness outranks eye candy (§24); the decision can
+         * only ever go one way, so the machine cannot oscillate between modes,
+         * and a pinned mode is never touched. The policy itself lives in
+         * hw_mode_step() so it can be tested without a running compositor. */
+        bool reduced = false;
+        uint32_t next = hw_mode_step(C.mode, &C.slow_streak, slow, C.mode_frozen,
+                                     &reduced);
+        if (reduced) {
+            C.mode = next;
+            C.mode_steps++;
+            ML_INFO("auto-reducing effects to %s (%u step(s) this run)",
+                    mica_mode_name(C.mode), C.mode_steps);
             msg_notify n = { 0 };
             snprintf(n.title, sizeof n.title, "Reduced effects");
             snprintf(n.body, sizeof n.body, "%s mode: the GPU was not keeping up",
                      mica_mode_name(C.mode));
             snprintf(n.icon, sizeof n.icon, "speed");
             notify(&n);
+            /* the shell's control centre and Settings read the mode from this
+             * broadcast, so an automatic step has to travel the same path an
+             * explicit MC_SET_MODE does — otherwise the UI would keep showing
+             * the old mode after the compositor changed it. */
+            broadcast_event(EV_MODE, C.mode, 0, mica_mode_name(C.mode));
             ml_region_add(&C.damage, ml_rect_make(0, 0, C.screen_w, C.screen_h));
             request_frame();
         }
@@ -848,6 +857,11 @@ static void handle_client(void *ud, int fd, uint32_t type, const void *payload, 
     case MC_SET_MODE: {
         const msg_mode *m = payload;
         C.mode = m->mode;
+        /* An explicit request is a promise, exactly like --mode/MICA_MODE: the
+         * operator (or a script that steps through the modes) asked for this,
+         * so the automatic reduction below must leave it alone. */
+        C.mode_pinned = true;
+        C.mode_frozen = true;
         damage_add(ml_rect_make(0, 0, C.screen_w, C.screen_h));
         request_frame();
         broadcast_event(EV_MODE, C.mode, 0, mica_mode_name(C.mode));
@@ -872,6 +886,8 @@ static void handle_client(void *ud, int fd, uint32_t type, const void *payload, 
         st.worst_us = (uint32_t)C.frame_us_worst;
         st.damage_px_last = (uint32_t)C.damage_last;
         st.mode = C.mode;
+        st.mode_steps = C.mode_steps;
+        st.mode_pinned = C.mode_pinned ? 1u : 0u;
         st.nwindows = (uint32_t)C.nwin;
         for (int i = 0; i < MAX_CLIENTS; i++) if (C.clients[i].alive) st.nclients++;
         /* 0 headless, 1 drm/kms, 2 fbdev — the real backend, never a constant.
@@ -1308,17 +1324,21 @@ int main(int argc, char **argv)
             return 3;                        /* 3 = requested capability unavailable */
         }
     }
-    /* A pinned mode is a promise: --mode/MICA_MODE are the operator's choice,
-     * and a scripted session or a screenshot must render the same way every
-     * time. Only a free-running desktop may reduce its effects on its own. */
-    if (getenv("MICA_MODE") || script_file || C.shot_path) C.mode_pinned = true;
-    if (!getenv("MICA_MODE")) {
+    /* The mode comes from what was really detected (§23/§24) unless the
+     * operator pinned one with --mode/MICA_MODE — a pin is a promise and wins
+     * over the picker. A scripted session still gets the machine's mode (the
+     * pick is deterministic for a given machine) but is *frozen*: nothing may
+     * change its rendering halfway through a run, so the automatic reduction
+     * below is disabled for it and for one-shot screenshots. */
+    if (getenv("MICA_MODE")) C.mode_pinned = true;
+    if (!C.mode_pinned) {
         uint32_t pick = mica_pick_mode(&C.gpu, &C.cpu);
         ML_INFO("gpu: %s driver=%s kms=%d accel=%s -> suggested mode: %s",
                 C.gpu.device[0] ? C.gpu.device : "(none)", C.gpu.driver, C.gpu.has_kms,
                 mica_gpu_accel_name(&C.gpu), mica_mode_name(pick));
-        if (!script_file && !C.shot_path && !C.mode_pinned) C.mode = pick;
+        C.mode = pick;
     }
+    C.mode_frozen = C.mode_pinned || script_file || C.shot_path != NULL;
 
     C.loop = ml_loop_new();
     C.anim = ml_anim_engine_new(256);

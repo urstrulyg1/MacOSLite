@@ -190,6 +190,31 @@ if [ "$FIXTURES" = 1 ] && [ -d "$FIXDIR/imac11_2/sys" ]; then
         record "honesty:backend" SANDBOX PASS "exit $rc"
     fi
 
+    # The performance mode must come from what was detected (§23/§24), and an
+    # explicit MICA_MODE must beat the picker — a pin that silently loses to
+    # auto-selection is exactly the sort of lie these gates exist for.
+    printf '%-26s %-8s ' "honesty:mode" SANDBOX
+    ML_SYSFS_ROOT="$FIXDIR/bare/sys" ML_PROC_ROOT="$FIXDIR/bare/proc" \
+    ML_DEV_ROOT="$FIXDIR/bare/dev" ML_ETC_ROOT="$FIXDIR/bare/etc" \
+        timeout 5 out/mica-comp --headless -W 320 -H 200 > "$LOG/honesty-mode-auto.log" 2>&1
+    ML_SYSFS_ROOT="$FIXDIR/bare/sys" ML_PROC_ROOT="$FIXDIR/bare/proc" \
+    ML_DEV_ROOT="$FIXDIR/bare/dev" ML_ETC_ROOT="$FIXDIR/bare/etc" MICA_MODE=beautiful \
+        timeout 5 out/mica-comp --headless -W 320 -H 200 > "$LOG/honesty-mode-pinned.log" 2>&1
+    auto_mode=$(sed -n 's/.*mode=\([a-z]*\).*/\1/p' "$LOG/honesty-mode-auto.log" | head -1)
+    pin_mode=$(sed -n 's/.*mode=\([a-z]*\).*/\1/p' "$LOG/honesty-mode-pinned.log" | head -1)
+    if [ "$auto_mode" != "performance" ]; then
+        echo "FAIL (no KMS and no GL renderer must pick performance, got '${auto_mode:-nothing}')"
+        record "honesty:mode" SANDBOX FAIL "auto-picked '$auto_mode'"
+        FAILED=1
+    elif [ "$pin_mode" != "beautiful" ]; then
+        echo "FAIL (MICA_MODE=beautiful must beat the picker, got '${pin_mode:-nothing}')"
+        record "honesty:mode" SANDBOX FAIL "pin ignored ('$pin_mode')"
+        FAILED=1
+    else
+        echo "PASS (picker chose $auto_mode from detection; MICA_MODE pinned $pin_mode)"
+        record "honesty:mode" SANDBOX PASS "auto=$auto_mode pinned=$pin_mode"
+    fi
+
     # 4. the driver resolver must resolve (and must say which newer release it
     #    refused), and on a fixture it must never claim the running
     #    configuration was validated — validation needs a real reboot.

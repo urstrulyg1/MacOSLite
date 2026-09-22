@@ -27,7 +27,16 @@ Done and verified here:
   with no daemon, decode capability intersection with strict hardware
   attribution, `--perf` seek + A/V decode-skew measurement, `--fullscreen`
   worst-case frame measurement.
-- Settings > Displays drives the same brightness backend as the CLI tool.
+- Settings > Displays drives the same brightness backend as the CLI tool, and
+  Settings > Performance follows the compositor's mode through the `EV_MODE`
+  broadcast instead of remembering what the user last clicked.
+- Performance modes (§23/§24): the mode is picked from the detected GPU/KMS/GL
+  state, `--mode`/`MICA_MODE` (and an explicit choice in Settings) pin it, and a
+  machine that keeps missing the frame budget steps the ladder down through
+  `hw_mode_step()` — 30 net-slow frames per step, one way, notified, full
+  damage, `performance` as the floor, and a pinned or scripted session is never
+  touched mid-run. `maclite-gpu` reports the live mode and how many steps were
+  taken.
 - Depth layer: `maclite-cpu` (exact part, topology, Turbo, cpufreq, thermal,
   microcode revision versus what the image ships, no monitoring daemon) and
   `maclite-drivers` (catalog-driven resolver: detect/status/check/update/verify/
@@ -37,10 +46,11 @@ Done and verified here:
 - Unified report in the spec §31 section order (CPU/GPU/Display/Audio/Network/
   USB/Storage/Optical/SDXC/FireWire/Camera/Multimedia/Power), where a section
   that cannot be exercised here says NOT TESTED rather than PASS.
-- Tests: hardware fixture matrix (4 machines), eight honesty gates (including
-  three that hold the driver resolver to "never newest, never unverified, never
-  a write to a fixture"), seven scripted sessions; `sh scripts/run-tests.sh` =
-  27 rows, all PASS on this host.
+- Tests: hardware fixture matrix (4 machines), nine honesty gates (three hold
+  the driver resolver to "never newest, never unverified, never a write to a
+  fixture", and `honesty:mode` holds the compositor to "the mode came from
+  detection, and a pin beats the picker"), seven scripted sessions;
+  `sh scripts/run-tests.sh` = 28 rows, all PASS on this host.
 Not done, and not claimed:
 - Nothing has run on an iMac or in QEMU yet: KMS scanout, backlight writes,
   ALC889 playback, VDPAU/VA-API decode, tg3/b43 traffic and suspend behaviour are

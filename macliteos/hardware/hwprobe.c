@@ -265,6 +265,24 @@ gl_probe_result mica_gl_probe(mica_gpu_info *g)
     return GL_NONE;
 }
 
+uint32_t hw_mode_step(uint32_t mode, int *streak, bool frame_slow, bool pinned,
+                      bool *reduced)
+{
+    if (reduced) *reduced = false;
+    if (!streak) return mode;
+    if (frame_slow) {
+        if (*streak < HW_MODE_STREAK * 4) (*streak)++;
+    } else if (*streak > 0) {
+        (*streak)--;
+    }
+    if (!pinned && *streak >= HW_MODE_STREAK && mode < MODE_PERFORMANCE) {
+        mode++;
+        *streak = 0;
+        if (reduced) *reduced = true;
+    }
+    return mode;
+}
+
 const char *gl_probe_name(gl_probe_result r)
 {
     switch (r) {
