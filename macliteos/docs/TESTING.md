@@ -14,6 +14,7 @@ hardware in hand). We never label a result with a tier it did not run in.
 | maclite-memory / -performance / -diagnostics live | SANDBOX | PASS |
 | screenshots (session_*.png in out/) | SANDBOX | verified visually |
 | interaction scripts: menu action launches app, Meta+Space launcher, Meta+arrow workspace switch, minimize-to-dock, dock autohide hide/reveal | SANDBOX | PASS (interact.script, dockhide.script, menuclick.script) |
+| desktop icon click opens file in viewer; launcher type-"term"+Return execs terminal; control-center popover modes/mute/settings | SANDBOX | PASS (cc.script) |
 | ISO build (scripts/make-iso.sh) | — | NOT RUN: xorriso/grub/mksquashfs absent |
 | run-vm.sh QEMU boot | — | NOT RUN: no qemu in sandbox |
 | KMS/DRM compositing on r600 | — | NOT RUN: no /dev/dri here |

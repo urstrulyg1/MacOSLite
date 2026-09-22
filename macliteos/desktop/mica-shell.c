@@ -146,6 +146,45 @@ static void clock_tick(void *ud)
     panel_draw();
 }
 
+/* Control center (spec §42): one popover over the status cluster. Modes,
+ * audio mute, and a jump into Settings. Nothing polls; it exists only while
+ * open, like every other menu. */
+static void cc_mode(void *ud)
+{
+    mica_set_mode(G, (uint32_t)(uintptr_t)ud);
+    G->info.mode = (uint32_t)(uintptr_t)ud;
+}
+static void cc_mute(void *ud)
+{
+    (void)ud;
+    P.vol = !P.vol;
+    panel_draw();
+}
+static void cc_settings(void *ud)
+{
+    (void)ud;
+    mica_launch(G, "mica-settings");
+}
+static void panel_cc_open(int x)
+{
+    if (P.menu) shell_menu_close(P.menu);
+    P.menu = shell_menu_open(G, x, PANEL_H, NULL);
+    shell_menu_own(P.menu, &P.menu);
+    shell_menu_item mi[3] = {
+        { "Beautiful", "brightness", false, G->info.mode == MODE_BEAUTIFUL, cc_mode, (void *)(uintptr_t)MODE_BEAUTIFUL },
+        { "Balanced", "sliders", false, G->info.mode == MODE_BALANCED, cc_mode, (void *)(uintptr_t)MODE_BALANCED },
+        { "Performance", "pulse", false, G->info.mode == MODE_PERFORMANCE, cc_mode, (void *)(uintptr_t)MODE_PERFORMANCE },
+    };
+    for (int i = 0; i < 3; i++) shell_menu_add(P.menu, mi[i].label, mi[i].icon, mi[i].action, mi[i].ud);
+    /* re-apply checked flags (shell_menu_add copies) */
+    for (int i = 0; i < 3; i++) P.menu->items[i].checked = mi[i].checked;
+    shell_menu_sep(P.menu);
+    shell_menu_add(P.menu, P.vol ? "Mute" : "Unmute", "speaker", cc_mute, NULL);
+    shell_menu_add(P.menu, "Open System Settings", "gear", cc_settings, NULL);
+    shell_menu_draw(P.menu);
+    mica_win_place(P.menu->win, x, PANEL_H);
+}
+
 static void panel_input(mica_win *w, const msg_input *in)
 {
     (void)w;
@@ -163,7 +202,8 @@ static void panel_input(mica_win *w, const msg_input *in)
         if (in->x >= x - 7 && in->x <= x + tw + 7) { panel_menu_open((int)i, x - 7); return; }
         x += tw + 22;
     }
-    if (in->x > w->w - 40 && in->x < w->w - 16) P.vol = !P.vol;
+    if (in->x > w->w - 40 && in->x < w->w - 16) { P.vol = !P.vol; panel_draw(); return; }
+    if (in->x > w->w - 120) { panel_cc_open(w->w - 230); return; }
     panel_draw();
 }
 

@@ -181,6 +181,8 @@ void shell_menu_draw(shell_menu *m)
             x += 24;
         }
         ml_draw_text(&c, f, x, y + 18, m->items[i].label, 13, ml_rgba(235, 240, 250, 240));
+        if (m->items[i].checked)
+            ml_draw_text(&c, f, s->w - 24, y + 18, "✓", 13, ml_rgba(160, 200, 255, 250));
     }
     mica_win_commit(m->win);
 }
