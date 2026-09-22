@@ -1,0 +1,15 @@
+# menuclick.script — open the Apple-style menu and choose a real action, twice,
+# to prove menu windows do not leak or dangle (comp.c clears hover/drag refs).
+wait 300
+click 24 13
+wait 250
+shot session_menu1.png
+click 40 40
+wait 400
+shot session_menu_action.png
+click 24 13
+wait 250
+key escape
+wait 200
+shot session_menu_closed.png
+quit

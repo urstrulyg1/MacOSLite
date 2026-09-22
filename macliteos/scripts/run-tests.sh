@@ -1,17 +1,250 @@
 #!/bin/sh
-# Runs the whole suite; any failure exits non-zero.
-cd "$(dirname "$0")/.."
-fail=0
-for t in test_units test_idle test_leak; do
-    printf '%-12s ' "$t"
-    if out/$t > "out/$t.log" 2>&1; then echo PASS; else echo FAIL; fail=1; fi
+# MacLiteOS v0.2 test suite (spec §21).
+#
+# Runs every check that can actually run on this host and prints an honest
+# result per row. Nothing here reports a tier it did not run in: QEMU and
+# real-iMac rows are simply absent until someone runs scripts/hardware-check.sh
+# on the machine (see docs/testing.md).
+#
+#   out/logs/            raw output of every row
+#   out/test-summary.tsv machine-readable summary (name <TAB> tier <TAB> result)
+#
+# Usage: sh scripts/run-tests.sh [--quick] [--no-fixtures]
+#   --quick         skip the scripted UI sessions (they are the slow rows)
+#   --no-fixtures   skip the hardware fixture matrix
+# exit: 0 every row passed, 1 at least one row failed
+#
+# Legend for the status column used below:
+#   PASS  exercised here and verified
+#   FAIL  exercised here and did not work        (keeps the suite red)
+#   SKIP  could not be exercised on this host   (never counted as PASS)
+cd "$(dirname "$0")/.." || exit 1
+
+QUICK=0
+FIXTURES=1
+for a in "$@"; do
+    case "$a" in
+    --quick) QUICK=1 ;;
+    --no-fixtures) FIXTURES=0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    *) echo "unknown option: $a" >&2; exit 1 ;;
+    esac
 done
-printf '%-12s ' headless-session
-if (cd out && timeout 60 ./mica-comp --headless -W 1280 -H 800 --session --script demo.script > session.log 2>&1); then
-    echo PASS
-else
-    echo FAIL; fail=1
+
+LOG=out/logs
+SUMMARY=out/test-summary.tsv
+mkdir -p "$LOG"
+: > "$SUMMARY"
+FAILED=0
+ROWS=0
+
+if [ ! -x out/mica-comp ]; then
+    echo "out/mica-comp not built — run: sh scripts/build.sh" >&2
+    exit 1
 fi
-printf '%-12s ' ui-benchmark
-out/maclite-ui-benchmark > out/ui-benchmark.log 2>&1 && echo PASS || { echo FAIL; fail=1; }
-exit $fail
+
+# record NAME TIER RESULT [DETAIL]
+record() {
+    ROWS=$((ROWS + 1))
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:-}" >> "$SUMMARY"
+}
+
+# row NAME TIER COMMAND...   (runs in the repo root, log in $LOG/NAME.log)
+row() {
+    name=$1; tier=$2; shift 2
+    printf '%-26s %-8s ' "$name" "$tier"
+    if "$@" > "$LOG/$name.log" 2>&1; then
+        echo "PASS"
+        record "$name" "$tier" PASS
+        return 0
+    fi
+    echo "FAIL (see $LOG/$name.log)"
+    record "$name" "$tier" FAIL "$(tail -1 "$LOG/$name.log" 2>/dev/null)"
+    FAILED=1
+    return 1
+}
+
+# skip NAME TIER REASON
+skip() {
+    printf '%-26s %-8s SKIP     %s\n' "$1" "$2" "$3"
+    record "$1" "$2" SKIP "$3"
+}
+
+echo "MacLiteOS test suite — $(uname -s) $(uname -m), $(date -u '+%Y-%m-%dT%H:%MZ')"
+echo
+
+# ---------------------------------------------------------------- unit tests --
+for t in test_render test_units test_idle test_leak; do
+    [ -x "out/$t" ] || { skip "$t" SANDBOX "not built"; continue; }
+    row "$t" SANDBOX "out/$t"
+done
+
+# ------------------------------------------------------- hardware fixture run --
+# The fixture trees are the regression harness for the detection code: they
+# reproduce a known machine (iMac11,2 / iMac11,3), a VM, and a bare host, and
+# tests/test_hardware.c pins what must be detected, what must fall back, and
+# which exit code each outcome gets.
+FIXDIR=out/fixtures
+if [ "$FIXTURES" = 1 ]; then
+    if command -v python3 > /dev/null 2>&1; then
+        for v in imac11_2 imac11_3 virtual bare; do
+            if python3 tests/fixtures/make_sysfs.py "$FIXDIR/$v" --variant "$v" > "$LOG/fixture-$v.log" 2>&1; then
+                printf '%-26s %-8s ' "fixture:$v" SANDBOX
+                if ML_HW_FIXTURE="$FIXDIR/$v" ML_HW_VARIANT="$v" out/test_hardware > "$LOG/hw-$v.log" 2>&1; then
+                    echo "PASS"
+                    record "test_hardware:$v" SANDBOX PASS
+                else
+                    echo "FAIL (see $LOG/hw-$v.log)"
+                    record "test_hardware:$v" SANDBOX FAIL "$(tail -1 "$LOG/hw-$v.log")"
+                    FAILED=1
+                fi
+            else
+                skip "test_hardware:$v" SANDBOX "fixture generation failed"
+            fi
+        done
+    else
+        skip "test_hardware:*" SANDBOX "python3 absent: fixtures cannot be generated"
+    fi
+else
+    skip "test_hardware:*" SANDBOX "--no-fixtures"
+fi
+
+# ---------------------------------------------------------- honesty gates -----
+# These are the rules the v0.2 work exists to enforce (spec §2/§5/§21). Each one
+# must hold on every host, fixture or not:
+#   1. maclite-gpu may never exit 0 without a verified hardware renderer.
+#   2. a brightness write against fixture roots may never be reported verified.
+#   3. the fixture runs of the diagnostics may never exit 4 (usage = harness bug)
+#      and never report FAIL for checks that only a live kernel can answer.
+imac_env() {
+    ML_SYSFS_ROOT="$FIXDIR/imac11_2/sys" ML_PROC_ROOT="$FIXDIR/imac11_2/proc" \
+    ML_DEV_ROOT="$FIXDIR/imac11_2/dev" ML_ETC_ROOT="$FIXDIR/imac11_2/etc" "$@"
+}
+if [ "$FIXTURES" = 1 ] && [ -d "$FIXDIR/imac11_2/sys" ]; then
+    printf '%-26s %-8s ' "honesty:gpu" SANDBOX
+    imac_env out/maclite-gpu > "$LOG/honesty-gpu.log" 2>&1
+    rc=$?
+    if [ "$rc" = 0 ]; then
+        echo "FAIL (maclite-gpu reported acceleration without a GL query)"
+        record "honesty:gpu" SANDBOX FAIL "exit 0 without verified renderer"
+        FAILED=1
+    else
+        echo "PASS (exit $rc, acceleration never claimed)"
+        record "honesty:gpu" SANDBOX PASS "exit $rc"
+    fi
+
+    printf '%-26s %-8s ' "honesty:brightness" SANDBOX
+    if imac_env out/maclite-brightness set 42 > "$LOG/honesty-brightness.log" 2>&1; then
+        if grep -qi "verified" "$LOG/honesty-brightness.log"; then
+            echo "FAIL (claimed a verified brightness change on fixture files)"
+            record "honesty:brightness" SANDBOX FAIL "verified claim under fixture roots"
+            FAILED=1
+        else
+            echo "PASS (no change claimed)"
+            record "honesty:brightness" SANDBOX PASS
+        fi
+    else
+        echo "PASS (refused: exit $?)"
+        record "honesty:brightness" SANDBOX PASS "refused"
+    fi
+
+    printf '%-26s %-8s ' "honesty:audio-fixture" SANDBOX
+    imac_env out/maclite-audio list > "$LOG/honesty-audio.log" 2>&1
+    if grep -q "FAIL" "$LOG/honesty-audio.log"; then
+        echo "FAIL (mixer reported FAIL where no ioctl could run)"
+        record "honesty:audio-fixture" SANDBOX FAIL
+        FAILED=1
+    else
+        echo "PASS (mixer row is NOT TESTED, not FAIL)"
+        record "honesty:audio-fixture" SANDBOX PASS
+    fi
+
+    printf '%-26s %-8s ' "honesty:net-fixture" SANDBOX
+    imac_env out/maclite-network > "$LOG/honesty-net.log" 2>&1
+    if grep -qE "0\.21\.0\.0|borrow" "$LOG/honesty-net.log"; then
+        echo "FAIL (fixture report contains this host's address)"
+        record "honesty:net-fixture" SANDBOX FAIL
+        FAILED=1
+    else
+        echo "PASS (no host address leaked into the fixture report)"
+        record "honesty:net-fixture" SANDBOX PASS
+    fi
+else
+    skip "honesty:*" SANDBOX "fixtures unavailable"
+fi
+
+# ------------------------------------------------------- scripted UI sessions --
+# Each scripts/*.script drives a real headless session (render loop, input,
+# window management, screenshots). A row passes when the session exits 0, the
+# log has no FATAL, and every screenshot the script asked for exists.
+session() {
+    s=$1
+    printf '%-26s %-8s ' "session:$s" SANDBOX
+    log="$LOG/session-$s.log"
+    if ! ( cd out && timeout 60 ./mica-comp --headless -W 1280 -H 800 --session \
+             --script "../tests/scripts/$s.script" ) > "$log" 2>&1; then
+        echo "FAIL (session exited non-zero: see $log)"
+        record "session:$s" SANDBOX FAIL "$(tail -1 "$log")"
+        FAILED=1
+        return
+    fi
+    if grep -q "FATAL" "$log"; then
+        echo "FAIL (FATAL in session log)"
+        record "session:$s" SANDBOX FAIL "FATAL in log"
+        FAILED=1
+        return
+    fi
+    missing=""
+    for shot in $(grep -E '^[[:space:]]*shot ' "tests/scripts/$s.script" | awk '{print $2}'); do
+        [ -f "out/$shot" ] || missing="$missing $shot"
+    done
+    if [ -n "$missing" ]; then
+        echo "FAIL (missing screenshots:$missing)"
+        record "session:$s" SANDBOX FAIL "missing screenshots:$missing"
+        FAILED=1
+        return
+    fi
+    echo "PASS"
+    record "session:$s" SANDBOX PASS "screenshots ok"
+}
+
+if [ "$QUICK" = 1 ]; then
+    skip "session:*" SANDBOX "--quick"
+else
+    for s in demo interact dockhide menuclick cc hardware; do
+        if [ -f "tests/scripts/$s.script" ]; then
+            session "$s"
+        else
+            skip "session:$s" SANDBOX "tests/scripts/$s.script missing"
+        fi
+    done
+fi
+
+# ------------------------------------------------------------- benchmarks ----
+[ -x out/maclite-ui-benchmark ] && row ui-benchmark SANDBOX out/maclite-ui-benchmark
+
+# --------------------------------------------------- live host diagnostics ---
+# Reported, not gated: on a dev container these reflect the container, and the
+# only place they mean anything is the machine itself (docs/testing.md).
+for b in maclite-memory maclite-performance; do
+    [ -x "out/$b" ] || continue
+    printf '%-26s %-8s ' "$b" SANDBOX
+    if "out/$b" > "$LOG/$b.log" 2>&1; then
+        echo "PASS (host numbers: out/logs/$b.log)"
+        record "$b" SANDBOX PASS
+    else
+        echo "FAIL"
+        record "$b" SANDBOX FAIL "$(tail -1 "$LOG/$b.log")"
+        FAILED=1
+    fi
+done
+
+echo
+echo "$ROWS row(s); summary in $SUMMARY"
+if [ "$FAILED" = 0 ]; then
+    echo "Result: PASS — every row that ran on this host passed."
+    echo "        Rows marked SKIP (and the QEMU/iMac tiers in docs/testing.md) are NOT TESTED."
+else
+    echo "Result: FAIL — see the rows above; logs in $LOG/"
+fi
+exit $FAILED

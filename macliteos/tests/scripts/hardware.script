@@ -1,0 +1,24 @@
+# hardware.script — boot-shaped smoke test: start a session, switch every
+# workspace, run both animation-heavy paths (notification + workspace slide),
+# then quit. Used by scripts/hardware-check.sh on real hardware, where a live
+# maclite-hardware run follows it.
+wait 400
+shot hw_01_desktop.png
+ws 1
+wait 250
+ws 2
+wait 250
+ws 3
+wait 250
+ws 0
+wait 250
+notify Hardware check|Session is alive and rendering
+wait 400
+shot hw_02_notify.png
+mode performance
+wait 300
+shot hw_03_performance.png
+mode beautiful
+wait 300
+shot hw_04_beautiful.png
+quit

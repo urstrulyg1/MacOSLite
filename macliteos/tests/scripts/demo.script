@@ -1,0 +1,43 @@
+# demo.script — deterministic walkthrough of a MacLiteOS session.
+#
+# Referenced by scripts/run-tests.sh. Commands understood by the compositor
+# (compositor/comp.c, script_run_line): wait N | move x y | click x y | rclick x y
+# | down | up | key [meta+|ctrl+|shift+]name | shot FILE | notify TITLE|BODY
+# | ws N | mode beautiful|balanced|performance | launch CMD | quit
+#
+# Screenshot paths are relative to the compositor's working directory (out/).
+# Everything here is bounded: no sleeps longer than 600 ms, always ends with
+# quit, so the headless session test can never hang the suite.
+
+wait 300
+shot session_01_desktop.png
+
+notify MacLiteOS|Damage tracking compositor online
+wait 300
+shot session_02_notification.png
+
+ws 1
+wait 300
+shot session_03_workspace.png
+ws 0
+wait 200
+
+mode balanced
+wait 300
+shot session_04_balanced.png
+
+launch mica-finder
+wait 600
+shot session_05_finder.png
+
+key meta+space
+wait 400
+shot session_06_launcher.png
+key escape
+wait 200
+
+mode beautiful
+wait 200
+shot session_07_final.png
+
+quit

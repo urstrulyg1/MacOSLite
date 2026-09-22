@@ -24,6 +24,7 @@
 #include "ml/img.h"
 #include "ml/cache.h"
 #include "../hardware/hwprobe.h"
+#include "../hardware/kms.h"
 #include <sys/socket.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -133,6 +134,11 @@ static struct {
     mica_gpu_info gpu;
     mica_cpu_info cpu;
     char sock[256];
+    /* present backend (v0.2): kms / fbdev / headless. The renderer is unchanged
+     * by this: it only decides where a finished damage region is handed off. */
+    ml_display disp;
+    const char *backend_req;
+    bool backend_explicit;
 } C;
 
 /* ---------------------------------------------------------------- utils -- */
@@ -334,6 +340,8 @@ static void present(void)
     ml_raster_reset_stats();
     present_region(C.fb, &dmg);
     C.damage_last = (uint64_t)ml_region_area(&dmg);
+    if (C.disp.kind != ML_DISP_HEADLESS)
+        ml_display_commit(&C.disp, C.fb->px, dmg.r, ml_region_count(&dmg));
     if (getenv("ML_FRAMEDBG")) {
         ml_rect bb = ml_region_bounds(&dmg);
         fprintf(stderr, "[frame] dmg=%d,%d %dx%d area=%llu ws_off=%.2f cost=%llu us\n",
@@ -523,6 +531,14 @@ static void frame_tick(void *ud)
     (void)ud;
     anim_tick(NULL);
     present();
+}
+
+/* DRM page-flip completion. The fd is only readable when an event is queued, so
+ * this adds no wakeups to an idle loop (tests/test_idle.c still passes). */
+static void flip_ready(void *ud, unsigned int events)
+{
+    (void)ud; (void)events;
+    ml_display_wait(&C.disp, 1);
 }
 
 /* ------------------------------------------------------------------ input */
@@ -829,7 +845,9 @@ static void handle_client(void *ud, int fd, uint32_t type, const void *payload, 
         st.mode = C.mode;
         st.nwindows = (uint32_t)C.nwin;
         for (int i = 0; i < MAX_CLIENTS; i++) if (C.clients[i].alive) st.nclients++;
-        st.backend = 0;
+        /* 0 headless, 1 drm/kms, 2 fbdev — the real backend, never a constant.
+         * accel stays 0 until a GL compositing path lands (docs/gpu.md). */
+        st.backend = (uint32_t)C.disp.kind;
         st.accel = 0;
         st.screen_w = C.screen_w; st.screen_h = C.screen_h;
         st.cur_ws = (uint32_t)C.cur_ws; st.n_ws = N_WS;
@@ -1188,7 +1206,11 @@ static void on_term(void *ud)
 /* ------------------------------------------------------------------ main -- */
 static void usage(const char *p)
 {
-    fprintf(stderr, "usage: %s [--headless|--drm] [-W w] [-H h] [--mode m] [--session] [--script file] [--shot file]\n", p);
+    fprintf(stderr,
+        "usage: %s [--backend auto|kms|fbdev|headless] [--headless|--drm] [-W w] [-H h]\n"
+        "          [--mode beautiful|balanced|performance] [--session] [--script f] [--shot f]\n"
+        "  --backend picks the present path; auto uses KMS when a /dev/dri card exists,\n"
+        "  then fbdev, then headless. The chosen backend is logged and exported in MS_STATS.\n", p);
 }
 
 static void crash_sig(int sig, siginfo_t *si, void *uc)
@@ -1227,7 +1249,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--mode") && i + 1 < argc) {
             const char *m = argv[++i];
             C.mode = !strcmp(m, "balanced") ? MODE_BALANCED : !strcmp(m, "performance") ? MODE_PERFORMANCE : MODE_BEAUTIFUL;
-        } else if (!strcmp(argv[i], "--session")) C.session = true;
+        } else if (!strcmp(argv[i], "--backend") && i + 1 < argc) { C.backend_req = argv[++i]; C.backend_explicit = true; }
+        else if (!strcmp(argv[i], "--headless")) { C.backend_req = "headless"; C.backend_explicit = true; }
+        else if (!strcmp(argv[i], "--drm")) { C.backend_req = "kms"; C.backend_explicit = true; }
+        else if (!strcmp(argv[i], "--session")) C.session = true;
         else if (!strcmp(argv[i], "--script") && i + 1 < argc) script_file = argv[++i];
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) C.shot_path = ml_strdup(argv[++i]);
         else if (!strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
@@ -1235,6 +1260,13 @@ int main(int argc, char **argv)
 
     mica_gpu_probe(&C.gpu);
     mica_cpu_probe(&C.cpu);
+    /* A real display decides the resolution: never scale the iMac panel. */
+    {
+        int w = C.screen_w, h = C.screen_h;
+        ml_display_open(&C.disp, C.backend_req, &w, &h);
+        if (C.disp.kind != ML_DISP_HEADLESS) { C.screen_w = w; C.screen_h = h; }
+        ML_INFO("present backend: %s (%s)", ml_disp_kind_name(C.disp.kind), C.disp.note);
+    }
     if (!getenv("MICA_MODE")) {
         uint32_t pick = mica_pick_mode(&C.gpu, &C.cpu);
         ML_INFO("gpu: %s driver=%s kms=%d accel=%s -> suggested mode: %s",
@@ -1256,6 +1288,8 @@ int main(int argc, char **argv)
     C.listen_fd = mlipc_server_open(C.sock);
     if (C.listen_fd < 0) { ML_ERR("cannot bind %s", C.sock); return 1; }
     ml_loop_add_fd(C.loop, C.listen_fd, EPOLLIN, accept_client, NULL);
+    if (C.disp.kind == ML_DISP_KMS)
+        ml_loop_add_fd(C.loop, ml_display_fd(&C.disp), EPOLLIN, flip_ready, NULL);
     ml_loop_add_signal(C.loop, SIGCHLD, on_sigchld, NULL);
     ml_loop_add_signal(C.loop, SIGTERM, on_term, NULL);
     ml_loop_add_signal(C.loop, SIGINT, on_term, NULL);
@@ -1288,7 +1322,8 @@ int main(int argc, char **argv)
         } else ML_WARN("script %s unreadable", script_file);
     }
 
-    ML_INFO("mica-comp ready: %dx%d mode=%s socket=%s", C.screen_w, C.screen_h, mica_mode_name(C.mode), C.sock);
+    ML_INFO("mica-comp ready: %dx%d mode=%s backend=%s socket=%s", C.screen_w, C.screen_h,
+            mica_mode_name(C.mode), ml_disp_kind_name(C.disp.kind), C.sock);
     int rc = ml_loop_run(C.loop);
 
     C.shutting_down = true;
@@ -1297,6 +1332,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < C.n_launched; i++)
         if (C.launched[i] > 0) kill(C.launched[i], SIGTERM);
     if (C.shot_path) ml_img_write(C.shot_path, C.fb);
+    ml_display_close(&C.disp);
     unlink(C.sock);
     ML_INFO("compositor shutdown: %llu frames, %llu dropped", (unsigned long long)C.frames, (unsigned long long)C.dropped);
     return rc;
