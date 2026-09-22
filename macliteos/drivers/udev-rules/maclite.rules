@@ -1,0 +1,4 @@
+# MacLiteOS device permissions
+KERNEL=="card0", SUBSYSTEM=="drm", GROUP="video", MODE="0660"
+KERNEL=="renderD128", GROUP="video", MODE="0660"
+SUBSYSTEM=="backlight", RUN+="/bin/chmod 0664 /sys/class/backlight/%k/brightness"

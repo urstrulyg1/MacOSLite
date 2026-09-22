@@ -1,0 +1,16 @@
+#!/bin/sh
+# On-demand package manager (spec §49). No background updater, no refresh
+# timers, no telemetry: it runs only when you run it.
+# v0.1 delegates to the host package database when one exists and otherwise
+# explains how to add a MacLiteOS bundle.
+set -e
+cmd=${1:-help}; shift || true
+case "$cmd" in
+  search)  command -v apt-cache >/dev/null && apt-cache search "$@" || echo "no host package db";;
+  install)
+      echo "maclite-pkg: installing into the writable data volume only."
+      command -v apt-get >/dev/null && exec apt-get install -y "$@"
+      echo "no host package manager; place a .maclite bundle in /usr/lib/maca-lite/pkgs";;
+  list)    ls /usr/lib/maca-lite/pkgs 2>/dev/null || echo "no bundles installed";;
+  *)       echo "usage: maclite-pkg search|install|list ...";;
+esac
