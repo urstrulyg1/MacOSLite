@@ -1,0 +1,11 @@
+# Minimal initramfs content. Every entry exists for a reason; nothing else ships.
+/bin/busybox            # or the curated toolset below if busybox is unwanted
+/sbin/switch_root
+/usr/bin/mica-comp      # compositor + session supervisor (starts the desktop)
+/usr/bin/mica-shell     # panel/dock/desktop roles
+/lib/firmware/b43/*     # BCM43224 firmware (unfortunately large; see ROADMAP)
+/lib/modules/*/kernel/drivers/gpu/drm/radeon/radeon.ko
+/lib/modules/*/kernel/drivers/net/ethernet/broadcom/tg3.ko
+/lib/modules/*/kernel/drivers/net/wireless/b43/b43.ko
+/lib/modules/*/kernel/sound/snd-hda-intel.ko
+/etc/maca-lite/mode     # default performance mode (beautiful|balanced|performance)

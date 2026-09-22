@@ -1,0 +1,18 @@
+#!/bin/sh
+# Text-mode recovery menu. No compositor, no X, no network.
+echo "MacLiteOS Recovery"
+BLK=$(lsblk -o LABEL,NAME --noheadings | awk '$1=="MACLITE_BASE"{print $2}')
+DAT=$(lsblk -o LABEL,NAME --noheadings | awk '$1=="MACLITE_DATA"{print $2}')
+while :; do
+  echo
+  echo " 1 verify base   2 repair data   3 reinstall base   4 erase all   5 shell   0 reboot"
+  printf "choice: "; read -r C
+  case "$C" in
+    1) [ -n "$BLK" ] && e2fsck -f -n "/dev/$BLK" || echo "no base volume";;
+    2) [ -n "$DAT" ] && e2fsck -f -y "/dev/$DAT" || echo "no data volume";;
+    3) echo "reinstall: mount live media, cp -a to /dev/$BLK (base only; data kept)";;
+    4) printf "type YES: "; read -r Y; [ "$Y" = YES ] && { printf "type YES again: "; read -r Y2; [ "$Y2" = YES ] && echo "would wipe: $BLK $DAT (guarded in v0.1: add --commit to enable)"; };;
+    5) sh;;
+    0) reboot;;
+  esac
+done

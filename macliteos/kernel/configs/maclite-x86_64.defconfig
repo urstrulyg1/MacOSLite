@@ -1,0 +1,18 @@
+# MacLiteOS kernel config targets (full olddefconfig output not stored in git).
+# Boot-critical for iMac11,x:
+CONFIG_DRM_RADEON=y
+CONFIG_RADEON_UVD=y          # UVD2: H.264/MPEG-2/VC-1 decode -> VDPAU/VA-API
+CONFIG_B43=m                 # BCM43224 PCIe wireless (brcmfmac is wrong here)
+CONFIG_TG3=m                 # BCM5764M ethernet
+CONFIG_SND_HDA_INTEL=m
+CONFIG_SND_HDA_CODEC_REALTEK=m   # ALC889
+CONFIG_DRM_KMS_HELPER=y
+CONFIG_FRAMEBUFFER_CONSOLE=y     # fallback console if KMS dies
+CONFIG_INPUT_UINPUT=m            # compositor injects nothing; reserved for tools
+# Deliberately off (idle CPU/RAM, spec §13/§52):
+# CONFIG_BLUETOOTH is not set
+# CONFIG_CUPS is not set
+# CONFIG_AVAHI_DAEMON is not set
+# CONFIG_TRACKPOINT/other vendor extras as applicable
+CONFIG_PREEMPT=y                 # latency for 60 fps compositing
+CONFIG_HZ_250=y                  # timer-tick budget vs idle power on Nehalem

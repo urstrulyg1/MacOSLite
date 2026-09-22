@@ -1,0 +1,33 @@
+#!/bin/sh
+# MacLiteOS installer, v0.1: guided, verbose, refuses to be silent.
+# Runs from the live session. Every destructive command is echoed and needs a
+# typed YES. Nothing is downloaded; the base is the live squashfs.
+set -u
+die() { echo "installer: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || die "run as root (sudo $0)"
+echo "MacLiteOS installer"
+echo "Disks detected:"
+lsblk -d -o NAME,SIZE,MODEL | tail -n +2 | sed 's/^/  /'
+printf "Disk to install to (e.g. sda): "; read -r DISK
+[ -n "$DISK" ] && [ -b "/dev/$DISK" ] || die "no such disk"
+echo
+echo "WILL DESTROY ALL DATA on /dev/$DISK:"
+lsblk -o NAME,SIZE,TYPE,MOUNTPOINT "/dev/$DISK" | sed 's/^/  /'
+printf "Type YES to continue: "; read -r CONF
+[ "$CONF" = YES ] || die "aborted by user"
+run() { echo "+ $*"; "$@" || die "command failed: $*"; }
+run sgdisk --zap-all "/dev/$DISK"
+run sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT "/dev/$DISK"
+run sgdisk -n 2:0:+4G   -t 2:8300 -c 2:MACLITE_DATA "/dev/$DISK"
+run sgdisk -n 3:0:0     -t 3:8300 -c 3:MACLITE_BASE "/dev/$DISK"
+run mkfs.vfat -F32 -n MACLITE_BOOT "/dev/${DISK}1"
+run mkfs.ext4 -L MACLITE_DATA "/dev/${DISK}2"
+run mkfs.ext4 -L MACLITE_BASE_STAGING "/dev/${DISK}3"
+run mount "/dev/${DISK}3" /mnt
+echo "+ copy live base -> staging (becomes squashfs at first boot)"
+run cp -a /run/maclite-base/. /mnt/
+run umount /mnt
+echo
+echo "Partitioning done. Boot chain writing and squashfs creation happen at"
+echo "first boot from the live media (see boot/README.md)."
+echo "Install complete enough to continue; full first-boot chain: ROADMAP.md"
