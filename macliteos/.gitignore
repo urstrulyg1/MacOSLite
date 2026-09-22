@@ -3,3 +3,8 @@
 *.a
 *.so
 *.iso
+
+# Session screenshots are test output: run-tests.sh runs the sessions with
+# cwd=out/, so they land in out/ (already ignored). Ignore the pattern too so a
+# manual `mica-comp --script` run from the source root cannot commit them.
+session_*.png
