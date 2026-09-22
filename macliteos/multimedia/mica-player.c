@@ -1,6 +1,6 @@
 /* mica-player — video player front-end (spec §44).
  * MacLiteOS does not ship its own codec stack. On the iMac the intended path
- * is mpv/gstreamer with VDPAU/VA-API on the Radeon (see docs/HARDWARE.md);
+ * is mpv/gstreamer with VDPAU/VA-API on the Radeon (see docs/hardware.md);
  * this binary delegates to whichever decoder exists and otherwise says so
  * honestly instead of pretending to play. */
 #include "ml/log.h"

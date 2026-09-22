@@ -64,7 +64,7 @@ static void test_gpu(void)
 static void test_video(void)
 {
     printf("[VIDEO]    no decoder present on this host (no mpv/gstreamer headers at build time).\n");
-    printf("           On the iMac, verify with: mpv --hwdec=vdpau file.mp4  (see docs/TESTING.md)\n");
+    printf("           On the iMac, verify with: mpv --hwdec=vdpau file.mp4  (see docs/testing.md)\n");
 }
 static void test_audio(void)
 {
@@ -106,7 +106,7 @@ int main(int argc, char **argv)
     (void)gui;
     printf("MacLiteOS System Diagnostics — executed on: %s (kernel %s)\n", "this host", "see uname");
     printf("Testing status of this run: SANDBOX/QEMU-class host. Real iMac results are recorded\n"
-           "separately in docs/TESTING.md and are never inferred from this output.\n\n");
+           "separately in docs/testing.md and are never inferred from this output.\n\n");
     test_cpu(); test_ram(); test_disk(); test_gpu(); test_video(); test_audio(); test_net();
     printf("\nAll tests completed without crashing the desktop shell.\n");
     return 0;

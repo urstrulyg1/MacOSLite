@@ -61,8 +61,6 @@ static inline int proc_rss_by_name(const char *prefix, unsigned long long *total
     struct dirent *e;
     int n = 0;
     unsigned long long tot = 0;
-    char line[256];
-    line[0] = 0;
     while ((e = readdir(d))) {
         if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
         char p[300];

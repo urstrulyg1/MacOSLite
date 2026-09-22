@@ -30,4 +30,4 @@ run umount /mnt
 echo
 echo "Partitioning done. Boot chain writing and squashfs creation happen at"
 echo "first boot from the live media (see boot/README.md)."
-echo "Install complete enough to continue; full first-boot chain: ROADMAP.md"
+echo "Install complete enough to continue; full first-boot chain: docs/roadmap.md"

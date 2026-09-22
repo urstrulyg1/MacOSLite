@@ -35,7 +35,7 @@ static void gather(void)
     add("Graphics      %s", g.present ? g.device : "(none detected)");
     add("              driver=%s kms=%s vram=%s", g.driver[0] ? g.driver : "-",
         g.has_kms ? "yes" : "no", g.vram_bytes ? "known" : "unknown");
-    add("Decode        %s (hardware table; verify per docs/TESTING.md)", mica_gpu_accel_name(&g));
+    add("Decode        %s (hardware table; verify per docs/testing.md)", mica_gpu_accel_name(&g));
     add("Display       %dx%d (compositor backend: see maclite-performance)",
         G->info.screen_w, G->info.screen_h);
     add("Audio         %s", ml_file_exists("/proc/asound/cards") ? "ALSA present" : "not present here");
@@ -43,7 +43,7 @@ static void gather(void)
     add("Battery       %d%%", shell_battery_pct());
     add("");
     add("Testing note: values above were read on THIS machine.");
-    add("Real-iMac measurements live in docs/TESTING.md and are separate.");
+    add("Real-iMac measurements live in docs/testing.md and are separate.");
     ml_surface_damage_all(WIN->surf);
 }
 static void draw(void)

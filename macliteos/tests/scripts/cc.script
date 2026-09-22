@@ -1,0 +1,17 @@
+# cc.script — control centre: open it, flip the performance mode, toggle mute,
+# then open Settings from it. Exercises the mode broadcast path (EV_MODE).
+wait 300
+click 1240 13
+wait 300
+shot session_cc_open.png
+click 1180 60
+wait 300
+shot session_cc_mode.png
+click 1180 100
+wait 300
+click 1180 140
+wait 500
+shot session_cc_settings.png
+key escape
+wait 200
+quit

@@ -6,11 +6,18 @@ OUT     := out
 
 CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
            -Icore/include -I. $(ML_EXTRA_CFLAGS) -fno-strict-aliasing
-LDLIBS  := $(ML_EXTRA_LIBS) -lm -lpthread
+LDLIBS  := $(ML_EXTRA_LIBS) -lm -lpthread -ldl
 
 CORE_SRC := $(wildcard core/src/*.c)
 CORE_OBJ := $(patsubst core/src/%.c,$(OUT)/core/%.o,$(CORE_SRC))
 LIB      := $(OUT)/libmica.a
+
+# hardware capability layer: GPU/DRM/display/backlight/audio/media/net/usb/
+# storage/power probes. Linked into the compositor, Settings and every
+# maclite-* diagnostic so they can never disagree about the machine.
+HW_SRC   := $(wildcard hardware/*.c)
+HW_OBJ   := $(patsubst hardware/%.c,$(OUT)/hw/%.o,$(HW_SRC))
+HWLIB    := $(OUT)/libhw.a
 
 CLIENT_SRC := compositor/client/mica_client.c compositor/client/shellkit.c
 CLIENT_OBJ := $(OUT)/client/mica_client.o $(OUT)/client/shellkit.o
@@ -19,14 +26,25 @@ BINS := $(OUT)/mica-comp $(OUT)/mica-shell
 APPS := $(OUT)/mica-finder $(OUT)/mica-terminal $(OUT)/mica-viewer \
         $(OUT)/mica-settings $(OUT)/mica-sysinfo $(OUT)/mica-textedit \
         $(OUT)/mica-player $(OUT)/mica-music $(OUT)/mica-pdf
-TOOLS := $(OUT)/maclite-memory $(OUT)/maclite-performance $(OUT)/maclite-ui-benchmark $(OUT)/maclite-diagnostics
-TESTS := $(OUT)/test_render $(OUT)/test_units $(OUT)/test_idle $(OUT)/test_leak
+TOOLS := $(OUT)/maclite-memory $(OUT)/maclite-performance $(OUT)/maclite-ui-benchmark \
+         $(OUT)/maclite-diagnostics \
+         $(OUT)/maclite-gpu $(OUT)/maclite-gpu-benchmark $(OUT)/maclite-display \
+         $(OUT)/maclite-brightness $(OUT)/maclite-audio $(OUT)/maclite-video-test \
+         $(OUT)/maclite-network $(OUT)/maclite-usb $(OUT)/maclite-storage \
+         $(OUT)/maclite-power $(OUT)/maclite-hardware
+TESTS := $(OUT)/test_render $(OUT)/test_units $(OUT)/test_idle $(OUT)/test_leak \
+         $(OUT)/test_hardware
 
-.PHONY: all core bins apps tools tests clean
-all: core bins apps tools tests
+.PHONY: all core hw bins apps tools tests clean
+all: core hw bins apps tools tests
 
 core: $(LIB)
 $(LIB): $(CORE_OBJ)
+	@mkdir -p $(dir $@)
+	ar rcs $@ $^
+
+hw: $(HWLIB)
+$(HWLIB): $(HW_OBJ)
 	@mkdir -p $(dir $@)
 	ar rcs $@ $^
 
@@ -34,11 +52,15 @@ $(OUT)/core/%.o: core/src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(OUT)/hw/%.o: hardware/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(OUT)/client/%.o: compositor/client/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OUT)/mica-comp: compositor/comp.c hardware/hwprobe.c $(LIB)
+$(OUT)/mica-comp: compositor/comp.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 $(OUT)/mica-shell: desktop/mica-shell.c $(CLIENT_OBJ) $(LIB)
@@ -53,16 +75,16 @@ $(OUT)/mica-terminal: applications/mica-terminal.c $(CLIENT_OBJ) $(LIB)
 $(OUT)/mica-viewer: applications/mica-viewer.c $(CLIENT_OBJ) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
-$(OUT)/mica-settings: settings/mica-settings.c $(CLIENT_OBJ) hardware/hwprobe.c $(LIB)
+$(OUT)/mica-settings: settings/mica-settings.c $(CLIENT_OBJ) $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
-$(OUT)/mica-sysinfo: settings/mica-sysinfo.c $(CLIENT_OBJ) hardware/hwprobe.c $(LIB)
+$(OUT)/mica-sysinfo: settings/mica-sysinfo.c $(CLIENT_OBJ) $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 $(OUT)/mica-textedit: applications/mica-textedit.c $(CLIENT_OBJ) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
-$(OUT)/mica-player: multimedia/mica-player.c $(CLIENT_OBJ) hardware/hwprobe.c $(LIB)
+$(OUT)/mica-player: multimedia/mica-player.c $(CLIENT_OBJ) $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 $(OUT)/mica-music: multimedia/mica-music.c $(CLIENT_OBJ) $(LIB)
@@ -71,7 +93,38 @@ $(OUT)/mica-music: multimedia/mica-music.c $(CLIENT_OBJ) $(LIB)
 $(OUT)/mica-pdf: applications/mica-pdf.c $(CLIENT_OBJ) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
-$(OUT)/maclite-%: performance/maclite-%.c hardware/hwprobe.c $(LIB)
+# v0.1 measurement tools
+$(OUT)/maclite-memory: performance/maclite-memory.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-performance: performance/maclite-performance.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-ui-benchmark: performance/maclite-ui-benchmark.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-diagnostics: performance/maclite-diagnostics.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+
+# v0.2 hardware diagnostics
+$(OUT)/maclite-gpu: diagnostics/maclite-gpu.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-gpu-benchmark: diagnostics/maclite-gpu-benchmark.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-display: diagnostics/maclite-display.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-brightness: diagnostics/maclite-brightness.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-audio: diagnostics/maclite-audio.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-video-test: diagnostics/maclite-video-test.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-network: diagnostics/maclite-network.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-usb: diagnostics/maclite-usb.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-storage: diagnostics/maclite-storage.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-power: diagnostics/maclite-power.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-hardware: diagnostics/maclite-hardware.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 $(OUT)/test_render: tests/test_render.c $(LIB)
@@ -81,6 +134,8 @@ $(OUT)/test_units: tests/test_units.c $(LIB)
 $(OUT)/test_idle: tests/test_idle.c $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 $(OUT)/test_leak: tests/test_leak.c $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/test_hardware: tests/test_hardware.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 bins: $(BINS)

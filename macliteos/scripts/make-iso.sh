@@ -11,6 +11,14 @@ cp out/mica-comp out/mica-shell out/mica-finder out/mica-terminal out/mica-viewe
    out/mica-settings out/mica-sysinfo out/mica-textedit out/mica-player \
    out/mica-music out/mica-pdf out/maclite-memory out/maclite-performance \
    out/maclite-ui-benchmark out/maclite-diagnostics "$ST/base/usr/bin/"
+# v0.2 hardware diagnostics + the on-hardware checklist; the ISO is where they
+# are actually needed, so they ship in the base image (and in the initrd).
+cp out/maclite-gpu out/maclite-gpu-benchmark out/maclite-display \
+   out/maclite-brightness out/maclite-audio out/maclite-video-test \
+   out/maclite-network out/maclite-usb out/maclite-storage out/maclite-power \
+   out/maclite-hardware "$ST/base/usr/bin/"
+install -d "$ST/base/usr/share/maca-lite/scripts"
+cp scripts/hardware-check.sh "$ST/base/usr/share/maca-lite/scripts/"
 cp -r rootfs/etc "$ST/base/etc"
 install -d "$ST/base/usr/lib/maca-lite"
 # squashfs the base (read-only image), keep data partition separate at install

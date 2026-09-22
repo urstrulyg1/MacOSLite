@@ -1,6 +1,6 @@
 /* MacLiteOS core — common types & helpers.
  *
- * Design rules for this codebase (see docs/ARCHITECTURE.md):
+ * Design rules for this codebase (see docs/architecture.md):
  *   - C11, no mandatory external dependencies (libc + libm + pthread only).
  *   - No allocation in the render/input hot path.
  *   - No polling loops: everything is epoll/timerfd/inotify driven.
@@ -21,7 +21,10 @@
 
 #define ML_NAME        "MacLiteOS"
 #define ML_NAME_LOWER  "macliteos"
-#define ML_VERSION     "0.1.0"
+#define ML_VERSION     "0.2.0"
+/* The OS version the UI shows; keep in step with ./VERSION (one place to read,
+ * one place to bump). */
+#define MACLITE_VERSION ML_VERSION
 
 #ifndef ML_ARRAY_SIZE
 #define ML_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))

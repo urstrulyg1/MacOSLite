@@ -71,11 +71,20 @@ fi
 
 if [ -n "$CFLAGS_DRM" ]; then
   EXTRA_CFLAGS="$EXTRA_CFLAGS $CFLAGS_DRM"; EXTRA_LIBS="$EXTRA_LIBS $LIBS_DRM"; ML_HAVE_DRM=1
-  echo "  yes  libdrm+gbm (DRM/KMS backend)"
+  echo "  yes  libdrm+gbm (headers present — not used: MacLiteOS talks to DRM directly)"
 else
   ML_HAVE_DRM=0
-  echo "  no   libdrm+gbm (DRM/KMS backend disabled)"
 fi
+# The v0.2 DRM/KMS present backend (hardware/kms.c) uses the kernel UAPI through
+# <linux/*.h> and ioctl(2): no libdrm, no gbm, no EGL. It is therefore ALWAYS
+# available, and this probe only reports whether a card exists on the build host.
+if [ -d /dev/dri ] && ls /dev/dri/card* >/dev/null 2>&1; then
+  echo "  yes  /dev/dri card present (KMS backend usable on this host)"
+else
+  echo "  n/a  no /dev/dri here (KMS backend still compiles; it selects fbdev/headless)"
+fi
+echo "       note: DRM/KMS + fbdev backends need no optional library; 'make' always builds them"
+echo "       note: userspace for libdrm/EGL/ALSA is NOT a dependency — see docs/gpu.md" 
 [ "$ML_HAVE_EGL" = 1 ] && echo "  yes  EGL/GLES2 (GL compositor path)" || echo "  no   EGL/GLES2 (software compositor only)"
 [ "$ML_HAVE_FREETYPE" = 1 ] && echo "  yes  freetype2 (TTF text)" || echo "  no   freetype2 (built-in Mica Sans vector face)"
 [ "$ML_HAVE_UDEV" = 1 ] && echo "  yes  libudev (hotplug)" || echo "  no   libudev (netlink/procfs hotplug fallback)"

@@ -20,9 +20,27 @@ Consequences we design around:
 - Wi-Fi is b43/wl, *not* brcmfmac (the BCM43224 is PCIe; brcmfmac is the SDIO/
   USB family). Firmware for b43 must ship in the initrd (boot/initrd.list).
 - Video decode is VDPAU/VA-API through r600g UVD; we never claim decode works
-  until `mpv --hwdec=vdpau` has been run on the machine (docs/TESTING.md).
+  until `mpv --hwdec=vdpau` has been run on the machine (docs/testing.md).
 - 60 Hz panel: the compositor targets 16.6 ms frames; software path measured
-  below budget even on a 2-core sandbox (docs/PERFORMANCE.md).
+  below budget even on a 2-core sandbox (docs/performance.md).
 
-Status: **this table is datasheet/kernel-driver knowledge, not measured on a
-real iMac yet.** Real-hardware verification steps are in docs/TESTING.md.
+## v0.2 additions
+
+The capability layer (`hardware/hwcap.c`) now encodes this table as data: PCI id →
+model, kernel driver, Mesa driver, decode mask and decode API, plus the two
+platform traps that bit v0.1 thinking —
+
+* **brightness**: `acpi_video0` on these iMacs is a documented no-op; the real
+  control is `radeon_bl0` and it only appears with `acpi_backlight=native`, which
+  is now in `boot/kernel-cmdline.txt`. `maclite-brightness` flags the useless
+  device SUSPECT and refuses to write to it (docs/gpu.md, docs/hardware.md);
+* **suspend**: unsolved on this platform (the panel does not re-light). MacLiteOS
+  reports it `UNSUPPORTED (disabled by policy)` rather than shipping a power
+  button that appears to work (docs/hardware.md).
+
+Status: **the table above is datasheet/kernel-driver knowledge. The detection
+code that consumes it is fixture-verified (`tests/fixtures/make_sysfs.py` builds
+faithful iMac11,2 / iMac11,3 trees from recorded `/sys` values), but nothing
+here has been measured on a real iMac yet.** Run `scripts/hardware-check.sh` on
+the machine and paste `out/hw-report-<date>.tsv` into docs/testing.md; the
+per-subsystem state table lives in docs/hardware.md.

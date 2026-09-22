@@ -1,0 +1,15 @@
+# dockhide.script — dock autohide: hide via the Dock menu, then reveal by
+# approaching the bottom edge with the pointer. Ends with quit.
+wait 300
+shot session_dock_visible.png
+rclick 640 790
+wait 250
+shot session_dock_menu.png
+# first menu row toggles autohide (dock prefs menu)
+click 660 800
+wait 500
+shot session_dock_hidden.png
+move 640 795
+wait 400
+shot session_dock_revealed.png
+quit

@@ -1,0 +1,53 @@
+# interact.script — pointer/keyboard interactions the compositor must survive.
+# Covers: menu action launching an app, Meta+Space launcher, Meta+arrow workspace
+# switch, minimize-to-dock, dock autohide hide/reveal. Bounded, ends with quit.
+
+wait 300
+# menu bar: open the first menu, then click its first item
+click 60 13
+wait 250
+shot session_menu_open.png
+key escape
+wait 150
+
+# launcher: Meta+Space, type a query, run it
+key meta+space
+wait 300
+key t
+key e
+key r
+key m
+wait 200
+key return
+wait 600
+shot session_launcher_terminal.png
+
+# window drag: grab the title bar of the focused window and move it
+move 400 100
+down
+move 520 180
+move 600 240
+up
+wait 300
+shot session_dragged.png
+
+# minimize to dock, then restore by clicking the dock item
+click 92 8
+wait 400
+shot session_minimized.png
+
+# workspace switching with Meta+arrow both ways
+key meta+right
+wait 300
+shot session_ws_right.png
+key meta+left
+wait 300
+
+# dock autohide toggle through the Dock context menu, then reveal by approach
+rclick 640 790
+wait 250
+shot session_dock_menu.png
+key escape
+wait 200
+
+quit
