@@ -9,7 +9,7 @@ acpi_backlight=native           # REQUIRED on iMac11,x: without it the kernel
                                 # (radeon_bl0) is not used. maclite-brightness
                                 # flags that device SUSPECT and refuses to write
                                 # to it — see docs/gpu.md + docs/hardware.md
-b43.fwok=1                      # BCM43224 wireless (NOT brcmfmac; see HARDWARE.md)
+b43.fwok=1                      # BCM43224 wireless (NOT brcmfmac; see docs/hardware.md)
 maclite.gl=auto                 # auto|on|off: compositor GL backend selection;
                                 # 'off' forces the software raster (tested path)
 # Recovery: rd.maclite=recovery  -> initrd starts recovery/maclite-recovery shell

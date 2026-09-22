@@ -61,6 +61,13 @@ an explicit mode set on open instead of trusting the inherited state, and
 that fails, `--backend fbdev` is the documented fallback, and the compositor's
 `auto` order is exactly `kms → fbdev → headless`.
 
+An **explicit** backend never degrades silently: `--backend kms` / `--drm` with
+no usable card logs
+`--backend kms requested but headless is running (<reason>)` and exits 3, because
+a boot script that asked for the panel must not end up rendering into memory and
+reporting success. `--backend auto` is the way to accept the best available path.
+`honesty:backend` in `scripts/run-tests.sh` pins this.
+
 ## Numbers from this sandbox (software path only — no GPU here)
 
 `maclite-gpu-benchmark`, 1920x1080, 300 frames, this dev container (1 core):

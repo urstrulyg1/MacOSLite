@@ -96,6 +96,12 @@ const hw_gpu_cap *hw_gpu_db_at(size_t i);
 /* ---- backend selection ----------------------------------------------- */
 typedef enum { ML_PRESENT_HEADLESS = 0, ML_PRESENT_KMS, ML_PRESENT_FBDEV } ml_present_kind;
 const char *ml_present_name(ml_present_kind k);
+
+/* Parse a --backend argument. Returns false for "auto" (choose automatically)
+ * and for anything unrecognised; *out is only meaningful when it returns true.
+ * One parser for the CLI, the compositor and the tests, so "kms" cannot mean two
+ * different things in two places. */
+bool ml_present_parse(const char *name, ml_present_kind *out);
 /* requested is "auto"|"kms"|"fbdev"|"headless" (NULL == auto). Returns the
  * first backend that can actually be opened, and *why in reason (may be NULL). */
 ml_present_kind hw_pick_present(const char *requested, char *reason, size_t reason_len);

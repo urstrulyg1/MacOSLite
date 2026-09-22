@@ -123,5 +123,14 @@ int main(int argc, char **argv)
     if (after->note[0]) fprintf(stderr, "detail: %s\n", after->note);
     fprintf(stderr, "mechanism: %s\n", st.mechanism);
     fprintf(stderr, "see docs/gpu.md — on iMac Mid-2010 boot with acpi_backlight=native\n");
-    return rc == BL_SET_UNSUPPORTED || rc == BL_SET_NO_DEVICE ? HW_EXIT_UNSUPPORTED : HW_EXIT_FAIL;
+    /* Map the write outcome onto the exit contract honestly: a refusal because
+     * the hardware is absent is UNSUPPORTED (3), a refusal because a fixture file
+     * is not hardware is NOT TESTED (2), and only a real failed write is FAIL (1).
+     * Reporting NOT TESTED with exit 1 would read as "this machine is broken". */
+    switch (rc) {
+    case BL_SET_NO_DEVICE:
+    case BL_SET_UNSUPPORTED:   return HW_EXIT_UNSUPPORTED;
+    case BL_SET_NOT_TESTED:    return HW_EXIT_NOT_TESTED;
+    default:                   return HW_EXIT_FAIL;
+    }
 }

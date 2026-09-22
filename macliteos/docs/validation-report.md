@@ -21,15 +21,16 @@ apart below, which is the entire point of the exercise.
 
 | criterion | tier | result | evidence |
 |---|---|---|---|
-| Suite is green end to end | SANDBOX | **PASS** | `sh scripts/run-tests.sh` → 23 rows, exit 0, `out/test-summary.tsv` |
+| Suite is green end to end | SANDBOX | **PASS** | `sh scripts/run-tests.sh` → 24 rows, exit 0, `out/test-summary.tsv` |
 | Detection code matches a real iMac11,2 | FIXTURE | **PASS** | 21+ assertions per variant, `out/logs/hw-imac11_2.log` |
 | Detection code matches a real iMac11,3 | FIXTURE | **PASS** | `out/logs/hw-imac11_3.log` |
 | Detection falls back cleanly (VM / bare host) | FIXTURE | **PASS** | `virtual`, `bare` variants |
 | No acceleration claim without a real GL query | SANDBOX | **PASS** | gate `honesty:gpu` (suite fails if `maclite-gpu` exits 0 with no verified renderer); on this host it exits 3 |
-| No brightness change reported without a hardware write | SANDBOX+FIXTURE | **PASS** | gate `honesty:brightness` (`set 42` → exit 2, "NOT TESTED (fixture roots: no write attempted)") |
+| No brightness change reported without a hardware write | SANDBOX+FIXTURE | **PASS** | gate `honesty:brightness` (`set 42` → exit 2, "NOT TESTED (fixture roots: no write attempted)"); the gate now also checks the exit code, which was 1 (FAIL) until v0.2 fixed it |
 | A mixer that cannot be read is not called broken | FIXTURE | **PASS** | gate `honesty:audio-fixture` (volume/mute rows = NOT TESTED, exit 2) |
 | No host data leaks into a machine report | FIXTURE | **PASS** | gate `honesty:net-fixture` (the container's `eth0` address no longer appears in the iMac report) |
 | "Nothing decoded" is never a PASS | SANDBOX | **PASS** | gate `honesty:decode` (`maclite-video-test` exits 3 here) |
+| An explicit `--backend kms` never degrades silently | SANDBOX | **PASS** | gate `honesty:backend` (`mica-comp --backend kms` with no card → exit 3, "requested but headless is running"); `--backend auto` still falls back on purpose |
 | Frame budget at 1080p, worst case | SANDBOX | **PASS** | `--fullscreen`: 4.39 ms mean, 6.92 ms worst, 0 drops (budget 16.6 ms) |
 | Idle RAM within goal (150–300 MB, hard <500) | SANDBOX | **PASS** | desktop userspace 47 MB RSS / 36 MB PSS |
 | Idle CPU ~0–2 % | SANDBOX | **PASS** | `maclite-performance 5000` → 0.2 % busy, 0.00 fps at idle |
@@ -49,7 +50,7 @@ apart below, which is the entire point of the exercise.
 ## 2. Commands that produced the rows
 
     ./configure && make -j4 all                 # 0 errors
-    sh scripts/run-tests.sh                     # 23 rows, exit 0
+    sh scripts/run-tests.sh                     # 24 rows, exit 0
     out/maclite-gpu-benchmark                   # 1.12 ms damage-only
     out/maclite-gpu-benchmark --fullscreen      # 4.39 ms worst case
     out/maclite-gpu-benchmark --windows 8       # 3.15 ms
@@ -92,7 +93,17 @@ Exit codes observed on this host (the contract: 0 PASS, 1 FAIL, 2 NOT TESTED,
 4. **Two tools answering the same question differently is a bug.** The audio
    mixer verdict and the network link/address verdict now come from single
    functions used by both the specific tool and `maclite-hardware`.
-5. **A fixture file is not hardware.** Every place that could only measure the
+5. **Exit codes disagreed with the printed verdict.** `maclite-brightness set`
+   under fixture roots printed "NOT TESTED" but exited 1 (FAIL), which reads as
+   "this machine is broken". The mapping is now explicit (absent hardware → 3,
+   fixture refusal → 2, failed write → 1) and the `honesty:brightness` gate
+   checks the number, not just the text. An audit of all ten tools against the
+   contract found no other mismatch.
+6. **A requested backend was silently downgraded.** `mica-comp --backend kms`
+   on a machine with no card presented through headless and reported success. An
+   explicit backend is a requirement now: it exits 3 with the reason, and
+   `honesty:backend` pins that.
+7. **A fixture file is not hardware.** Every place that could only measure the
    running host — address lookups, mixer ioctls, brightness writes, filesystem
    writes, TCP probes — now reports `NOT TESTED` under fixture roots instead of
    a number that looks like evidence.

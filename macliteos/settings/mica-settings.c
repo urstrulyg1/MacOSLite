@@ -84,7 +84,7 @@ static void draw(void)
         char b[96];
         snprintf(b, sizeof b, "%d x %d   scale %u", G->info.screen_w, G->info.screen_h, G->info.scale);
         row(&c, f, 90, "Resolution", b);
-        row(&c, f, 118, "Compositor", "damage-tracking; backend per maclite-performance");
+        row(&c, f, 118, "Compositor", "damage-tracking; see maclite-gpu");
         row(&c, f, 146, "Workspaces", "4 (Meta+arrows)");
 
         if (!BLS_READY) { bl_probe(&BLS); BLS_READY = true; }

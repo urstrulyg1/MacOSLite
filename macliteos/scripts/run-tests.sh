@@ -134,18 +134,19 @@ if [ "$FIXTURES" = 1 ] && [ -d "$FIXDIR/imac11_2/sys" ]; then
     fi
 
     printf '%-26s %-8s ' "honesty:brightness" SANDBOX
-    if imac_env out/maclite-brightness set 42 > "$LOG/honesty-brightness.log" 2>&1; then
-        if grep -qi "verified" "$LOG/honesty-brightness.log"; then
-            echo "FAIL (claimed a verified brightness change on fixture files)"
-            record "honesty:brightness" SANDBOX FAIL "verified claim under fixture roots"
-            FAILED=1
-        else
-            echo "PASS (no change claimed)"
-            record "honesty:brightness" SANDBOX PASS
-        fi
+    imac_env out/maclite-brightness set 42 > "$LOG/honesty-brightness.log" 2>&1
+    rc=$?
+    if grep -qi "verified" "$LOG/honesty-brightness.log"; then
+        echo "FAIL (claimed a verified brightness change on fixture files)"
+        record "honesty:brightness" SANDBOX FAIL "verified claim under fixture roots"
+        FAILED=1
+    elif [ "$rc" != 2 ]; then
+        echo "FAIL (refusal exited $rc; NOT TESTED must be 2, not FAIL=1)"
+        record "honesty:brightness" SANDBOX FAIL "refusal exited $rc"
+        FAILED=1
     else
-        echo "PASS (refused: exit $?)"
-        record "honesty:brightness" SANDBOX PASS "refused"
+        echo "PASS (exit 2: no write attempted, no change claimed)"
+        record "honesty:brightness" SANDBOX PASS "exit 2, refused"
     fi
 
     printf '%-26s %-8s ' "honesty:audio-fixture" SANDBOX
@@ -168,6 +169,24 @@ if [ "$FIXTURES" = 1 ] && [ -d "$FIXDIR/imac11_2/sys" ]; then
     else
         echo "PASS (no host address leaked into the fixture report)"
         record "honesty:net-fixture" SANDBOX PASS
+    fi
+
+    # An explicit --backend is a requirement, not a hint. With fixture roots that
+    # contain no card and no /dev/fb0, --backend kms must fail loudly instead of
+    # presenting through headless while the log says "ready".
+    printf '%-26s %-8s ' "honesty:backend" SANDBOX
+    ML_SYSFS_ROOT="$FIXDIR/bare/sys" ML_PROC_ROOT="$FIXDIR/bare/proc" \
+    ML_DEV_ROOT="$FIXDIR/bare/dev" \
+        timeout 20 out/mica-comp --backend kms -W 320 -H 200 \
+        > "$LOG/honesty-backend.log" 2>&1
+    rc=$?
+    if [ "$rc" = 0 ] || grep -q "mica-comp ready" "$LOG/honesty-backend.log"; then
+        echo "FAIL (explicit --backend kms degraded to headless)"
+        record "honesty:backend" SANDBOX FAIL "kms request silently served by headless"
+        FAILED=1
+    else
+        echo "PASS (exit $rc, explicit backend refused instead of degrading)"
+        record "honesty:backend" SANDBOX PASS "exit $rc"
     fi
 
     printf '%-26s %-8s ' "honesty:decode" SANDBOX

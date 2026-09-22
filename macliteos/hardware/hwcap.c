@@ -258,6 +258,15 @@ const char *ml_present_name(ml_present_kind k)
     }
 }
 
+bool ml_present_parse(const char *name, ml_present_kind *out)
+{
+    if (!name || !strcmp(name, "auto")) return false;
+    if (!strcmp(name, "kms") || !strcmp(name, "drm")) { if (out) *out = ML_PRESENT_KMS; return true; }
+    if (!strcmp(name, "fbdev") || !strcmp(name, "fb")) { if (out) *out = ML_PRESENT_FBDEV; return true; }
+    if (!strcmp(name, "headless") || !strcmp(name, "none")) { if (out) *out = ML_PRESENT_HEADLESS; return true; }
+    return false;
+}
+
 static bool any_drm_card(char *found, size_t len)
 {
     const char *dir = hw_sys("class/drm");
@@ -288,10 +297,16 @@ static bool any_drm_card(char *found, size_t len)
 ml_present_kind hw_pick_present(const char *requested, char *reason, size_t reason_len)
 {
     char node[256] = "";
-    bool want_kms = !requested || !strcmp(requested, "auto") || !strcmp(requested, "kms");
-    bool want_fb  = !requested || !strcmp(requested, "auto") || !strcmp(requested, "fbdev");
+    ml_present_kind want = ML_PRESENT_HEADLESS;
+    bool explicit_kind = ml_present_parse(requested, &want);
+    /* An explicit request is a requirement, not a hint: it narrows the search
+     * but never selects a backend the caller did not ask for. The caller (the
+     * compositor) turns "asked for kms, got headless" into a hard error -- the
+     * rule is that a requested backend is either provided or reported missing. */
+    bool want_kms = !explicit_kind || want == ML_PRESENT_KMS;
+    bool want_fb  = !explicit_kind || want == ML_PRESENT_FBDEV;
 
-    if (requested && !strcmp(requested, "headless")) {
+    if (explicit_kind && want == ML_PRESENT_HEADLESS) {
         if (reason) snprintf(reason, reason_len, "headless requested");
         return ML_PRESENT_HEADLESS;
     }

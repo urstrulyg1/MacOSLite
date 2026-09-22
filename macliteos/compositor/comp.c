@@ -1266,6 +1266,17 @@ int main(int argc, char **argv)
         ml_display_open(&C.disp, C.backend_req, &w, &h);
         if (C.disp.kind != ML_DISP_HEADLESS) { C.screen_w = w; C.screen_h = h; }
         ML_INFO("present backend: %s (%s)", ml_disp_kind_name(C.disp.kind), C.disp.note);
+        /* An explicit --backend/--drm is a requirement. Degrading it silently
+         * would let a user (or a boot script) believe the panel is driven by KMS
+         * while every frame actually lands in memory: refuse and say why. */
+        ml_present_kind want;
+        if (C.backend_explicit && ml_present_parse(C.backend_req, &want) &&
+            (int)want != (int)C.disp.kind) {
+            ML_ERR("--backend %s requested but %s is running (%s)", C.backend_req,
+                   ml_disp_kind_name(C.disp.kind), C.disp.note);
+            ML_ERR("use --backend auto to accept the best available path");
+            return 3;                        /* 3 = requested capability unavailable */
+        }
     }
     if (!getenv("MICA_MODE")) {
         uint32_t pick = mica_pick_mode(&C.gpu, &C.cpu);
