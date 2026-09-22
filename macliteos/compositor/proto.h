@@ -95,6 +95,7 @@ typedef struct {
 
 /* performance modes (spec §8) */
 enum { MODE_BEAUTIFUL = 0, MODE_BALANCED = 1, MODE_PERFORMANCE = 2 };
+enum { ML_MOD_SHIFT = 1, ML_MOD_CTRL = 2, ML_MOD_META = 4 };
 static inline const char *mica_mode_name(uint32_t m)
 {
     switch (m) {

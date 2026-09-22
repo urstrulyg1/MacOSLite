@@ -42,6 +42,19 @@ CONFIGURE, FRAME, WIN_STATE, EVENT, PONG, STATS.
 - No blur, no particles, no animated wallpaper. Shadows are precomputed
   gradients; glows are cubic-falloff radials.
 
+## Input, menus and hotkeys
+
+Pointer/keyboard events route through the compositor to exactly one window per
+event. Global hotkeys live in the compositor: Meta+Space toggles the launcher
+(spawned on demand, killed on close), Meta+Left/Right switch workspaces.
+Shell menus (panel, dock, desktop) are transient topmost windows whose input
+handler lives in shellkit; every menu registers an owner slot so a self-close
+never leaves a dangling pointer in the caller — and the compositor clears its
+hover/drag/resize references whenever a window is freed (a use-after-free here
+was caught by the scripted suite and fixed).
+The compositor installs a SIGSEGV/SIGBUS/SIGABRT handler that prints a
+backtrace before dying: a crashing compositor must leave evidence.
+
 ## Event-driven everything (spec §13)
 
 The loop (core/src/event.c) is epoll + timerfd + signalfd. Nothing polls:

@@ -54,6 +54,7 @@ static void panel_menu_open(int idx, int x)
 {
     if (P.menu) shell_menu_close(P.menu);
     P.menu = shell_menu_open(G, x, PANEL_H, NULL);
+    shell_menu_own(P.menu, &P.menu);
     P.menu_idx = idx;
     if (idx == 0) {
         shell_menu_add(P.menu, "About This Mac", "info", act_launch_app, (void *)&mica_apps[3]);
@@ -194,6 +195,11 @@ typedef struct {
     bool running[12];
     int hover;
     shell_menu *menu;
+    bool autohide, hidden, hovered, mag;
+    double off, off_vel;
+    ml_anim *hide_spr;
+    ml_source *hide_timer;
+    int base_x, base_y;
 } dock_t;
 static dock_t D;
 
@@ -258,7 +264,7 @@ static void dock_retarget(int pointer_x_in_dock)
     double xs[12], widths[12], total;
     dock_layout(xs, widths, &total);
     double ox = (D.win->w - total) / 2 - 12;
-    double mag = G->info.mode == MODE_PERFORMANCE ? 0 : 24.0;
+    double mag = (G->info.mode == MODE_PERFORMANCE || !D.mag) ? 0 : 24.0;
     double sigma = DOCK_BASE * 1.4;
     bool any = false;
     for (int i = 0; i < D.n; i++) {
@@ -274,10 +280,54 @@ static void dock_retarget(int pointer_x_in_dock)
     if (any && D.anim_timer) ml_timer_arm(D.anim_timer, 16, true);
 }
 
+static void dock_hide_tick(void *ud)
+{
+    (void)ud;
+    ml_anim_tick(mica_anims(G), ml_now_s());
+    D.off = ml_anim_value(D.hide_spr);
+    D.off_vel = ml_anim_velocity(D.hide_spr);
+    bool act = ml_anim_active(D.hide_spr);
+    if (!act) D.hide_spr = NULL;
+    mica_win_place(D.win, D.base_x, D.base_y + (int)lround(D.off));
+    if (!act) { ml_timer_disarm(D.hide_timer); D.hide_timer = NULL; }
+}
+static void dock_set_hidden(bool h)
+{
+    ML_WARN("dock_set_hidden(%d) autohide=%d hovered=%d", (int)h, (int)D.autohide, (int)D.hovered);
+    if (D.hidden == h) return;
+    D.hidden = h;
+    double target = h ? (D.win->h - 3) : 0;
+    D.hide_spr = ml_anim_spring(mica_anims(G), D.off, target, 260, 26, 1.0, D.off_vel);
+    if (!D.hide_timer) D.hide_timer = mica_add_timer(G, 16, true, dock_hide_tick, NULL);
+}
+static void act_toggle_hide(void *ud)
+{
+    (void)ud;
+    D.autohide = !D.autohide;
+    if (!D.autohide) dock_set_hidden(false);
+    else if (!D.hovered) dock_set_hidden(true);
+    if (D.menu) { shell_menu_close(D.menu); D.menu = NULL; }
+}
+static void act_toggle_mag(void *ud)
+{
+    (void)ud;
+    D.mag = !D.mag;
+    dock_retarget(D.hover);
+    if (D.menu) { shell_menu_close(D.menu); D.menu = NULL; }
+}
 static void dock_input(mica_win *w, const msg_input *in)
 {
+    if (in->kind == IN_ENTER || (in->kind == IN_MOVE && !D.hovered)) {
+        D.hovered = true;
+        if (D.autohide && D.hidden) dock_set_hidden(false);
+    }
     if (in->kind == IN_MOVE) { dock_retarget(in->x); return; }
-    if (in->kind == IN_LEAVE) { dock_retarget(-1); return; }
+    if (in->kind == IN_LEAVE) {
+        D.hovered = false;
+        dock_retarget(-1);
+        if (D.autohide && !D.hidden) dock_set_hidden(true);
+        return;
+    }
     if (in->kind != IN_UP) return;
     double xs[12], widths[12], total;
     dock_layout(xs, widths, &total);
@@ -290,6 +340,7 @@ static void dock_input(mica_win *w, const msg_input *in)
             } else if (in->button == 3) {
                 if (D.menu) shell_menu_close(D.menu);
                 D.menu = shell_menu_open(G, (int)x0, w->h - 260, NULL);
+                shell_menu_own(D.menu, &D.menu);
                 shell_menu_add(D.menu, "Open", "play", act_launch_app, (void *)D.apps[i]);
                 shell_menu_add(D.menu, "Show in Files", "folder", act_launch_app, (void *)&mica_apps[0]);
                 shell_menu_draw(D.menu);
@@ -297,6 +348,16 @@ static void dock_input(mica_win *w, const msg_input *in)
             }
             return;
         }
+    }
+    if (in->kind == IN_UP && in->button == 3) {
+        /* blank dock area: preferences */
+        if (D.menu) shell_menu_close(D.menu);
+        D.menu = shell_menu_open(G, in->dx, in->dy, NULL);
+        shell_menu_own(D.menu, &D.menu);
+        shell_menu_add(D.menu, D.autohide ? "Turn Hiding Off" : "Turn Hiding On", "folder", act_toggle_hide, NULL);
+        shell_menu_add(D.menu, D.mag ? "Turn Magnification Off" : "Turn Magnification On", "folder", act_toggle_mag, NULL);
+        shell_menu_draw(D.menu);
+        mica_win_place(D.menu->win, G->info.screen_w / 2 - 110, G->info.screen_h - 160);
     }
 }
 
@@ -322,6 +383,9 @@ static int run_dock(void)
     if (!D.win) return 1;
     mica_win_place(D.win, (G->info.screen_w - w) / 2, G->info.screen_h - h - 6);
     for (int i = 0; i < D.n; i++) D.size[i] = DOCK_BASE;
+    D.mag = true;
+    D.base_x = (G->info.screen_w - w) / 2;
+    D.base_y = G->info.screen_h - h - 6;
     D.win->on_input = dock_input;
     G->on_event = dock_event;
     dock_draw();
@@ -403,7 +467,8 @@ static void desk_input(mica_win *w, const msg_input *in)
         }
     } else if (in->kind == IN_UP && in->button == 3) {
         if (G_menu) shell_menu_close(G_menu);
-        G_menu = shell_menu_open(G, in->x, in->y, NULL);
+        G_menu = shell_menu_open(G, in->dx, in->dy, NULL);
+        shell_menu_own(G_menu, &G_menu);
         shell_menu_add(G_menu, "New Folder", "folder", NULL, NULL);
         shell_menu_add(G_menu, "Open Terminal here", "terminal-prompt", act_launch_app, (void *)&mica_apps[1]);
         shell_menu_sep(G_menu);

@@ -27,6 +27,7 @@
 #include <sys/socket.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <execinfo.h>
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
@@ -34,7 +35,7 @@
 #define DECO_H 30
 #define MAX_CLIENTS 32
 #define MAX_NOTIFS 3
-#define N_WS 3
+#define N_WS 4
 
 typedef struct client {
     int fd;
@@ -452,6 +453,9 @@ static void win_release(win_t *w)
     if (C.z_front == w) C.z_front = w->z_next;
     if (C.drag_win == w) C.drag_win = NULL;
     if (C.resize_win == w) C.resize_win = NULL;
+    /* dangling hover pointers caused a use-after-free when a transient menu
+     * closed under the cursor (segv in input_move); clear them here too */
+    if (C.hover_win == w) { C.hover_win = NULL; C.hover_deco_btn = NULL; }
     if (w->surf) { munmap(w->px, w->shm_bytes); close(w->shm_fd); ml_surface_free(w->surf); }
     ml_region_free(&w->pending);
     ml_free(w);
@@ -913,12 +917,43 @@ static void input_move(int x, int y)
     request_frame();
 }
 
-static void input_key(uint32_t key)
+static pid_t launcher_pid;
+static void launch_launcher(void)
 {
+    char *exe = ml_find_in_path("mica-shell");
+    if (!exe) {
+        char *self = realpath("/proc/self/exe", NULL);
+        char *dir = ml_path_dir(self ? self : "");
+        exe = ml_path_join(dir, "mica-shell");
+        ml_free(self); ml_free(dir);
+        if (!ml_file_exists(exe)) { ml_free(exe); return; }
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        execl(exe, exe, "--role", "launcher", (char *)NULL);
+        _exit(127);
+    }
+    if (C.n_launched < 64) C.launched[C.n_launched++] = pid;
+    launcher_pid = pid;
+    ml_free(exe);
+}
+static void input_key(uint32_t key, uint32_t mods)
+{
+    /* global hotkeys (spec §37, §33): Meta+Space launcher, Meta+arrows spaces */
+    if (mods & ML_MOD_META) {
+        if (key == ' ') {
+            if (launcher_pid > 0 && kill(launcher_pid, 0) == 0) { kill(launcher_pid, SIGTERM); launcher_pid = 0; }
+            else launch_launcher();
+            return;
+        }
+        if (key == 0xff53) { switch_workspace(-1); return; }
+        if (key == 0xff51) { switch_workspace(1); return; }
+    }
     win_t *w = C.z_front;
     for (; w; w = w->z_next)
         if (win_visible(w) && !(w->flags & WIN_F_NO_FOCUS)) break;
-    if (w) send_input(w, IN_KEY, C.mx, C.my, 0, key, 0);
+    if (w) send_input(w, IN_KEY, C.mx, C.my, 0, key, mods);
 }
 
 static void input_button(int btn, bool down)
@@ -942,18 +977,35 @@ static void input_button(int btn, bool down)
         focus_win(w);
         send_input(w, IN_DOWN, C.mx, C.my, (uint32_t)btn + 1, 0, 0);
     } else {
-        if (C.drag_win) { C.drag_win = NULL; return; }
-        if (C.resize_win) { C.resize_win = NULL; return; }
-        win_t *w = win_at(C.mx, C.my, NULL, NULL, NULL);
+        /* clients must see the release: dock launches, menu actions and text
+         * selection all fire on IN_UP. Deliver to the drag/resize target if a
+         * gesture is in flight (pointer may have left it), else to what is
+         * under the cursor. */
+        win_t *w = C.drag_win ? C.drag_win : C.resize_win ? C.resize_win
+                                                      : win_at(C.mx, C.my, NULL, NULL, NULL);
         if (w) send_input(w, IN_UP, C.mx, C.my, (uint32_t)btn + 1, 0, 0);
+        C.drag_win = NULL;
+        C.resize_win = NULL;
     }
 }
 
+/* children launched by name (dock/menu/launcher) must find our binaries even
+ * when the session runs from a build dir that is not in PATH */
+static char child_path[1024];
+static void init_child_path(void)
+{
+    char *self = realpath("/proc/self/exe", NULL);
+    char *dir = ml_path_dir(self ? self : "");
+    snprintf(child_path, sizeof child_path, "PATH=%s:%s", dir,
+             getenv("PATH") ? getenv("PATH") : "/usr/bin:/bin");
+    ml_free(self); ml_free(dir);
+}
 static void do_launch(const char *cmdline)
 {
     pid_t pid = fork();
     if (pid == 0) {
         setsid();
+        if (child_path[0]) putenv(child_path);
         execl("/bin/sh", "sh", "-c", cmdline, (char *)NULL);
         _exit(127);
     }
@@ -978,14 +1030,32 @@ static void script_run_line(const char *line)
         input_button(0, true);
         input_button(0, false);
     } else if (!strcmp(cmd, "key")) {
-        uint32_t k = 0;
-        if (!strcmp(a, "return")) k = 0xff0d;
-        else if (!strcmp(a, "escape")) k = 0xff1b;
-        else if (!strcmp(a, "up")) k = 0xff52;
-        else if (!strcmp(a, "down")) k = 0xff54;
-        else if (!strcmp(a, "backspace")) k = 0xff08;
-        else if (a[0]) k = (uint32_t)(unsigned char)a[0];
-        if (k) input_key(k);
+        uint32_t k = 0, mods = 0;
+        char buf[64];
+        snprintf(buf, sizeof buf, "%s", a);
+        char *toks[4];
+        int nt = 0;
+        for (char *t = strtok(buf, "+"); t && nt < 4; t = strtok(NULL, "+")) toks[nt++] = t;
+        for (int i = 0; i + 1 < nt; i++) {
+            if (!strcmp(toks[i], "meta")) mods |= ML_MOD_META;
+            else if (!strcmp(toks[i], "ctrl")) mods |= ML_MOD_CTRL;
+            else if (!strcmp(toks[i], "shift")) mods |= ML_MOD_SHIFT;
+        }
+        char *last = nt ? toks[nt - 1] : (char *)"";
+        if (!strcmp(last, "return")) k = 0xff0d;
+        else if (!strcmp(last, "escape")) k = 0xff1b;
+        else if (!strcmp(last, "up")) k = 0xff52;
+        else if (!strcmp(last, "down")) k = 0xff54;
+        else if (!strcmp(last, "left")) k = 0xff53;
+        else if (!strcmp(last, "right")) k = 0xff51;
+        else if (!strcmp(last, "space")) k = ' ';
+        else if (!strcmp(last, "backspace")) k = 0xff08;
+        else if (last[0]) k = (uint32_t)(unsigned char)last[0];
+        if (k) input_key(k, mods);
+    } else if (!strcmp(cmd, "rclick")) {
+        if (n >= 3) input_move(atoi(a), atoi(b));
+        input_button(2, true);
+        input_button(2, false);
     } else if (!strcmp(cmd, "down")) {
         input_button(0, true);
     } else if (!strcmp(cmd, "up")) {
@@ -1121,8 +1191,32 @@ static void usage(const char *p)
     fprintf(stderr, "usage: %s [--headless|--drm] [-W w] [-H h] [--mode m] [--session] [--script file] [--shot file]\n", p);
 }
 
+static void crash_sig(int sig, siginfo_t *si, void *uc)
+{
+    (void)uc;
+    char msg[160];
+    int n = snprintf(msg, sizeof msg, "\nFATAL: compositor caught signal %d at addr %p\n", sig, si ? si->si_addr : NULL);
+    ssize_t r = write(2, msg, (size_t)n);
+    (void)r;
+    void *bt[32];
+    int bn = backtrace(bt, 32);
+    backtrace_symbols_fd(bt, bn, 2);
+    _exit(128 + sig);
+}
+static void install_crash_handler(void)
+{
+    struct sigaction sa = { 0 };
+    sa.sa_sigaction = crash_sig;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+}
+
 int main(int argc, char **argv)
 {
+    install_crash_handler();
+    init_child_path();
     ml_log_init("mica-comp", ML_LOG_INFO, getenv("MICA_LOG"));
     C.screen_w = 1440; C.screen_h = 900;
     C.mode = MODE_BEAUTIFUL;

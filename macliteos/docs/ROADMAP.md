@@ -4,8 +4,10 @@
 ## v0.1 — done in this tree
 - Damage-tracking compositor + WM + supervisor, shm clients, spring animation
   engine with interruptible retargets, 3 performance modes + auto-pick.
-- Shell: menu bar with menus + control center, magnifying autohide-capable
-  dock, desktop layer, on-demand launcher (Meta+Space), notifications.
+- Shell: menu bar with menus + control center, dock with gaussian
+  magnification, autohide + reveal-on-approach (dock prefs menu), desktop
+  layer, on-demand launcher (Meta+Space), Meta+arrow workspace switching,
+  notifications.
 - Apps: finder (lazy, inotify, capped search, 8 MB thumb LRU), terminal (VT100
   subset, pty), viewer, settings, sysinfo, textedit, player/music/pdf
   front-ends that delegate to real decoders when present.

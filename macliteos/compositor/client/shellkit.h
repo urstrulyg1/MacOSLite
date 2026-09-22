@@ -39,7 +39,11 @@ typedef struct shell_menu {
     int hover;
     void *ud;
     int x, y;
+    struct shell_menu **owner;   /* cleared on self-close so callers never dangle */
 } shell_menu;
+
+/* route the menu window's input into shell_menu_input (set automatically) */
+void shell_menu_own(shell_menu *m, shell_menu **slot);
 
 shell_menu *shell_menu_open(mica_client *c, int x, int y, void *ud);
 void shell_menu_add(shell_menu *m, const char *label, const char *icon,

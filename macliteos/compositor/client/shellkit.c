@@ -145,12 +145,21 @@ void shell_menu_close(shell_menu *m)
     if (m->win) mica_win_destroy(m->win);
     ml_free(m);
 }
+static void menu_win_input(mica_win *w, const msg_input *in)
+{
+    shell_menu *m = w->ud;
+    if (m) shell_menu_input(m, in);
+}
+void shell_menu_own(shell_menu *m, shell_menu **slot) { if (m) m->owner = slot; }
+
 void shell_menu_draw(shell_menu *m)
 {
     if (!m->win) {
         int h = 8 + m->n * ROW_H + 4;
         m->win = mica_win_new(m->c, MENU_W, h, "", "menu", WIN_F_BORDERLESS | WIN_F_TOPMOST | WIN_F_TRANSIENT);
         if (!m->win) return;
+        m->win->on_input = menu_win_input;
+        m->win->ud = m;
     }
     ml_surface *s = m->win->surf;
     ml_ctx c;
@@ -183,13 +192,14 @@ void shell_menu_input(shell_menu *m, const msg_input *in)
         if (nh != m->hover) { m->hover = nh; shell_menu_draw(m); }
     } else if (in->kind == IN_UP && in->button == 1) {
         int row = (in->y - 6) / ROW_H;
-        if (row >= 0 && row < m->n && m->items[row].action) {
-            void (*act)(void *) = m->items[row].action;
-            void *ud = m->items[row].ud;
-            shell_menu_close(m);
-            act(ud);
-            return;
+        void (*act)(void *) = NULL;
+        void *ud = NULL;
+        if (row >= 0 && row < m->n && !m->items[row].separator) {
+            act = m->items[row].action;
+            ud = m->items[row].ud;
         }
+        if (m->owner) *m->owner = NULL;
         shell_menu_close(m);
+        if (act) act(ud);
     }
 }
