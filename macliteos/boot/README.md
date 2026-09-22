@@ -6,7 +6,7 @@ found in iMac11,2 / iMac11,3 (Mid-2010).
 Status: **design + config templates, not yet assembled into a bootable ISO.**
 The userspace session (compositor + shell + apps) is complete and tested
 headless; ISO assembly needs grub/mtools/xorriso on the build host, which the
-development sandbox does not have (see docs/TESTING.md for what ran where).
+development sandbox does not have (see docs/testing.md for what ran where).
 
 Files:
 - `grub-efi.cfg`   GRUB config for EFI boot (Apple EFI 1.1 accepts EFI-x86_64
@@ -22,4 +22,4 @@ The boot target is a Linux 6.x LTS kernel configured from `kernel/configs/`,
 not a custom kernel: MacLiteOS is a userspace OS (compositor, shell, apps,
 tools) plus a curated kernel config and boot chain. That choice is deliberate
 (spec §2: small, reliable, fast over feature-rich) and is documented in
-docs/ARCHITECTURE.md.
+docs/architecture.md.

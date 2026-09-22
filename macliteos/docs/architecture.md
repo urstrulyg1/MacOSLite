@@ -73,6 +73,41 @@ icons, finder thumbnails (8 MB cap). Notifications are RAM-only. No indexer,
 no telemetry, no background updaters. tests/test_leak.c opens/closes 300
 windows' worth of surfaces and asserts RSS returns to baseline.
 
+## Hardware capability layer (v0.2)
+
+    hardware/hwcap.{h,c}    result vocabulary, exit-code contract, codec table,
+                            GPU capability DB, backend choosers, fixture roots
+    hardware/hwprobe.{h,c}  PCI/DRM/CPU/mem/net/USB/storage/power/input probes,
+                            the GL verification query, and the shared rules
+    hardware/edid.{h,c}     EDID 1.3/1.4 parsing (DTD + established timings)
+    hardware/backlight.{h,c} brightness backend with read-back verification
+    hardware/audio.{h,c}    ALSA UAPI directly: cards, mixer, PCM, tone, WAV
+    hardware/media.{h,c}    decoder + runtime decode probes, decode measurement
+    hardware/kms.{h,c}      DRM/KMS and fbdev scanout, headless fallback
+    hardware/drm_uapi.h     the ioctl/struct subset, so libdrm is not a dependency
+
+Three rules live in this layer and nowhere else, because a rule implemented twice
+*will* disagree with itself:
+
+1. `hw_result` is five-state (`NOT_TESTED`, `UNSUPPORTED`, `FAIL`, `PARTIAL`,
+   `PASS`) and `hw_report`/`hw_report_exit` map it onto exit codes
+   (0/3/1/2/2). Tools add checks with evidence strings; the "not PASS" list is
+   printed by the caller so a green run cannot hide an unverified row.
+2. Cross-tool truths are single functions: `ml_audio_status_get()` decides the
+   mixer verdict, `ml_net_link_status()` decides the link/address verdict,
+   `bl_set_percent()` decides whether a brightness write was verified. All three
+   were duplicated before and drifted; the fixture gates caught it.
+3. `hw_using_fixture()` is honoured everywhere a claim would otherwise be about
+   the host rather than the machine being described: address lookups, mixer
+   ioctls, brightness writes, filesystem writes and TCP probes all refuse to
+   report a result they cannot honestly have.
+
+`tests/fixtures/make_sysfs.py` generates four `/sys`+`/proc` trees (iMac11,2,
+iMac11,3, a VM, and a bare host); `tests/test_hardware.c` asserts what must be
+detected and, just as importantly, what must be labelled NOT TESTED rather than
+guessed. `scripts/run-tests.sh` runs the matrix plus four honesty gates on every
+build.
+
 ## Performance modes (spec §34)
 
 Beautiful / Balanced / Performance. First boot runs hwprobe + a blend

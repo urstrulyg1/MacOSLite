@@ -53,7 +53,7 @@ void shell_menu_draw(shell_menu *m);
 void shell_menu_input(shell_menu *m, const msg_input *in);
 void shell_menu_close(shell_menu *m);
 
-/* status readers (event/on-demand only; see docs/PERFORMANCE.md) */
+/* status readers (event/on-demand only; see docs/performance.md) */
 int shell_battery_pct(void);          /* -1 when no battery */
 bool shell_battery_charging(void);
 int shell_wifi_level(void);           /* -1 when no wireless iface */

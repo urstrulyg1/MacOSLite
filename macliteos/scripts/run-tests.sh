@@ -169,6 +169,18 @@ if [ "$FIXTURES" = 1 ] && [ -d "$FIXDIR/imac11_2/sys" ]; then
         echo "PASS (no host address leaked into the fixture report)"
         record "honesty:net-fixture" SANDBOX PASS
     fi
+
+    printf '%-26s %-8s ' "honesty:decode" SANDBOX
+    imac_env out/maclite-video-test h264 > "$LOG/honesty-decode.log" 2>&1
+    rc=$?
+    if [ "$rc" = 0 ]; then
+        echo "FAIL (reported a verified decode without a decoder on this host)"
+        record "honesty:decode" SANDBOX FAIL "exit 0 with no decoder available"
+        FAILED=1
+    else
+        echo "PASS (exit $rc, nothing decoded is never PASS)"
+        record "honesty:decode" SANDBOX PASS "exit $rc"
+    fi
 else
     skip "honesty:*" SANDBOX "fixtures unavailable"
 fi
@@ -211,7 +223,7 @@ session() {
 if [ "$QUICK" = 1 ]; then
     skip "session:*" SANDBOX "--quick"
 else
-    for s in demo interact dockhide menuclick cc hardware; do
+    for s in demo interact dockhide menuclick cc hardware settings; do
         if [ -f "tests/scripts/$s.script" ]; then
             session "$s"
         else
