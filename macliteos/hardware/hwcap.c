@@ -59,6 +59,23 @@ hw_check *hw_report_add(hw_report *r, const char *group, const char *name, bool 
     return c;
 }
 
+hw_check *hw_report_set_evidence(hw_report *r, const char *group, const char *name,
+                                 const char *fmt, ...)
+{
+    for (int i = 0; i < r->n; i++) {
+        hw_check *c = &r->v[i];
+        if (strcmp(c->group, group) || strcmp(c->name, name)) continue;
+        if (fmt) {
+            va_list ap;
+            va_start(ap, fmt);
+            vsnprintf(c->evidence, sizeof c->evidence, fmt, ap);
+            va_end(ap);
+        }
+        return c;
+    }
+    return NULL;
+}
+
 void hw_report_note(hw_report *r, const char *group, const char *name, const char *fmt, ...)
 {
     /* an observation that is not a pass/fail claim; recorded as NOT_TESTED so
@@ -217,15 +234,99 @@ const hw_gpu_cap *hw_gpu_lookup(uint32_t vendor, uint32_t device)
 size_t hw_gpu_db_size(void) { return ML_ARRAY_SIZE(gpu_db); }
 const hw_gpu_cap *hw_gpu_db_at(size_t i) { return i < ML_ARRAY_SIZE(gpu_db) ? &gpu_db[i] : NULL; }
 
+/* ------------------------------------------------- non-GPU device table ---- */
+/* Real IDs for the parts MacLiteOS targets, plus the near neighbours whose
+ * driver/firmware situation a user is likely to hit. "firmware" is what has to
+ * exist under /lib/firmware; an empty string means the driver needs no file
+ * (the firmware is either in the driver or uploaded by the driver itself). */
+static const hw_dev_cap dev_db[] = {
+    /* --- Wi-Fi: identify the exact chipset before choosing a driver (§12) --- */
+    { 0x14e4, 0x4353, HW_DEV_WIFI, "BCM43224 AirPort Extreme (802.11a/b/g/n)", "b43",
+      "b43/ucode29_mimo.fw b43/ucode29_mimo_ps.fw b43/pcm5.fw",
+      "PCIe N-PHY rev 29. brcmfmac does NOT drive this part; b43 needs external firmware, "
+      "or the out-of-tree wl driver (whose code is closed). MacLiteOS ships b43 + the three files." },
+    { 0x14e4, 0x432b, HW_DEV_WIFI, "BCM4322 AirPort Extreme (802.11a/b/g/n)", "b43",
+      "b43/ucode29_mimo.fw b43/ucode29_mimo_ps.fw b43/pcm5.fw", "Same b43 family as the BCM43224." },
+    { 0x14e4, 0x4358, HW_DEV_WIFI, "BCM43224/BCM43225 combo (as shipped on some iMacs)", "b43",
+      "b43/ucode29_mimo.fw b43/ucode29_mimo_ps.fw b43/pcm5.fw", "" },
+    { 0x14e4, 0x43a0, HW_DEV_WIFI, "BCM4360 (much later Macs)", "brcmfmac",
+      "brcm/brcmfmac43602-pcie.bin", "Newer chip; the opposite trap: this one *wants* brcmfmac." },
+    { 0x168c, 0x002e, HW_DEV_WIFI, "Atheros AR9287 (some 2009-2011 iMacs)", "ath9k", "",
+      "No firmware file needed; ath9k is in-tree and free." },
+    /* --- Ethernet ---------------------------------------------------------- */
+    { 0x14e4, 0x1684, HW_DEV_ETHERNET, "BCM5764M Gigabit Ethernet", "tg3", "",
+      "10/100/1000BASE-T. tg3 needs no firmware file on this part; it negotiates the link itself." },
+    { 0x14e4, 0x1682, HW_DEV_ETHERNET, "BCM57762 Gigabit Ethernet", "tg3", "tigon/tg3_tso5.bin",
+      "The 5776x generation wants TSO firmware for transmit offload (optional, not for the link)." },
+    { 0x14e4, 0x16bc, HW_DEV_SDCARD, "BCM57765/57785 SDXC/MMC card reader", "sdhci-pci", "",
+      "The SDXC slot. Cards appear as /dev/mmcblk0; mounting is done on demand." },
+    /* --- Bluetooth: Apple's own controller over USB ------------------------- */
+    { 0x05ac, 0x8215, HW_DEV_BLUETOOTH, "Apple Bluetooth 2.1+EDR (BC2046B1)", "btusb", "",
+      "No .hcd file: btusb uploads the patch over the USB control endpoint itself." },
+    { 0x05ac, 0x8218, HW_DEV_BLUETOOTH, "Apple Bluetooth 2.1 (BCM2046)", "btusb", "", "" },
+    { 0x05ac, 0x8286, HW_DEV_BLUETOOTH, "Apple Bluetooth 4.0 (BCM20702)", "btusb",
+      "brcm/BCM20702A1-05ac-8286.hcd", "This one *does* need a .hcd patch file." },
+    /* --- Camera: the built-in iSight -------------------------------------- */
+    { 0x05ac, 0x8502, HW_DEV_CAMERA, "Built-in iSight (UVC)", "uvcvideo", "",
+      "UVC class complaint: no proprietary software, no firmware download." },
+    { 0x05ac, 0x8507, HW_DEV_CAMERA, "Built-in iSight (older, UVC)", "uvcvideo", "", "" },
+    /* --- FireWire ---------------------------------------------------------- */
+    { 0x11c1, 0x5901, HW_DEV_FIREWIRE, "LSI FW643 FireWire 800 (OHCI)", "firewire_ohci", "",
+      "In-tree since 2.6.22; nothing extra to install. Present but rarely used — §17 says say so." },
+    { 0x104c, 0x8029, HW_DEV_FIREWIRE, "TI TSB82AA2 FireWire 800", "firewire_ohci", "", "" },
+    /* --- SATA -------------------------------------------------------------- */
+    { 0x8086, 0x3b22, HW_DEV_SATA, "Intel 5 Series/3400 AHCI SATA", "ahci", "",
+      "The 7200 rpm HDD hangs off this. AHCI means NCQ; no firmware file." },
+    /* --- Audio codec (PCI side of the HDA controller) ---------------------- */
+    { 0x8086, 0x3b56, HW_DEV_AUDIO, "Intel 5 Series/3400 HD Audio controller (ALC889 codec)", "snd-hda-intel", "",
+      "The codec is identified from /proc/asound, not from this id: the same controller shipped with "
+      "several codecs." },
+};
+
+const char *hw_dev_role_name(hw_dev_role r)
+{
+    switch (r) {
+    case HW_DEV_WIFI:       return "wifi";
+    case HW_DEV_ETHERNET:   return "ethernet";
+    case HW_DEV_BLUETOOTH:  return "bluetooth";
+    case HW_DEV_CAMERA:     return "camera";
+    case HW_DEV_SDCARD:     return "sdcard";
+    case HW_DEV_FIREWIRE:   return "firewire";
+    case HW_DEV_SATA:       return "sata";
+    case HW_DEV_AUDIO:      return "audio";
+    case HW_DEV_OPTICAL:    return "optical";
+    }
+    return "other";
+}
+
+const hw_dev_cap *hw_dev_lookup(uint32_t vendor, uint32_t device, hw_dev_role role)
+{
+    for (size_t i = 0; i < ML_ARRAY_SIZE(dev_db); i++)
+        if (dev_db[i].vendor == vendor && dev_db[i].device == device && dev_db[i].role == role)
+            return &dev_db[i];
+    return NULL;
+}
+const hw_dev_cap *hw_dev_find_any(uint32_t vendor, uint32_t device)
+{
+    for (size_t i = 0; i < ML_ARRAY_SIZE(dev_db); i++)
+        if (dev_db[i].vendor == vendor && dev_db[i].device == device) return &dev_db[i];
+    return NULL;
+}
+size_t hw_dev_db_size(void) { return ML_ARRAY_SIZE(dev_db); }
+const hw_dev_cap *hw_dev_db_at(size_t i) { return i < ML_ARRAY_SIZE(dev_db) ? &dev_db[i] : NULL; }
+
 /* ------------------------------------------------------- root overrides ---- */
 const char *hw_sysfs_root(void) { const char *v = getenv("ML_SYSFS_ROOT"); return v && *v ? v : "/sys"; }
 const char *hw_proc_root(void)  { const char *v = getenv("ML_PROC_ROOT");  return v && *v ? v : "/proc"; }
 const char *hw_dev_root(void)   { const char *v = getenv("ML_DEV_ROOT");   return v && *v ? v : "/dev"; }
 const char *hw_etc_root(void)   { const char *v = getenv("ML_ETC_ROOT");   return v && *v ? v : "/etc"; }
+const char *hw_fw_root(void)    { const char *v = getenv("ML_FW_ROOT");    return v && *v ? v : "/lib/firmware"; }
+const char *hw_lib_root(void)   { const char *v = getenv("ML_LIB_ROOT");   return v && *v ? v : "/usr/lib"; }
 
 bool hw_using_fixture(void)
 {
-    return getenv("ML_SYSFS_ROOT") || getenv("ML_PROC_ROOT") || getenv("ML_DEV_ROOT") || getenv("ML_ETC_ROOT");
+    return getenv("ML_SYSFS_ROOT") || getenv("ML_PROC_ROOT") || getenv("ML_DEV_ROOT") ||
+           getenv("ML_ETC_ROOT") || getenv("ML_FW_ROOT");
 }
 
 #define HW_RING 16
@@ -247,6 +348,8 @@ const char *hw_sys(const char *rel)  { return hw_path(hw_sysfs_root(), rel); }
 const char *hw_proc(const char *rel) { return hw_path(hw_proc_root(), rel); }
 const char *hw_dev(const char *rel)  { return hw_path(hw_dev_root(), rel); }
 const char *hw_etc(const char *rel)  { return hw_path(hw_etc_root(), rel); }
+const char *hw_fw(const char *rel)   { return hw_path(hw_fw_root(), rel); }
+const char *hw_lib(const char *rel)  { return hw_path(hw_lib_root(), rel); }
 
 /* ------------------------------------------------------ backend picking --- */
 const char *ml_present_name(ml_present_kind k)

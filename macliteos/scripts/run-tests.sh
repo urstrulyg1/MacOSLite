@@ -118,7 +118,8 @@ fi
 #      and never report FAIL for checks that only a live kernel can answer.
 imac_env() {
     ML_SYSFS_ROOT="$FIXDIR/imac11_2/sys" ML_PROC_ROOT="$FIXDIR/imac11_2/proc" \
-    ML_DEV_ROOT="$FIXDIR/imac11_2/dev" ML_ETC_ROOT="$FIXDIR/imac11_2/etc" "$@"
+    ML_DEV_ROOT="$FIXDIR/imac11_2/dev" ML_ETC_ROOT="$FIXDIR/imac11_2/etc" \
+    ML_FW_ROOT="$FIXDIR/imac11_2/fw" ML_LIB_ROOT="$FIXDIR/imac11_2/lib" "$@"
 }
 if [ "$FIXTURES" = 1 ] && [ -d "$FIXDIR/imac11_2/sys" ]; then
     printf '%-26s %-8s ' "honesty:gpu" SANDBOX
@@ -187,6 +188,64 @@ if [ "$FIXTURES" = 1 ] && [ -d "$FIXDIR/imac11_2/sys" ]; then
     else
         echo "PASS (exit $rc, explicit backend refused instead of degrading)"
         record "honesty:backend" SANDBOX PASS "exit $rc"
+    fi
+
+    # 4. the driver resolver must resolve (and must say which newer release it
+    #    refused), and on a fixture it must never claim the running
+    #    configuration was validated — validation needs a real reboot.
+    printf '%-26s %-8s ' "honesty:drivers-check" SANDBOX
+    imac_env out/maclite-drivers check --catalog drivers/catalog/maclite-offline.cat \
+        > "$LOG/honesty-drivers-check.log" 2>&1
+    rc=$?
+    if [ "$rc" != 1 ]; then
+        echo "FAIL (a machine missing its driver files must resolve to FAIL, got exit $rc)"
+        record "honesty:drivers-check" SANDBOX FAIL "exit $rc"
+        FAILED=1
+    elif ! grep -q "25.0.0" "$LOG/honesty-drivers-check.log"; then
+        echo "FAIL (the newer release that refuses this GPU was not reported)"
+        record "honesty:drivers-check" SANDBOX FAIL "skipped-release reason missing"
+        FAILED=1
+    elif grep -qE "mesa-r600 +25\.0\.0" "$LOG/honesty-drivers-check.log"; then
+        echo "FAIL (the newer, incompatible release was selected anyway)"
+        record "honesty:drivers-check" SANDBOX FAIL "25.0.0 chosen"
+        FAILED=1
+    else
+        echo "PASS (exit 1: files missing, 25.0.0 declined with a reason)"
+        record "honesty:drivers-check" SANDBOX PASS "exit 1"
+    fi
+
+    printf '%-26s %-8s ' "honesty:drivers-verify" SANDBOX
+    imac_env out/maclite-drivers verify --catalog drivers/catalog/maclite-offline.cat \
+        > "$LOG/honesty-drivers-verify.log" 2>&1
+    rc=$?
+    if [ "$rc" != 2 ]; then
+        echo "FAIL (validation on a fixture must be NOT TESTED, got exit $rc)"
+        record "honesty:drivers-verify" SANDBOX FAIL "exit $rc"
+        FAILED=1
+    elif grep -qE "Running configuration +(PASS|FAIL)" "$LOG/honesty-drivers-verify.log"; then
+        echo "FAIL (validated the running configuration from fixture roots)"
+        record "honesty:drivers-verify" SANDBOX FAIL "claimed validation"
+        FAILED=1
+    else
+        echo "PASS (exit 2, NOT TESTED)"
+        record "honesty:drivers-verify" SANDBOX PASS "exit 2"
+    fi
+
+    printf '%-26s %-8s ' "honesty:drivers-write" SANDBOX
+    imac_env out/maclite-drivers update --catalog drivers/catalog/maclite-offline.cat \
+        > "$LOG/honesty-drivers-update.log" 2>&1
+    rc=$?
+    if [ -e /var/lib/maca-lite/driver-state ]; then
+        echo "FAIL (an update run with fixture roots wrote the system state file)"
+        record "honesty:drivers-write" SANDBOX FAIL "wrote to /var/lib/maca-lite"
+        FAILED=1
+    elif ! grep -q "refusing to install" "$LOG/honesty-drivers-update.log"; then
+        echo "FAIL (fixture install was not refused: exit $rc)"
+        record "honesty:drivers-write" SANDBOX FAIL "no refusal"
+        FAILED=1
+    else
+        echo "PASS (refused: a fixture is never written to)"
+        record "honesty:drivers-write" SANDBOX PASS "refused"
     fi
 
     printf '%-26s %-8s ' "honesty:decode" SANDBOX

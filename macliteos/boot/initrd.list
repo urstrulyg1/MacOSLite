@@ -21,6 +21,9 @@
 /usr/bin/maclite-usb
 /usr/bin/maclite-storage
 /usr/bin/maclite-power
+/usr/bin/maclite-cpu
+/usr/bin/maclite-drivers
 /usr/bin/maclite-gpu-benchmark
+/usr/share/maca-lite/catalog/maclite-offline.cat   # what this image ships and why
 # recovery path referenced by the cmdline (rd.maclite=recovery)
 /usr/bin/maclite-recovery

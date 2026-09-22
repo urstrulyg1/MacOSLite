@@ -31,7 +31,8 @@ TOOLS := $(OUT)/maclite-memory $(OUT)/maclite-performance $(OUT)/maclite-ui-benc
          $(OUT)/maclite-gpu $(OUT)/maclite-gpu-benchmark $(OUT)/maclite-display \
          $(OUT)/maclite-brightness $(OUT)/maclite-audio $(OUT)/maclite-video-test \
          $(OUT)/maclite-network $(OUT)/maclite-usb $(OUT)/maclite-storage \
-         $(OUT)/maclite-power $(OUT)/maclite-hardware
+         $(OUT)/maclite-power $(OUT)/maclite-hardware $(OUT)/maclite-cpu \
+         $(OUT)/maclite-drivers
 TESTS := $(OUT)/test_render $(OUT)/test_units $(OUT)/test_idle $(OUT)/test_leak \
          $(OUT)/test_hardware
 
@@ -125,6 +126,10 @@ $(OUT)/maclite-storage: diagnostics/maclite-storage.c $(HWLIB) $(LIB)
 $(OUT)/maclite-power: diagnostics/maclite-power.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 $(OUT)/maclite-hardware: diagnostics/maclite-hardware.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-cpu: diagnostics/maclite-cpu.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-drivers: diagnostics/maclite-drivers.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 $(OUT)/test_render: tests/test_render.c $(LIB)

@@ -107,6 +107,12 @@ static struct {
     bool vsync_armed;
     uint64_t last_present_ns;
     uint64_t frames, dropped, presents;
+    /* §24: the mode is picked from the GPU once, then *reduced* — never raised —
+     * if the frames keep arriving late. The counter is the same one the report
+     * uses; there is no timer and no sampling thread. */
+    int slow_streak;
+    bool mode_pinned;           /* an explicit --mode or MICA_MODE wins over auto */
+    bool auto_reduced;
     uint64_t frame_us_sum, frame_us_worst;
     uint64_t pts[64];
     int pts_n, pts_i;
@@ -142,6 +148,8 @@ static struct {
 } C;
 
 /* ---------------------------------------------------------------- utils -- */
+static void notify(const msg_notify *n);   /* defined below; the frame loop uses it */
+
 static void damage_add(ml_rect r)
 {
     /* clamp to screen: out-of-bounds clips (shadow margins, magnified dock
@@ -354,6 +362,27 @@ static void present(void)
     if (C.last_present_ns) {
         uint64_t dt = now - C.last_present_ns;
         if (dt > 25000000ull) C.dropped++;        /* >25ms gap = a dropped frame */
+        /* Sustained slowness (not one hiccup, which every machine has) steps the
+         * mode down once. Responsiveness outranks eye candy (§24), and the
+         * decision is one-way so the machine cannot oscillate between modes. */
+        if (dt > 25000000ull) C.slow_streak++;
+        else if (C.slow_streak > 0) C.slow_streak--;
+        if (!C.mode_pinned && !C.auto_reduced && C.slow_streak >= 30 &&
+            C.mode < MODE_PERFORMANCE) {
+            C.mode++;
+            C.auto_reduced = true;
+            C.slow_streak = 0;
+            ML_INFO("auto-reducing effects to %s: %llu dropped frame(s) in a row",
+                    mica_mode_name(C.mode), (unsigned long long)C.dropped);
+            msg_notify n = { 0 };
+            snprintf(n.title, sizeof n.title, "Reduced effects");
+            snprintf(n.body, sizeof n.body, "%s mode: the GPU was not keeping up",
+                     mica_mode_name(C.mode));
+            snprintf(n.icon, sizeof n.icon, "speed");
+            notify(&n);
+            ml_region_add(&C.damage, ml_rect_make(0, 0, C.screen_w, C.screen_h));
+            request_frame();
+        }
     }
     C.last_present_ns = now;
     C.frames++;
@@ -1249,6 +1278,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--mode") && i + 1 < argc) {
             const char *m = argv[++i];
             C.mode = !strcmp(m, "balanced") ? MODE_BALANCED : !strcmp(m, "performance") ? MODE_PERFORMANCE : MODE_BEAUTIFUL;
+            C.mode_pinned = true;
         } else if (!strcmp(argv[i], "--backend") && i + 1 < argc) { C.backend_req = argv[++i]; C.backend_explicit = true; }
         else if (!strcmp(argv[i], "--headless")) { C.backend_req = "headless"; C.backend_explicit = true; }
         else if (!strcmp(argv[i], "--drm")) { C.backend_req = "kms"; C.backend_explicit = true; }
@@ -1278,12 +1308,16 @@ int main(int argc, char **argv)
             return 3;                        /* 3 = requested capability unavailable */
         }
     }
+    /* A pinned mode is a promise: --mode/MICA_MODE are the operator's choice,
+     * and a scripted session or a screenshot must render the same way every
+     * time. Only a free-running desktop may reduce its effects on its own. */
+    if (getenv("MICA_MODE") || script_file || C.shot_path) C.mode_pinned = true;
     if (!getenv("MICA_MODE")) {
         uint32_t pick = mica_pick_mode(&C.gpu, &C.cpu);
         ML_INFO("gpu: %s driver=%s kms=%d accel=%s -> suggested mode: %s",
                 C.gpu.device[0] ? C.gpu.device : "(none)", C.gpu.driver, C.gpu.has_kms,
                 mica_gpu_accel_name(&C.gpu), mica_mode_name(pick));
-        if (!script_file && !C.shot_path) C.mode = pick;
+        if (!script_file && !C.shot_path && !C.mode_pinned) C.mode = pick;
     }
 
     C.loop = ml_loop_new();

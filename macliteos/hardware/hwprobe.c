@@ -34,12 +34,17 @@ static void sys_link_name(const char *dir, const char *link, char *out, size_t o
     snprintf(out, outlen, "%s", ml_path_base(t));
 }
 
+void ml_bound_driver(const char *sysfs_dev_dir, char *out, size_t outlen)
+{
+    sys_link_name(sysfs_dev_dir, "driver", out, outlen);
+}
+
 static void read_str(const char *dir, const char *file, char *out, size_t outlen)
 {
     char p[512];
     snprintf(p, sizeof p, "%.440s/%.60s", dir, file);
     char *s = ml_sysfs_str(p, "");
-    snprintf(out, outlen, "%s", s);
+    snprintf(out, outlen, "%.*s", (int)(outlen ? outlen - 1 : 0), s);
     ml_free(s);
 }
 static long read_long(const char *dir, const char *file, long def)
@@ -105,9 +110,53 @@ bool mica_gpu_probe(mica_gpu_info *out)
             snprintf(out->accel, sizeof out->accel, "unknown");
             snprintf(out->accel_api, sizeof out->accel_api, "none");
         }
+        out->pci_revision = (uint32_t)read_hex(base, "revision", 0);
+        out->subsystem_vendor = (uint32_t)read_hex(base, "subsystem_vendor", 0);
+        out->subsystem_device = (uint32_t)read_hex(base, "subsystem_device", 0);
         /* radeon/amdgpu expose real VRAM through sysfs; others do not */
         long vram = read_long(base, "mem_info_vram_total", -1);
         out->vram_bytes = vram > 0 ? (uint64_t)vram : 0;
+        if (out->vram_bytes == 0) {
+            long vb = read_long(base, "mem_info_vram_vendor", -1);   /* not a size; ignored */
+            (void)vb;
+        }
+        /* Mesa/DRI/VDPAU presence: file names only. The *version* of Mesa is
+         * never inferred from a file — it comes from a real GL query below. */
+        if (out->gallium[0]) {
+            static const char *dri_dirs[] = {
+                "/usr/lib/x86_64-linux-gnu/dri", "/usr/lib/dri", "/usr/lib64/dri",
+                "/usr/local/lib/dri",
+            };
+            char want[64];
+            snprintf(want, sizeof want, "%s_dri.so", out->gallium);
+            for (size_t k = 0; k < ML_ARRAY_SIZE(dri_dirs); k++) {
+                char p[256];
+                snprintf(p, sizeof p, "%s/%s", dri_dirs[k], want);
+                if (access(p, F_OK) == 0) {
+                    out->mesa_present = true;
+                    snprintf(out->dri_module, sizeof out->dri_module, "%.63s", want);
+                    break;
+                }
+            }
+            if (!out->mesa_present) {
+                snprintf(want, sizeof want, "libvdpau_%s.so", out->gallium);
+                for (size_t k = 0; k < ML_ARRAY_SIZE(dri_dirs); k++) {
+                    char p[256];
+                    snprintf(p, sizeof p, "%s/%s", dri_dirs[k], want);
+                    if (access(p, F_OK) == 0) {
+                        out->mesa_present = true;
+                        snprintf(out->vdpau_driver, sizeof out->vdpau_driver, "%.63s", want);
+                        break;
+                    }
+                }
+            }
+        }
+        if (!strcmp(out->driver, "radeon")) {
+            out->firmware_required = true;   /* R600+ needs its microcode blobs at KMS time */
+            snprintf(out->firmware_note, sizeof out->firmware_note,
+                     "radeon loads R600/RV7xx/Redwood microcode from %s/radeon/*.bin at modeset time",
+                     hw_fw_root());
+        }
 
         /* DRM nodes bound to this PCI device */
         char drm_root[400];
@@ -191,6 +240,21 @@ gl_probe_result mica_gl_probe(mica_gpu_info *g)
         snprintf(g->gl_source, sizeof g->gl_source, "%s", tools[t]);
         g->gl_software = strcasestr(rend, "llvmpipe") || strcasestr(rend, "softpipe") ||
                          strcasestr(rend, "swrast") || strcasestr(rend, "Software Rasterizer");
+        /* Mesa reports its release inside the GL version string ("4.5 (Compatibility
+         * Profile) Mesa 23.1.4"). Take it from there when it is there, and leave it
+         * empty when it is not — a version is never guessed from a file name. */
+        const char *m = strcasestr(ver, "Mesa ") ? strcasestr(ver, "Mesa ")
+                                                 : strcasestr(rend, "Mesa ");
+        if (m) {
+            m += 5;
+            size_t k = 0;
+            while (m[k] && (isdigit((unsigned char)m[k]) || m[k] == '.') && k < sizeof g->mesa_version - 1) {
+                g->mesa_version[k] = m[k];
+                k++;
+            }
+            g->mesa_version[k] = 0;
+            g->mesa_present = true;
+        }
         return g->gl_software ? GL_SW : GL_HW;
     }
     /* no GL query tool: is there a GL stack at all? */
@@ -265,7 +329,7 @@ static void probe_connector(const char *conn_name, const char *conn_dir, mica_co
 {
     memset(c, 0, sizeof *c);
     snprintf(c->connector, sizeof c->connector, "%.31s", conn_name);
-    snprintf(c->path, sizeof c->path, "%s", conn_dir);
+    snprintf(c->path, sizeof c->path, "%.319s", conn_dir);
     read_str(conn_dir, "status", c->status, sizeof c->status);
     read_str(conn_dir, "enabled", c->enabled, sizeof c->enabled);
     read_str(conn_dir, "dpms", c->dpms, sizeof c->dpms);
@@ -304,7 +368,7 @@ bool mica_drm_probe(mica_drm_state *out)
             if (access(hw_dev(rel), F_OK) == 0) {
                 out->any = true;
                 snprintf(out->card_node, sizeof out->card_node, "%s", hw_dev(rel));
-                snprintf(out->note, sizeof out->note, "%s present but %s unreadable", out->card_node, drm_dir);
+                snprintf(out->note, sizeof out->note, "%.54s present but %.70s unreadable", out->card_node, drm_dir);
                 return true;
             }
         }
@@ -447,9 +511,9 @@ bool mica_net_probe(mica_net_state *out)
         mica_net_iface *i = &out->v[out->n];
         memset(i, 0, sizeof *i);
         i->wifi_level = -1;
-        snprintf(i->name, sizeof i->name, "%s", e->d_name);
+        snprintf(i->name, sizeof i->name, "%.15s", e->d_name);
         char base[400];
-        snprintf(base, sizeof base, "%s/%s", net_dir, e->d_name);
+        snprintf(base, sizeof base, "%.300s/%.60s", net_dir, e->d_name);
         read_str(base, "operstate", i->state, sizeof i->state);
         read_str(base, "address", i->mac, sizeof i->mac);
         sys_link_name(base, "device/driver", i->driver, sizeof i->driver);
@@ -469,6 +533,47 @@ bool mica_net_probe(mica_net_state *out)
             out->nwifi++;
         } else if (!strcmp(i->kind, "ethernet")) out->neth++;
 
+        /* Exact chipset: the device's own PCI (or USB) ids, read from sysfs,
+         * then named by the device database. An id the table does not know is
+         * reported as an unknown chip — never assumed to be the target part. */
+        i->speed_mbps = -1;
+        unsigned long v = (unsigned long)read_hex(base, "device/vendor", 0);
+        unsigned long dd = (unsigned long)read_hex(base, "device/device", 0);
+        if (!v) {   /* USB network adapters expose their ids at the interface */
+            v = (unsigned long)read_hex(base, "device/idVendor", 0);
+            dd = (unsigned long)read_hex(base, "device/idProduct", 0);
+        }
+        if (v && dd) {
+            i->has_pci_ids = true;
+            i->vendor_id = (uint32_t)v;
+            i->device_id = (uint32_t)dd;
+            hw_dev_role role = !strcmp(i->kind, "wifi") ? HW_DEV_WIFI : HW_DEV_ETHERNET;
+            const hw_dev_cap *cap = hw_dev_lookup(i->vendor_id, i->device_id, role);
+            if (cap) {
+                snprintf(i->chipset, sizeof i->chipset, "%s", cap->model);
+                snprintf(i->chip_driver, sizeof i->chip_driver, "%s", cap->driver);
+                snprintf(i->firmware, sizeof i->firmware, "%s", cap->firmware);
+                snprintf(i->chip_note, sizeof i->chip_note, "%s", cap->note);
+                i->firmware_present = true;
+                if (cap->firmware[0]) {
+                    char list[192], *save = NULL;
+                    snprintf(list, sizeof list, "%s", cap->firmware);
+                    for (char *tok = strtok_r(list, " ", &save); tok; tok = strtok_r(NULL, " ", &save))
+                        if (access(hw_fw(tok), F_OK) != 0) i->firmware_present = false;
+                }
+            } else {
+                snprintf(i->chipset, sizeof i->chipset, "unknown %04x:%04x", i->vendor_id, i->device_id);
+            }
+        }
+        {
+            /* link speed: only the kernel knows it, and only when a link is up
+             * (ethtool or the sysfs attribute, whichever this kernel offers) */
+            long sp = read_long(base, "speed", -1);
+            if (sp > 0) i->speed_mbps = (int)sp;
+            char dup[16];
+            read_str(base, "duplex", dup, sizeof dup);
+            snprintf(i->duplex, sizeof i->duplex, "%.7s", dup);
+        }
         i->has_ip4 = iface_ip(i->name, i->ip4, sizeof i->ip4, i->ip6, sizeof i->ip6);
         i->has_ip6 = i->ip6[0] != 0;
         /* the interface that carries this machine: first non-loopback one that
@@ -538,7 +643,7 @@ static void usb_kind_of(const char *dev_dir, mica_usb_dev *u)
     while ((e = readdir(d))) {
         if (!strchr(e->d_name, ':')) continue;
         char sub[420];
-        snprintf(sub, sizeof sub, "%s/%s", dev_dir, e->d_name);
+        snprintf(sub, sizeof sub, "%.300s/%.100s", dev_dir, e->d_name);
         long cls = read_hex(sub, "bInterfaceClass", -1);
         long proto = read_hex(sub, "bInterfaceProtocol", -1);
         sys_link_name(sub, "driver", u->driver, sizeof u->driver);
@@ -561,14 +666,14 @@ static void usb_block_dev(const char *dev_dir, mica_usb_dev *u)
     while ((e = readdir(d))) {
         if (strncmp(e->d_name, "host", 4)) continue;
         char scsi[420];
-        snprintf(scsi, sizeof scsi, "%s/%s", dev_dir, e->d_name);
+        snprintf(scsi, sizeof scsi, "%.300s/%.100s", dev_dir, e->d_name);
         DIR *sd = opendir(scsi);
         if (!sd) continue;
         struct dirent *se;
         while ((se = readdir(sd))) {
             if (se->d_name[0] < '0' || se->d_name[0] > '9') continue;
             char tgt[460];
-            snprintf(tgt, sizeof tgt, "%s/%s", scsi, se->d_name);
+            snprintf(tgt, sizeof tgt, "%.340s/%.100s", scsi, se->d_name);
             DIR *td = opendir(tgt);
             if (!td) continue;
             struct dirent *te;
@@ -599,7 +704,7 @@ bool mica_usb_probe(mica_usb_state *out)
         snprintf(base, sizeof base, "%s/%s", root, e->d_name);
         mica_usb_dev *u = &out->v[out->n];
         memset(u, 0, sizeof *u);
-        snprintf(u->port, sizeof u->port, "%s", e->d_name);
+        snprintf(u->port, sizeof u->port, "%.23s", e->d_name);
         /* sysfs writes these as bare hex ("05ac"); base-10 parsing gave 0 for
          * every real device (fix pinned by test_hardware.c). */
         u->vid = (uint32_t)read_hex(base, "idVendor", 0);
@@ -645,7 +750,7 @@ bool mica_storage_probe(mica_storage_state *out)
                             if (n >= sizeof mp) n = sizeof mp - 1;
                             memcpy(mp, f, n);
                             mp[n] = 0;
-                            snprintf(mounts[nmounts].dev, sizeof mounts[0].dev, "%s", src);
+                            snprintf(mounts[nmounts].dev, sizeof mounts[0].dev, "%.63s", src);
                             snprintf(mounts[nmounts].mp, sizeof mounts[0].mp, "%s", mp);
                             snprintf(mounts[nmounts].fs, sizeof mounts[0].fs, "%s", fs);
                             nmounts++;
@@ -675,7 +780,7 @@ bool mica_storage_probe(mica_storage_state *out)
         mica_disk *k = &out->v[out->n];
         memset(k, 0, sizeof *k);
         k->use_pct = -1;
-        snprintf(k->name, sizeof k->name, "%s", e->d_name);
+        snprintf(k->name, sizeof k->name, "%.15s", e->d_name);
         snprintf(k->devnode, sizeof k->devnode, "%s", hw_dev(e->d_name));
         k->removable = read_long(base, "removable", 0) == 1;
         k->ro = (int)read_long(base, "ro", 0);

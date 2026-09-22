@@ -9,5 +9,15 @@ config in kernel/configs; this directory holds what MacLiteOS adds on top:
 - `udev-rules/maclite.rules`: permissions for /dev/dri, uinput-free input,
   and backlight on iMacs (radeon bl node), nothing else.
 
+- `catalog/maclite-offline.cat`: every driver, firmware and microcode release
+  this image ships, with the hardware ids each one covers and the SHA-256 of
+  each file. It is data, not code, so a support decision is a diffable line —
+  and so `maclite-drivers` can apply the spec's "newest *compatible*, never
+  newest" rule mechanically instead of by hand.
+- `maclite-drivers` (../diagnostics/maclite-drivers.c) reads that catalog:
+  detect / status / check / update / verify / rollback, with the policy and the
+  rollback model written down in ../docs/drivers.md.
+
 No polling daemons live here or anywhere else (spec §13): status readers in
-compositor/client/shellkit.c are event- or on-demand driven.
+compositor/client/shellkit.c are event- or on-demand driven, and the driver
+resolver runs only when a human runs it.

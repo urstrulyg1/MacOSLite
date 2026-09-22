@@ -5,6 +5,21 @@ Everything below was measured **in the development sandbox** (Debian 12,
 Numbers from a real iMac do not exist yet and will be added here, labelled,
 when the hardware is in hand (docs/testing.md).
 
+## Performance modes and automatic reduction (§24)
+
+The compositor starts in the mode `mica_pick_mode()` derives from the detected
+GPU: no KMS → performance, no hardware renderer → balanced, fewer than two cores
+or under 1 GB RAM → balanced, otherwise beautiful. `--mode` and `MICA_MODE` pin
+it, and so do scripted sessions and screenshots, because a report has to render
+the same way twice.
+
+From then on the mode can only go *down*: the frame loop already counts a frame
+as dropped when it arrives later than 25 ms, and thirty consecutive slow frames
+step the mode down one level once, notify the user and stop. Responsiveness
+outranks eye candy (§23/§24), the decision is one-way so nothing can oscillate
+between modes, and there is no timer, sampler or daemon involved — the counter is
+the same one the benchmark report reads.
+
 ## Compositing cost (maclite-ui-benchmark, software path)
 
 | scenario                | resolution | mean full frame | p95    | worst  | 60 Hz budget |
