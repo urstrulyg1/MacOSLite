@@ -34,6 +34,13 @@ jobs:
             shellcheck -s sh "$f"
           done
 
+      - name: Build userspace and tests
+        working-directory: macliteos
+        run: |
+          ./configure
+          make -j"$(nproc)" all
+          sh scripts/run-tests.sh
+
       - name: Build G1OS kernel
         working-directory: macliteos
         run: sh scripts/build-kernel.sh
@@ -45,13 +52,6 @@ jobs:
           G1OS_BUSYBOX="$PWD/out/busybox" \
           G1OS_KERNEL_MODULES="$PWD/out/kernel-modules" \
             sh scripts/make-initrd.sh "$PWD/out/initrd-maclite.img"
-
-      - name: Build userspace and tests
-        working-directory: macliteos
-        run: |
-          ./configure
-          make -j"$(nproc)" all
-          sh scripts/run-tests.sh
 
       - name: Assemble and independently verify ISO
         working-directory: macliteos
