@@ -1,5 +1,5 @@
 # G1OS x86_64 kernel requirements for the 2010 iMac live/install path.
-# This is a Kconfig fragment applied on top of the upstream x86_64 defconfig.
+# This is a Kconfig fragment applied on top of the pinned upstream x86_64 defconfig.
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_DEVTMPFS=y
 CONFIG_DEVTMPFS_MOUNT=y
@@ -27,7 +27,7 @@ CONFIG_SQUASHFS_ZSTD=y
 CONFIG_EXT4_FS=y
 CONFIG_VFAT_FS=y
 CONFIG_MSDOS_FS=y
-CONFIG_GPT=y
+CONFIG_EFI_PARTITION=y
 CONFIG_TG3=m
 CONFIG_B43=m
 CONFIG_B43_PHY_N=m
