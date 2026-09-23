@@ -95,6 +95,7 @@ if [ "$FIXTURES" = 1 ]; then
                     record "test_hardware:$v" SANDBOX PASS
                 else
                     echo "FAIL (see $LOG/hw-$v.log)"
+                    cat "$LOG/hw-$v.log"
                     record "test_hardware:$v" SANDBOX FAIL "$(tail -1 "$LOG/hw-$v.log")"
                     FAILED=1
                 fi
@@ -364,5 +365,7 @@ if [ "$FAILED" = 0 ]; then
     echo "        Rows marked SKIP (and the QEMU/iMac tiers in docs/testing.md) are NOT TESTED."
 else
     echo "Result: FAIL — see the rows above; logs in $LOG/"
+    echo "--- Summary of $SUMMARY ---"
+    cat "$SUMMARY"
 fi
 exit $FAILED
