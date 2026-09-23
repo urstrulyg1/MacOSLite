@@ -372,6 +372,23 @@ static void probe_connector(const char *conn_name, const char *conn_dir, mica_co
     if (!c->has_edid) edid_info_init(&c->edid);
 }
 
+static int conn_cmp(const void *va, const void *vb)
+{
+    const mica_connector *a = (const mica_connector *)va;
+    const mica_connector *b = (const mica_connector *)vb;
+    if (a->connected != b->connected)
+        return a->connected ? -1 : 1;
+    bool a_internal = (strncmp(a->connector, "eDP", 3) == 0 ||
+                       strncmp(a->connector, "LVDS", 4) == 0 ||
+                       strncmp(a->connector, "DSI", 3) == 0);
+    bool b_internal = (strncmp(b->connector, "eDP", 3) == 0 ||
+                       strncmp(b->connector, "LVDS", 4) == 0 ||
+                       strncmp(b->connector, "DSI", 3) == 0);
+    if (a_internal != b_internal)
+        return a_internal ? -1 : 1;
+    return strcmp(a->connector, b->connector);
+}
+
 bool mica_drm_probe(mica_drm_state *out)
 {
     memset(out, 0, sizeof *out);
@@ -414,10 +431,18 @@ bool mica_drm_probe(mica_drm_state *out)
         if (cl >= sizeof out->c[out->n].card) cl = sizeof out->c[out->n].card - 1;
         memcpy(out->c[out->n].card, e->d_name, cl);
         out->c[out->n].card[cl] = 0;
-        if (out->c[out->n].connected && out->primary < 0) out->primary = out->n;
         out->n++;
     }
     closedir(d);
+    if (out->n > 1) {
+        qsort(out->c, (size_t)out->n, sizeof(out->c[0]), conn_cmp);
+    }
+    for (int i = 0; i < out->n; i++) {
+        if (out->c[i].connected) {
+            out->primary = i;
+            break;
+        }
+    }
     out->kms = out->any && out->n > 0;
     if (!out->any)
         snprintf(out->note, sizeof out->note, "connectors listed under %s but no card node in %s",
