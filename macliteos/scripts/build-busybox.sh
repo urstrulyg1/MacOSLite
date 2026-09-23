@@ -22,9 +22,9 @@ mkdir -p "$SRC"
 tar -xjf "$TARBALL" -C "$SRC" --strip-components=1
 
 make -C "$SRC" defconfig
-# Static linking keeps the initramfs independent of the host libc.
 "$SRC/scripts/config" --enable CONFIG_STATIC
 "$SRC/scripts/config" --disable CONFIG_PIE
+"$SRC/scripts/config" --enable CONFIG_CHROOT
 make -C "$SRC" olddefconfig
 make -C "$SRC" -j"$JOBS"
 [ -s "$SRC/busybox" ] || { echo "ERROR: BusyBox build produced no binary" >&2; exit 3; }
