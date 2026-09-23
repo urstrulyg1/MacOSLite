@@ -1,10 +1,45 @@
-# kernel/
+# G1OS kernel build
 
-MacLiteOS ships a curated kernel configuration, not a forked kernel.
-Rationale (spec §2, §52): a 2010 iMac needs mature radeon/b43/tg3/HDA drivers;
-re-implementing them would trade reliability for ideology. Our contributions
-live in userspace: compositor, window manager, shell, apps, tools.
+G1OS uses a pinned upstream Linux x86_64 long-term kernel as the hardware enablement layer. The build is reproducible and never creates a placeholder kernel.
 
-- `configs/maclite-x86_64.defconfig` — the config we benchmark with.
-- `patches/` — empty on purpose; we carry no out-of-tree kernel patches in v0.1.
-  If a quirk needs one, it lands here with a measurement attached.
+## Pinned inputs
+
+- Linux: `6.12.101`
+- Source archive: `https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.101.tar.xz`
+- Source SHA-256: `7d2e1b5d5ab36b3a01856e71782dad2a54e634fb2b37c0a42998def3bbf957c1`
+- Configuration: `kernel/g1os-x86_64.fragment` merged into upstream `x86_64_defconfig`
+- Required boot/hardware paths include EFI/GPT, AHCI/SATA, USB mass storage, ISO9660, SquashFS, ext4, Radeon DRM, Broadcom TG3/B43 and Intel HDA audio.
+- Out-of-tree patches: none currently required.
+
+## Build
+
+From `macliteos/` on Linux:
+
+```sh
+sh scripts/build-kernel.sh
+sh scripts/build-busybox.sh
+G1OS_BUSYBOX="$PWD/out/busybox" \
+G1OS_KERNEL_MODULES="$PWD/out/kernel-modules" \
+  sh scripts/make-initrd.sh "$PWD/out/initrd-maclite.img"
+```
+
+Outputs:
+
+- `out/vmlinuz-maclite` — real Linux kernel image
+- `out/kernel-modules/lib/modules/` — kernel modules for the initramfs
+- `out/busybox` — static BusyBox for the initramfs
+- `out/initrd-maclite.img` — real gzip-compressed initramfs
+- `out/kernel-version.txt` and `out/kernel-source.sha256` — provenance metadata
+
+A failed download, checksum, Kconfig step, compilation, module installation or artifact check exits non-zero. No empty or dummy boot artifact is accepted.
+
+## Firmware
+
+Kernel modules such as B43 may require external firmware. The build deliberately does not silently bundle third-party firmware. `make-initrd.sh` accepts `G1OS_FIRMWARE_DIR` as an explicit input and copies it into `/lib/firmware`; the provider/distributor is responsible for applicable licensing and provenance.
+
+```sh
+G1OS_FIRMWARE_DIR=/path/to/licensed/firmware \
+G1OS_BUSYBOX="$PWD/out/busybox" \
+G1OS_KERNEL_MODULES="$PWD/out/kernel-modules" \
+  sh scripts/make-initrd.sh "$PWD/out/initrd-maclite.img"
+```
