@@ -1,6 +1,7 @@
 #include "shellkit.h"
 #include "ml/util.h"
 #include "ml/log.h"
+#include "ml/ui_theme.h"
 #include <dirent.h>
 
 static char *g_keep[2];
@@ -45,16 +46,23 @@ const mica_app_def *mica_app_find(const char *key)
 
 void shell_panel_bg(ml_ctx *c, ml_rect r, double radius, uint32_t mode, bool dark)
 {
+    const ml_ui_tokens *t = ml_ui_tokens_for_mode(mode, dark);
+    double rr = radius > 0.0 ? fmin(radius, t->radius_lg) : t->radius_md;
+    uint8_t alpha = (uint8_t)(dark ? t->panel_alpha : fmin(255.0, t->panel_alpha + 20.0));
+
+    /* Performance mode intentionally avoids translucent composition. */
     if (mode == MODE_PERFORMANCE) {
-        ml_fill_rounded(c, r, radius, dark ? ml_rgb(24, 26, 34) : ml_rgb(240, 242, 248));
+        ml_fill_rounded(c, r, rr, dark ? ml_rgb(24, 26, 34) : ml_rgb(240, 242, 248));
         return;
     }
-    uint8_t alpha = mode == MODE_BEAUTIFUL ? 178 : 225;
-    ml_fill_rounded(c, r, radius, dark ? ml_rgba(20, 22, 30, alpha) : ml_rgba(246, 248, 252, alpha));
+    ml_fill_rounded(c, r, rr, ml_ui_surface_color(dark, true, alpha));
 }
+
 void shell_hairline(ml_ctx *c, ml_rect r, double radius)
 {
-    ml_stroke_rounded(c, r, radius, 1.0, ml_rgba(255, 255, 255, 40));
+    const ml_ui_tokens *t = ml_ui_tokens_for_mode(MODE_BALANCED, true);
+    ml_stroke_rounded(c, r, radius > 0.0 ? fmin(radius, t->radius_lg) : t->radius_md,
+                      1.0, ml_ui_border_color(true, 40));
 }
 
 int shell_battery_pct(void)
@@ -101,7 +109,6 @@ int shell_wifi_level(void)
     while (line) {
         char *q = strchr(line, ':');
         if (q) {
-            /* last numeric column is link quality in dBm on most drivers */
             char *num = strrchr(line, ' ');
             if (num) level = atoi(num);
         }
@@ -112,8 +119,6 @@ int shell_wifi_level(void)
 }
 char *shell_wifi_ssid(void)
 {
-    /* iw/wpa_cli are not guaranteed present; read the AP from proc only when a
-     * wireless iface exists. Returns NULL otherwise. Never polls. */
     DIR *d = opendir("/proc/net/wireless");
     (void)d;
     return NULL;
@@ -172,8 +177,9 @@ void shell_menu_draw(shell_menu *m)
     ml_surface *s = m->win->surf;
     ml_ctx c;
     ml_ctx_init(&c, s, ml_rect_make(0, 0, s->w, s->h));
-    shell_panel_bg(&c, ml_rect_make(0, 0, s->w, s->h), 10, m->c->info.mode, true);
-    shell_hairline(&c, ml_rect_make(0, 0, s->w, s->h), 10);
+    const ml_ui_tokens *t = ml_ui_tokens_for_mode(m->c->info.mode, true);
+    shell_panel_bg(&c, ml_rect_make(0, 0, s->w, s->h), t->radius_lg, m->c->info.mode, true);
+    shell_hairline(&c, ml_rect_make(0, 0, s->w, s->h), t->radius_lg);
     ml_font *f = ml_font_get("mica-sans");
     for (int i = 0; i < m->n; i++) {
         int y = 6 + i * ROW_H;
@@ -182,13 +188,13 @@ void shell_menu_draw(shell_menu *m)
             continue;
         }
         if (i == m->hover)
-            ml_fill_rounded(&c, ml_rect_make(5, y, s->w - 10, ROW_H - 2), 6, ml_rgba(88, 128, 240, 220));
+            ml_fill_rounded(&c, ml_rect_make(5, y, s->w - 10, ROW_H - 2), t->radius_sm, ml_rgba(88, 128, 240, 220));
         int x = 14;
         if (m->items[i].icon) {
-            ml_icon_draw(&c, m->items[i].icon, ml_rect_make(x, y + 5, 16, 16), ml_rgba(235, 240, 250, 235));
+            ml_icon_draw(&c, m->items[i].icon, ml_rect_make(x, y + 5, 16, 16), ml_ui_text_color(true, false, 235));
             x += 24;
         }
-        ml_draw_text(&c, f, x, y + 18, m->items[i].label, 13, ml_rgba(235, 240, 250, 240));
+        ml_draw_text(&c, f, x, y + 18, m->items[i].label, 13, ml_ui_text_color(true, false, 240));
         if (m->items[i].checked)
             ml_draw_text(&c, f, s->w - 24, y + 18, "✓", 13, ml_rgba(160, 200, 255, 250));
     }
