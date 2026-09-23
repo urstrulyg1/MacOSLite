@@ -23,12 +23,21 @@ while read -r pat; do
     # Entries are canonical runtime paths. Resolve them first against the repo,
     # then against out/ for binaries produced by the normal build.
     for f in $pat; do
-        src="$f"
-        [ -e "$src" ] || case "$src" in
-            /usr/bin/*) src="out/$(basename "$src")" ;;
-            /sbin/*) src="out/$(basename "$src")" ;;
-        esac
-        [ -e "$src" ] || continue
+        src=""
+        for candidate in \
+            "out/$(basename "$f")" \
+            "rootfs$f" \
+            "rootfs/${f#/}" \
+            "${f#/}" \
+            "recovery/$(basename "$f")" \
+            "drivers/catalog/$(basename "$f")" \
+            "$f"; do
+            if [ -e "$candidate" ]; then
+                src="$candidate"
+                break
+            fi
+        done
+        [ -n "$src" ] || continue
         found=1
         d="$W/$(dirname "$f")"
         mkdir -p "$d"
