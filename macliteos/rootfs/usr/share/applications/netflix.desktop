@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Netflix
+Comment=Stream movies and TV shows on Netflix
+Exec=maclite-browser --app=https://www.netflix.com
+Icon=netflix
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Network;Video;

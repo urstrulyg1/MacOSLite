@@ -3,12 +3,14 @@
 /sbin/switch_root
 /usr/bin/mica-comp      # compositor + session supervisor (starts the desktop)
 /usr/bin/mica-shell     # panel/dock/desktop roles
+/usr/bin/g1os-splash    # G1OS native boot animation (JeevanOS -> G1OS)
 /lib/firmware/b43/*     # BCM43224 firmware (unfortunately large; see ROADMAP)
 /lib/modules/*/kernel/drivers/gpu/drm/radeon/radeon.ko
 /lib/modules/*/kernel/drivers/net/ethernet/broadcom/tg3.ko
 /lib/modules/*/kernel/drivers/net/wireless/b43/b43.ko
 /lib/modules/*/kernel/sound/snd-hda-intel.ko
 /etc/maca-lite/mode     # default performance mode (beautiful|balanced|performance)
+/etc/modprobe.d/maclite-apple.conf # Apple keyboard and ALC889 sound quirks
 # v0.2 hardening: the diagnostics are initramfs-resident so a machine that never
 # reaches the session can still be inspected (they are ~10-40 kB each).
 /usr/bin/maclite-hardware
@@ -23,6 +25,9 @@
 /usr/bin/maclite-power
 /usr/bin/maclite-cpu
 /usr/bin/maclite-drivers
+/usr/bin/maclite-fan
+/usr/bin/maclite-browser
+/usr/bin/maclite-video
 /usr/bin/maclite-gpu-benchmark
 /usr/share/maca-lite/catalog/maclite-offline.cat   # what this image ships and why
 # recovery path referenced by the cmdline (rd.maclite=recovery)

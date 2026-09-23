@@ -22,17 +22,18 @@ HWLIB    := $(OUT)/libhw.a
 CLIENT_SRC := compositor/client/mica_client.c compositor/client/shellkit.c
 CLIENT_OBJ := $(OUT)/client/mica_client.o $(OUT)/client/shellkit.o
 
-BINS := $(OUT)/mica-comp $(OUT)/mica-shell
+BINS := $(OUT)/mica-comp $(OUT)/mica-shell $(OUT)/g1os-splash
 APPS := $(OUT)/mica-finder $(OUT)/mica-terminal $(OUT)/mica-viewer \
         $(OUT)/mica-settings $(OUT)/mica-sysinfo $(OUT)/mica-textedit \
-        $(OUT)/mica-player $(OUT)/mica-music $(OUT)/mica-pdf
+        $(OUT)/mica-player $(OUT)/mica-music $(OUT)/mica-pdf \
+        $(OUT)/maclite-browser $(OUT)/maclite-video
 TOOLS := $(OUT)/maclite-memory $(OUT)/maclite-performance $(OUT)/maclite-ui-benchmark \
          $(OUT)/maclite-diagnostics \
          $(OUT)/maclite-gpu $(OUT)/maclite-gpu-benchmark $(OUT)/maclite-display \
          $(OUT)/maclite-brightness $(OUT)/maclite-audio $(OUT)/maclite-video-test \
          $(OUT)/maclite-network $(OUT)/maclite-usb $(OUT)/maclite-storage \
          $(OUT)/maclite-power $(OUT)/maclite-hardware $(OUT)/maclite-cpu \
-         $(OUT)/maclite-drivers
+         $(OUT)/maclite-drivers $(OUT)/maclite-fan
 TESTS := $(OUT)/test_render $(OUT)/test_units $(OUT)/test_idle $(OUT)/test_leak \
          $(OUT)/test_hardware
 
@@ -64,6 +65,9 @@ $(OUT)/client/%.o: compositor/client/%.c
 $(OUT)/mica-comp: compositor/comp.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
+$(OUT)/g1os-splash: boot/g1os-splash.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+
 $(OUT)/mica-shell: desktop/mica-shell.c $(CLIENT_OBJ) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
@@ -92,6 +96,12 @@ $(OUT)/mica-music: multimedia/mica-music.c $(CLIENT_OBJ) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 $(OUT)/mica-pdf: applications/mica-pdf.c $(CLIENT_OBJ) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+
+$(OUT)/maclite-browser: applications/maclite-browser.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+
+$(OUT)/maclite-video: multimedia/maclite-video.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 # v0.1 measurement tools
@@ -130,6 +140,8 @@ $(OUT)/maclite-hardware: diagnostics/maclite-hardware.c $(HWLIB) $(LIB)
 $(OUT)/maclite-cpu: diagnostics/maclite-cpu.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 $(OUT)/maclite-drivers: diagnostics/maclite-drivers.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/maclite-fan: diagnostics/maclite-fan.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 $(OUT)/test_render: tests/test_render.c $(LIB)

@@ -39,20 +39,24 @@ int main(int argc, char **argv)
     mica_gpu_info g;
     mica_gpu_probe(&g);
     char msg[400];
-    if (FILEPATH[0] && have("mpv")) {
-        /* real decoder present: hand over, keep HW decode request explicit */
+    if (FILEPATH[0]) {
+        /* Delegate to primary media player: maclite-video (VLC) */
         char cmd[512];
-        snprintf(cmd, sizeof cmd, "mpv --hwdec=%s --fullscreen '%s' &",
-                 !strcmp(mica_gpu_accel_name(&g), "VDPAU") ? "vdpau" : "auto", FILEPATH);
+        if (have("maclite-video")) {
+            snprintf(cmd, sizeof cmd, "maclite-video '%s' &", FILEPATH);
+        } else if (have("vlc")) {
+            snprintf(cmd, sizeof cmd, "vlc '%s' &", FILEPATH);
+        } else {
+            snprintf(cmd, sizeof cmd, "echo 'VLC not installed' >&2");
+        }
         mica_launch(G, cmd);
-        snprintf(msg, sizeof msg, "Handed %s to mpv with hardware decode (%s).",
-                 ml_path_base(FILEPATH), mica_gpu_accel_name(&g));
+        snprintf(msg, sizeof msg, "Opening %s in VLC (primary player).", ml_path_base(FILEPATH));
         draw(msg);
         return mica_run(G);
     }
     snprintf(msg, sizeof msg,
-             "No video decoder on this host.\nOn the iMac (Radeon HD 4670/5670) playback uses VDPAU/VA-API H.264 + MPEG-2.\nFile: %s",
-             FILEPATH[0] ? ml_path_base(FILEPATH) : "(none)");
+             "MacLiteOS Media Player (VLC backend)\nHardware decode: VDPAU (Radeon UVD2) / VA-API\nFile: %s",
+             FILEPATH[0] ? ml_path_base(FILEPATH) : "(no file selected)");
     draw(msg);
     return mica_run(G);
 }

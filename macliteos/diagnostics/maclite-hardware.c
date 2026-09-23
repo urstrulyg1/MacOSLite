@@ -242,14 +242,26 @@ int main(int argc, char **argv)
     hw_report_add(&rep, "GPU", "Detection", true,
                   g.present ? HW_PASS : HW_UNSUPPORTED, "%s",
                   g.present ? g.device : "no PCI display controller here");
+    hw_report_add(&rep, "GPU", "PCI ID", false,
+                  g.present ? HW_PASS : HW_UNSUPPORTED,
+                  g.present ? "%04x:%04x at %s" : "none",
+                  g.vendor_id, g.device_id, g.pci_addr);
+    hw_report_add(&rep, "GPU", "Kernel Driver", false,
+                  g.driver[0] ? HW_PASS : (g.present ? HW_FAIL : HW_UNSUPPORTED),
+                  "%s", g.driver[0] ? g.driver : "no driver bound");
     hw_report_add(&rep, "GPU", "DRM/KMS", true,
                   (g.has_kms && drm.any) ? HW_PASS : (drm.any ? HW_FAIL : HW_UNSUPPORTED),
                   "%s", g.card_node[0] ? g.card_node : "no /dev/dri/card*");
     gl_probe_result glr = mica_gl_probe(&g);
+    hw_report_add(&rep, "GPU", "OpenGL Version", false,
+                  g.gl_probed ? HW_PASS : HW_NOT_TESTED,
+                  "%s", g.gl_probed && g.gl_version[0] ? g.gl_version : "not verified");
     hw_report_add(&rep, "GPU", "Hardware Rendering", true,
                   glr == GL_HW ? HW_PASS : glr == GL_SW ? HW_FAIL
                   : glr == GL_NONE ? HW_UNSUPPORTED : HW_NOT_TESTED,
                   "%s", g.gl_probed ? g.gl_renderer : "no GL query possible on this host");
+    hw_report_add(&rep, "GPU", "Vulkan", false, HW_UNSUPPORTED,
+                  "TeraScale architecture predates Vulkan 1.0 (RADV requires GCN 1.0+)");
 
     /* ---- Display ---- */
     bool disp_ok = drm.primary >= 0;
@@ -273,6 +285,30 @@ int main(int argc, char **argv)
                   : b ? HW_FAIL : HW_UNSUPPORTED,
                   "%s", b ? (b->suspect ? b->note : bl.mechanism) : "no backlight device");
 
+    /* External display (Mini DisplayPort / external connector) */
+    {
+        int ext_idx = -1;
+        for (int i = 0; i < drm.n; i++) {
+            if (i == drm.primary) continue;
+            if (strstr(drm.c[i].connector, "DP") || strstr(drm.c[i].connector, "HDMI") ||
+                strstr(drm.c[i].connector, "DVI") || strstr(drm.c[i].connector, "VGA")) {
+                ext_idx = i;
+                break;
+            }
+        }
+        if (ext_idx >= 0) {
+            bool ext_conn = drm.c[ext_idx].connected;
+            hw_report_add(&rep, "Display", "External Display", false,
+                          ext_conn ? HW_PASS : HW_NOT_TESTED,
+                          "%s: %s%s", drm.c[ext_idx].connector, drm.c[ext_idx].status,
+                          ext_conn ? "" : " (no external monitor attached)");
+        } else {
+            hw_report_add(&rep, "Display", "External Display", false,
+                          drm.kms ? HW_NOT_TESTED : HW_UNSUPPORTED,
+                          drm.kms ? "no secondary display connector detected" : "no KMS display controller");
+        }
+    }
+
     /* ---- Audio ---- */
     ml_aud_state as;
     ml_audio_probe(&as);
@@ -289,6 +325,11 @@ int main(int argc, char **argv)
     hw_report_add(&rep, "Audio", "Mute", true,
                   aud.have_mute ? HW_PASS : (aud.readable ? HW_FAIL : HW_NOT_TESTED),
                   "%s", aud.why);
+    bool has_rec = card && card->can_record;
+    hw_report_add(&rep, "Audio", "Microphone", false,
+                  has_rec ? HW_NOT_TESTED : (as.any ? HW_UNSUPPORTED : HW_NOT_TESTED),
+                  has_rec ? "capture PCM stream available; no live recording was performed here"
+                          : "no audio capture stream detected");
 
     /* ---- Network ---- */
     mica_net_state net;
@@ -516,6 +557,20 @@ int main(int argc, char **argv)
                            : "blocked: no node");
     }
 
+    /* ---- Bluetooth ---- */
+    {
+        bool bt_dev = dhw.bt_chipset[0] != 0;
+        bool bt_sys = ml_is_dir(hw_sys("class/bluetooth"));
+        hw_report_add(&rep, "Bluetooth", "Controller", false,
+                      bt_dev ? HW_PASS : bt_sys ? HW_PARTIAL : HW_UNSUPPORTED,
+                      bt_dev ? "%.40s%s%.20s" : bt_sys ? "bluetooth class in sysfs (no driver catalog match)" : "no Bluetooth controller detected",
+                      dhw.bt_chipset, dhw.bt_driver[0] ? ", driver " : "", dhw.bt_driver);
+        hw_report_add(&rep, "Bluetooth", "Pairing & Transfer", false,
+                      (bt_dev || bt_sys) ? HW_NOT_TESTED : HW_UNSUPPORTED,
+                      (bt_dev || bt_sys) ? "no Bluetooth device paired or transferred here"
+                                         : "blocked: no Bluetooth controller");
+    }
+
     /* ---- Multimedia ---- */
     ml_hwdec_state hd;
     ml_hwdec_probe(&hd);
@@ -525,6 +580,14 @@ int main(int argc, char **argv)
     hw_report_add(&rep, "Multimedia", "H.264 HW Decode", true,
                   h264 == ML_CAP_HW ? HW_PASS : h264 == ML_CAP_UNKNOWN ? HW_NOT_TESTED : HW_UNSUPPORTED,
                   "%s", cap_detail);
+    hw_report_add(&rep, "Multimedia", "VA-API", false,
+                  hd.vaapi_lib ? (hd.probed ? HW_PASS : HW_NOT_TESTED) : HW_NOT_TESTED,
+                  "%s", hd.vaapi_lib ? (hd.probed ? hd.detail : "libva present; no runtime query ran")
+                                     : "libva not present in test environment");
+    hw_report_add(&rep, "Multimedia", "VDPAU", false,
+                  hd.vdpau_lib ? (hd.probed ? HW_PASS : HW_NOT_TESTED) : HW_NOT_TESTED,
+                  "%s", hd.vdpau_lib ? (hd.probed ? hd.detail : "libvdpau present; no runtime query ran")
+                                     : "libvdpau not present in test environment");
     if (full) {
         ml_vtest vt;
         int rc = 0;

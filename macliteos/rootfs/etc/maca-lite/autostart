@@ -4,4 +4,6 @@
 # hardware (KMS when a DRM card is bound, fbdev next, headless last) and the
 # performance mode picked from real capability. Nothing else is started by
 # default — no indexer, no telemetry, no cloud agent, no updater (spec §25).
+# G1OS native boot animation (JeevanOS -> G1OS)
+[ -x /usr/bin/g1os-splash ] && /usr/bin/g1os-splash --backend auto --watch /run/g1os-ready &
 /usr/bin/mica-comp --session --backend auto

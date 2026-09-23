@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Media Player
+GenericName=Video & Audio Player
+Comment=Hardware accelerated media player for iMac
+Exec=maclite-video %U
+Icon=video-player
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Player;
+MimeType=video/mp4;video/x-matroska;video/quicktime;video/webm;audio/mpeg;audio/x-wav;audio/flac;

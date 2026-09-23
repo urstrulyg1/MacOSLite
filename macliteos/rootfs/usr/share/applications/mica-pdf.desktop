@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Preview
+GenericName=PDF & Document Viewer
+Comment=Fast, native PDF and document viewer
+Exec=mica-pdf %U
+Icon=application-pdf
+Terminal=false
+StartupNotify=true
+Categories=Office;Viewer;
+MimeType=application/pdf;application/x-pdf;

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=YouTube
+Comment=Watch videos, music, and streams on YouTube
+Exec=maclite-browser --app=https://www.youtube.com
+Icon=youtube
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Network;Video;

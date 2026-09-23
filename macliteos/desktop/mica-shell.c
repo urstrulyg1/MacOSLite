@@ -415,8 +415,8 @@ static void dock_event(mica_client *c, const msg_event *e)
 
 static int run_dock(void)
 {
-    const char *order[] = { "finder", "terminal", "settings", "sysinfo", "imageview",
-                            "player", "music", "pdf", "textedit", "diagnostics" };
+    const char *order[] = { "finder", "browser", "vlc", "terminal", "settings", "sysinfo",
+                            "imageview", "pdf", "textedit", "diagnostics" };
     for (size_t i = 0; i < ML_ARRAY_SIZE(order); i++) D.apps[D.n++] = mica_app_find(order[i]);
     int w = 12 * (DOCK_BASE + 6) + 96, h = DOCK_BASE + 30 + 14;
     D.win = mica_win_new(G, w, h, "", "dock", WIN_F_BORDERLESS | WIN_F_TOPMOST | WIN_F_NO_FOCUS);

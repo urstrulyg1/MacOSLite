@@ -14,16 +14,23 @@ static char *ml_path_join_tmp2(const char *a, const char *b)
 }
 
 const mica_app_def mica_apps[] = {
-    { "finder",    "Files",        "app-files",     "mica-finder" },
-    { "terminal",  "Terminal",     "app-terminal",  "mica-terminal" },
-    { "settings",  "Settings",     "app-settings",  "mica-settings" },
-    { "sysinfo",   "System Info",  "app-sysinfo",   "mica-sysinfo" },
-    { "imageview", "Image Viewer", "app-image",     "mica-viewer --image" },
-    { "player",    "Media Player", "app-video",     "mica-player" },
-    { "music",     "Music",        "app-music",     "mica-player --audio" },
-    { "pdf",       "PDF Viewer",   "app-pdf",       "mica-viewer --pdf" },
-    { "textedit",  "Text Editor",  "app-textedit",  "mica-textedit" },
-    { "diagnostics","Diagnostics", "app-diagnostics","mica-diagnostics --gui" },
+    { "finder",     "Files",            "app-files",        "mica-finder" },
+    { "terminal",   "Terminal",         "app-terminal",     "mica-terminal" },
+    { "browser",    "Web Browser",      "app-browser",      "maclite-browser" },
+    { "vlc",        "VLC Media Player", "app-video",        "maclite-video" },
+    { "youtube",    "YouTube",          "app-youtube",      "maclite-browser --app=https://www.youtube.com" },
+    { "netflix",    "Netflix",          "app-netflix",      "maclite-browser --app=https://www.netflix.com" },
+    { "primevideo", "Prime Video",      "app-primevideo",   "maclite-browser --app=https://www.primevideo.com" },
+    { "disneyplus", "Disney+",          "app-disneyplus",   "maclite-browser --app=https://www.disneyplus.com" },
+    { "imageview",  "Image Viewer",     "app-image",        "mica-viewer --image" },
+    { "pdf",        "PDF Viewer",       "app-pdf",          "mica-viewer --pdf" },
+    { "camera",     "Camera",           "app-camera",       "maclite-hardware" },
+    { "settings",   "Settings",         "app-settings",     "mica-settings" },
+    { "sysinfo",    "System Info",      "app-sysinfo",      "mica-sysinfo" },
+    { "player",     "Media Player",     "app-video",        "maclite-video" },
+    { "music",      "Music",            "app-music",        "mica-music" },
+    { "textedit",   "Text Editor",      "app-textedit",     "mica-textedit" },
+    { "diagnostics","Diagnostics",      "app-diagnostics",  "mica-diagnostics --gui" },
 };
 const size_t mica_apps_n = sizeof mica_apps / sizeof mica_apps[0];
 

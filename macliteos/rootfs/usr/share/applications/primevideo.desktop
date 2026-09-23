@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Amazon Prime Video
+Comment=Watch movies, TV, and live sports on Prime Video
+Exec=maclite-browser --app=https://www.amazon.com/gp/video/storefront
+Icon=prime-video
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Network;Video;

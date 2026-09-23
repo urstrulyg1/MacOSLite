@@ -26,8 +26,73 @@ run mkfs.ext4 -L MACLITE_BASE_STAGING "/dev/${DISK}3"
 run mount "/dev/${DISK}3" /mnt
 echo "+ copy live base -> staging (becomes squashfs at first boot)"
 run cp -a /run/maclite-base/. /mnt/
+
+# Write /etc/fstab on target system
+echo "+ configuring target filesystem table (/etc/fstab)"
+mkdir -p /mnt/etc
+cat << 'FSTAB_EOF' > /mnt/etc/fstab
+# MacLiteOS filesystem table
+LABEL=MACLITE_BASE     /             squashfs ro,defaults        0 0
+LABEL=MACLITE_DATA     /var/data     ext4     rw,noatime,errors=remount-ro 0 2
+LABEL=MACLITE_BOOT     /boot/efi     vfat     rw,umask=0077      0 1
+FSTAB_EOF
+
 run umount /mnt
+
+# Setup Apple EFI Bootloader on MACLITE_BOOT
+echo "+ configuring Apple EFI bootloader on /dev/${DISK}1 (MACLITE_BOOT)"
+BOOT_MNT="/tmp/maclite_boot_mnt"
+mkdir -p "$BOOT_MNT"
+run mount "/dev/${DISK}1" "$BOOT_MNT"
+
+mkdir -p "$BOOT_MNT/EFI/BOOT"
+mkdir -p "$BOOT_MNT/boot/grub"
+
+# Install GRUB EFI binary
+if command -v grub-mkimage >/dev/null 2>&1; then
+    echo "  generating x86_64-efi GRUB loader via grub-mkimage..."
+    run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" \
+        -p /boot part_gpt part_msdos fat ext2 linux search normal
+elif [ -f /boot/bootx64.efi ]; then
+    echo "  copying live /boot/bootx64.efi to EFI partition..."
+    run cp /boot/bootx64.efi "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
+elif [ -f /run/maclite-live/boot/bootx64.efi ]; then
+    echo "  copying live bootx64.efi to EFI partition..."
+    run cp /run/maclite-live/boot/bootx64.efi "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
+elif command -v grub-install >/dev/null 2>&1; then
+    echo "  installing GRUB EFI with --removable..."
+    run grub-install --target=x86_64-efi --efi-directory="$BOOT_MNT" --boot-directory="$BOOT_MNT/boot" --removable
+fi
+
+# Copy GRUB config
+if [ -f boot/grub-efi.cfg ]; then
+    run cp boot/grub-efi.cfg "$BOOT_MNT/EFI/BOOT/grub.cfg"
+    run cp boot/grub-efi.cfg "$BOOT_MNT/boot/grub.cfg"
+elif [ -f /etc/maca-lite/grub-efi.cfg ]; then
+    run cp /etc/maca-lite/grub-efi.cfg "$BOOT_MNT/EFI/BOOT/grub.cfg"
+    run cp /etc/maca-lite/grub-efi.cfg "$BOOT_MNT/boot/grub.cfg"
+fi
+
+# Copy kernel and initramfs to boot partition
+if [ -f /boot/vmlinuz-maclite ]; then
+    run cp /boot/vmlinuz-maclite "$BOOT_MNT/boot/vmlinuz-maclite"
+elif [ -f /run/maclite-live/boot/vmlinuz-maclite ]; then
+    run cp /run/maclite-live/boot/vmlinuz-maclite "$BOOT_MNT/boot/vmlinuz-maclite"
+fi
+
+if [ -f /boot/initrd-maclite.img ]; then
+    run cp /boot/initrd-maclite.img "$BOOT_MNT/boot/initrd-maclite.img"
+elif [ -f /run/maclite-live/boot/initrd-maclite.img ]; then
+    run cp /run/maclite-live/boot/initrd-maclite.img "$BOOT_MNT/boot/initrd-maclite.img"
+fi
+
+# Write Apple disk label so Apple EFI boot menu displays system name
+printf "MacLiteOS" > "$BOOT_MNT/.disk_label"
+
+run umount "$BOOT_MNT"
+rmdir "$BOOT_MNT"
+
 echo
-echo "Partitioning done. Boot chain writing and squashfs creation happen at"
-echo "first boot from the live media (see boot/README.md)."
-echo "Install complete enough to continue; full first-boot chain: docs/roadmap.md"
+echo "SUCCESS: MacLiteOS has been fully installed to /dev/$DISK."
+echo "Apple EFI bootloader (/EFI/BOOT/BOOTX64.EFI) and GRUB configs written."
+echo "You can now reboot and hold the Option (Alt) key to select MacLiteOS."

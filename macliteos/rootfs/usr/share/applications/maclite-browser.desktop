@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Web Browser
+GenericName=Web Browser
+Comment=Fast, private web browser with hardware acceleration
+Exec=maclite-browser %U
+Icon=web-browser
+Terminal=false
+StartupNotify=true
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

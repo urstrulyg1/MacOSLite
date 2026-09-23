@@ -33,7 +33,9 @@ static void play(void)
     if (CUR >= NT) return;
     pid_t pid = fork();
     if (pid == 0) {
-        execl("/bin/sh", "sh", "-c", "aplay -q \"$0\" || ogg123 -q \"$0\" 2>/dev/null", TRACKS[CUR], (char *)NULL);
+        execl("/bin/sh", "sh", "-c",
+              "cvlc --play-and-exit -q \"$0\" 2>/dev/null || aplay -q \"$0\" 2>/dev/null || ogg123 -q \"$0\" 2>/dev/null",
+              TRACKS[CUR], (char *)NULL);
         _exit(127);
     }
     PLAYER = pid;

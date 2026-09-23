@@ -53,6 +53,8 @@ int main(int argc, char **argv)
     } else {
         hw_report_add(&rep, "GPU", "Detection", true, HW_PASS, "%s [%s] at %s",
                       g.device, g.driver[0] ? g.driver : "no driver bound", g.pci_addr);
+        hw_report_add(&rep, "GPU", "PCI ID", false, HW_PASS, "%04x:%04x at %s",
+                      g.vendor_id, g.device_id, g.pci_addr);
         hw_report_add(&rep, "GPU", "Driver bound", true,
                       g.driver[0] ? HW_PASS : HW_FAIL,
                       g.driver[0] ? "%s (from the PCI device's driver link)" :
@@ -85,6 +87,9 @@ int main(int argc, char **argv)
                   glr == GL_NONE ? "no libGL/libEGL on this host"
                                  : "GL stack present but no context could be created here",
                   g.gl_version, g.gl_renderer, g.gl_source);
+    hw_report_add(&rep, "Acceleration", "OpenGL version", false,
+                  g.gl_probed ? HW_PASS : HW_NOT_TESTED,
+                  "%s", g.gl_probed && g.gl_version[0] ? g.gl_version : "not verified");
     hw_report_add(&rep, "Acceleration", "Hardware Rendering", true,
                   glr == GL_HW ? HW_PASS : glr == GL_SW ? HW_FAIL
                   : glr == GL_NONE ? HW_UNSUPPORTED : HW_NOT_TESTED,
@@ -92,6 +97,8 @@ int main(int argc, char **argv)
                   g.gl_renderer);
     hw_report_add(&rep, "Acceleration", "Software Rendering Fallback", false, HW_PASS,
                   "always available: damage-tracking CPU raster (measured by maclite-gpu-benchmark)");
+    hw_report_add(&rep, "Acceleration", "Vulkan", false, HW_UNSUPPORTED,
+                  "TeraScale architecture predates Vulkan 1.0 (RADV requires GCN 1.0+)");
 
     /* ---- video acceleration (spec §3: the report has a Video section) --- */
     ml_hwdec_state hd;
@@ -115,6 +122,14 @@ int main(int argc, char **argv)
                   hd.vdpau_lib || hd.vaapi_lib
                       ? (hd.probed ? hd.detail : "a decode client library is installed; no runtime query ran")
                       : "no VDPAU/VA-API client library on this machine");
+    hw_report_add(&rep, "Video", "VA-API", false,
+                  hd.vaapi_lib ? (hd.probed ? HW_PASS : HW_NOT_TESTED) : HW_NOT_TESTED,
+                  "%s", hd.vaapi_lib ? (hd.probed ? hd.detail : "libva present; no runtime query ran")
+                                     : "libva not present in test environment");
+    hw_report_add(&rep, "Video", "VDPAU", false,
+                  hd.vdpau_lib ? (hd.probed ? HW_PASS : HW_NOT_TESTED) : HW_NOT_TESTED,
+                  "%s", hd.vdpau_lib ? (hd.probed ? hd.detail : "libvdpau present; no runtime query ran")
+                                     : "libvdpau not present in test environment");
     hw_report_add(&rep, "Video", "1080p playback", false, HW_NOT_TESTED,
                   "measured by maclite-video-test h264 1920x1080 --perf, not from a datasheet");
 

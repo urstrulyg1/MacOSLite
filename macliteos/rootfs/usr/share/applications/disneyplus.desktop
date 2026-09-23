@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Disney+
+Comment=Stream Disney, Pixar, Marvel, Star Wars, and National Geographic
+Exec=maclite-browser --app=https://www.disneyplus.com
+Icon=disneyplus
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Network;Video;

@@ -61,32 +61,53 @@ printed as `SKIP (NOT TESTED)`, never as PASS.
 7. The audio and network verdicts were implemented twice (tool + report) and
    drifted; both now come from `ml_audio_status_get()` / `ml_net_link_status()`.
 
-## Real-iMac acceptance procedure (to be executed on hardware)
+## Real-iMac Acceptance Procedure & Zero-Fabrication Standard
 
-    sh scripts/hardware-check.sh --quick     # ~30 s: identity, GPU, display, audio, net, USB, storage
-    sh scripts/hardware-check.sh             # full: adds the decode round trip and benchmarks
+**Policy:** ZERO FAKE DATA. ZERO SIMULATED PASS RESULTS. ZERO ASSUMED HARDWARE RESULTS.
+Expected iMac Mid-2010 specs are a compatibility reference only; actual results must derive exclusively from runtime detection on the booted machine.
 
-Answer the human rows honestly; `s` = skip records **NOT TESTED** (not PASS).
-The script writes `out/hw-report-<date>.txt` and `.tsv`, tagged `IMAC` when the
-DMI vendor is Apple, `HOST` otherwise.
+### Execution on Target Machine:
+```sh
+sh scripts/hardware-check.sh --quick     # ~30 s: runtime identity, GPU, display, audio, net, USB, storage
+sh scripts/hardware-check.sh             # full: adds video decode round trip, memory, benchmarks
+```
 
-1. `./maclite-hardware` — every row must be PASS/UNSUPPORTED with evidence; a
-   `NOT TESTED` in GPU/Display/Brightness/Storage is the thing to fix next.
-2. `./maclite-gpu`; `./maclite-gpu-benchmark --fullscreen` while a video plays.
-3. `./maclite-display --modes`, then `--set 1920x1080`.
-4. `./maclite-brightness get|down|up` — value must change **and** the panel must
-   visibly change; `maclite-brightness list` must name `radeon_bl0`, and must flag
-   `acpi_video0` as suspect unless `acpi_backlight=native` is on the cmdline.
-5. `./maclite-audio test` (real tone) and `./maclite-audio volume 40`.
-6. `./maclite-video-test` — H.264 and MPEG-2 must report HW, SW or explicitly
-   NOT TESTED with a reason; then `--perf --seek 30` for A/V skew.
-7. `./maclite-network` (tg3 up, address, DNS, TCP) and b43 association.
-8. `./maclite-usb`, `./maclite-storage --bench ~`, `./maclite-power status`.
-9. `maclite-memory` and `maclite-performance 5000` at idle → RAM 150-300 MB
-   (hard limit 500 MB), CPU 0-2 %.
-10. Suspend is **expected to fail** on iMac11,x (panel does not re-light):
-    `maclite-power --allow-suspend` records the attempt; do not report it as PASS.
+Answer the human confirmation prompts honestly (`y` = confirmed, `n` = failed, `skip` = unconfirmed).
+Any unconfirmed check is recorded as **NOT TESTED**, never PASS.
+The script writes:
+- `out/hw-report-<date>.txt` (human-readable comprehensive report)
+- `out/hw-report-<date>.tsv` (raw test rows with exit codes)
+- `out/hw-matrix-<date>.tsv` (the 18-component hardware validation matrix)
 
-Each result gets a dated row here, tagged IMAC, with the command and the raw
-output. Until then every hardware claim in this tree stays labelled
-"designed for", not "measured".
+Tagged **`IMAC`** (`Real iMac hardware: YES`) only when DMI vendor is Apple and machine is not virtualized.
+
+### 18-Component Hardware Validation Matrix:
+The acceptance runner populates the 18-component matrix:
+1. **CPU:** Model, family, stepping, core topology, scaling driver, thermal zone (`maclite-cpu`).
+2. **RAM:** Total capacity, available capacity, allocation tests.
+3. **GPU:** Exact PCI ID (`1002:9488` or `1002:68d8`), bound driver (`radeon`), render node (`maclite-gpu`).
+4. **KMS:** Card node `/dev/dri/card*`, connector enumeration, page flips (`maclite-display`).
+5. **OpenGL:** Query real Mesa/Gallium r600 GL renderer string (`maclite-gpu`).
+6. **Brightness:** Readback verification of `radeon_bl0`; verify `acpi_video0` is rejected if suspect.
+7. **Audio:** ALSA PCM playback node on ALC889, mixer volume/mute ioctls (`maclite-audio`).
+8. **Microphone:** Audio capture PCM stream presence and recording validation.
+9. **Ethernet:** Broadcom BCM5764M link state, DHCP lease, traffic via `tg3`.
+10. **Wi-Fi:** Broadcom BCM43224 association and ping via `b43`.
+11. **Bluetooth:** Apple BCM2046B1 controller inquiry and pairing.
+12. **USB:** Intel 5 Series root hubs, keyboard, mouse, flash drive hotplug.
+13. **SD reader:** Broadcom PCIe SDXC reader mount and sector read/write.
+14. **FireWire:** Agere FW643 controller detection and peripheral bus probe.
+15. **SATA/storage:** Read/write throughput on internal disk (`maclite-storage --bench`).
+16. **Optical drive:** GA32N SuperDrive detection and unpolled handle check.
+17. **iSight:** `/dev/video0` video4linux capture node and frame capture.
+18. **Video decode:** UVD2 H.264/MPEG-2 hardware decode (`maclite-video-test --perf`).
+19. **External display:** Mini DisplayPort hotplug and mode negotiation.
+
+### Multimedia & Streaming Stack Verification (Spec §20):
+- **Single Browser & Player:** `maclite-browser --diagnostics` and `maclite-video --diagnostics`.
+- **Widevine DRM:** Probes for `libwidevinecdm.so` across known locations; checks initialization status.
+- **Zero Background Daemons:** Verifies that no updater daemons, media indexers, or adblock proxy daemons are running.
+- **OTT Streaming Shortcuts:** Verifies lightweight PWA launcher shortcuts (`--app=<url>`) for YouTube, Netflix, Prime Video, and Disney+.
+
+Any subsystem without physical test confirmation remains **`NOT TESTED`**.
+No row may be copied into a PASS column without the auditable raw command log.
