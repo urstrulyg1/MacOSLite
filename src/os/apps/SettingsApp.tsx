@@ -2,8 +2,8 @@ import { useState } from "react";
 import {
   Palette, Dock as DockIcon, Gauge, Volume2, Wifi, Globe, HardDrive,
   DownloadCloud, CircleUserRound, ShieldCheck, Info, Search, BatteryCharging,
-  Keyboard, Cpu, Sliders, Eye, Sun, Sparkles, Check,
-} from "lucide-react";
+  Keyboard, Cpu, Eye, Check,
+} from "../icons/glyphs";
 import { useOS, type VisualMode } from "../os";
 import { G1SettingsBadge } from "../icons/IconSystem";
 
@@ -214,6 +214,19 @@ function AppearancePanel() {
   const os = useOS();
   return (
     <>
+      <Card title="Appearance" sub="Light and dark share one icon family. Contrast only strengthens outlines.">
+        <div className="flex gap-2">
+          {(["light", "dark"] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => os.setAppearance(mode)}
+              className={`rounded-lg px-3 py-1.5 text-[12.5px] font-medium ${os.appearance === mode ? "bg-[var(--acc)] text-white" : "bg-black/5"}`}
+            >
+              {mode === "light" ? "Light" : "Dark"}
+            </button>
+          ))}
+        </div>
+      </Card>
       <Card title="Accent Color" sub="Applied system-wide as a single dynamic variable — zero repainting overhead.">
         <div className="flex gap-3 pt-1">
           {ACCENTS.map((a) => (
@@ -252,6 +265,13 @@ function DockPanel() {
       <Row label="Magnification"><Toggle on={d.mag} onChange={(v) => os.setDock({ mag: v })} /></Row>
       {d.mag && <Row label={`Strength — ${Math.round(d.magScale * 100)}%`}><Slider v={Math.round(d.magScale * 100)} min={10} max={100} onChange={(n) => os.setDock({ magScale: n / 100 })} /></Row>}
       <Row label="Automatically hide and show the Dock"><Toggle on={d.autohide} onChange={(v) => os.setDock({ autohide: v })} /></Row>
+      <Row label="Position">
+        <div className="flex gap-1">
+          {(["bottom", "left", "right"] as const).map((p) => (
+            <button key={p} onClick={() => os.setDock({ pos: p })} className={`rounded-md px-2 py-1 text-[11px] ${d.pos === p ? "bg-[var(--acc)] text-white" : "bg-black/5"}`}>{p}</button>
+          ))}
+        </div>
+      </Row>
     </Card>
   );
 }

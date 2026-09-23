@@ -1,23 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Search,
-  MousePointerClick,
-  Layers,
-  HardDrive,
-  Trash2,
-  AlertTriangle,
-  RotateCw,
-  Power,
-  RotateCcw,
-  LogOut,
-  FolderPlus,
-  Info,
-  Palette,
-  Check,
-} from "lucide-react";
-import { APPS, FS, OSProvider, useOS, type AppId } from "./os";
+import { Search, MousePointerClick, Layers, FolderPlus, Info, Palette } from "./icons/glyphs";
+import { APPS, OSProvider, useOS, type AppId } from "./os";
 import MenuBar, { LogoMark } from "./MenuBar";
-import Dock, { FinderFace } from "./Dock";
+import Dock from "./Dock";
 import { G1Icon } from "./icons/IconSystem";
 import WindowFrame from "./WindowFrame";
 import FinderApp from "./apps/FinderApp";
@@ -161,38 +146,92 @@ function Launchpad() {
 
 function Toasts() {
   const os = useOS();
-  const [gone, setGone] = useState<number[]>([]);
+  const [leaving, setLeaving] = useState<number[]>([]);
   const seen = useRef(new Set<number>());
 
   useEffect(() => {
-    const fresh = os.notes.filter((n) => !seen.current.has(n.id));
-    fresh.forEach((n) => {
+    os.notes.forEach((n) => {
+      if (seen.current.has(n.id)) return;
       seen.current.add(n.id);
-      setTimeout(() => setGone((g) => [...g, n.id]), 4300);
+      window.setTimeout(() => {
+        setLeaving((g) => (g.includes(n.id) ? g : [...g, n.id]));
+        window.setTimeout(() => os.dismissNote(n.id), 220);
+      }, 4200);
     });
-  }, [os.notes]);
+  }, [os.notes, os]);
 
-  const visible = os.notes.slice(-3).filter((n) => !gone.includes(n.id));
+  const dismiss = (id: number) => {
+    setLeaving((g) => (g.includes(id) ? g : [...g, id]));
+    window.setTimeout(() => os.dismissNote(id), 220);
+  };
+
   return (
-    <div className="pointer-events-none absolute right-3 top-9 z-[580] flex w-[320px] flex-col gap-2">
-      {visible.map((n) => (
+    <div className="note-stack pointer-events-none absolute right-3 top-10 z-[580]">
+      {os.notes.slice(-4).map((n) => (
         <button
           key={n.id}
-          className="glass note-in pointer-events-auto rounded-2xl bg-[rgba(250,250,253,0.92)] p-3 text-left text-black shadow-[0_14px_44px_rgba(10,15,40,0.3),0_0_0_0.5px_rgba(0,0,0,0.12)] border border-black/5"
-          onClick={() => setGone((g) => [...g, n.id])}
+          className={`note-card pointer-events-auto p-3 ${leaving.includes(n.id) ? "out" : "in"}`}
+          onClick={() => dismiss(n.id)}
         >
           <div className="flex items-start gap-2.5">
-            <LogoMark size={26} />
+            <G1Icon name={n.icon || "sysinfo"} size={28} />
             <div className="min-w-0">
               <div className="flex items-baseline justify-between gap-3">
                 <span className="text-[13px] font-semibold">{n.title}</span>
-                <span className="flex-none text-[10.5px] text-black/40">{n.time}</span>
+                <span className="flex-none text-[10.5px] opacity-45">{n.time}</span>
               </div>
-              <div className="mt-0.5 text-[12px] leading-snug text-black/65">{n.body}</div>
+              <div className="mt-0.5 text-[12px] leading-snug opacity-70">{n.body}</div>
             </div>
           </div>
         </button>
       ))}
+    </div>
+  );
+}
+
+function Hud() {
+  const os = useOS();
+  const [shown, setShown] = useState(os.hud);
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    if (os.hud) {
+      setLeaving(false);
+      setShown(os.hud);
+      return;
+    }
+    if (!shown) return;
+    setLeaving(true);
+    const t = window.setTimeout(() => setShown(null), 160);
+    return () => window.clearTimeout(t);
+  }, [os.hud, shown]);
+  if (!shown) return null;
+  const icon = shown.kind === "volume" ? "volume" : shown.kind === "keyboard" ? "keyboard" : shown.kind === "media" ? "play" : "brightness";
+  return (
+    <div className={`hud ${leaving ? "out" : ""}`} role="status">
+      <div className="flex items-center gap-2 text-[13px] font-medium">
+        <G1Icon name={icon} size={18} className="text-white" />
+        <span>{shown.label}</span>
+        <span className="ml-auto tabular-nums">{Math.round(shown.value)}</span>
+      </div>
+      <div className="hud-meter"><i style={{ width: `${shown.value}%` }} /></div>
+    </div>
+  );
+}
+
+function LockScreen() {
+  const os = useOS();
+  const [pw, setPw] = useState("");
+  if (!os.locked) return null;
+  const unlock = () => { os.setLocked(false); setPw(""); };
+  return (
+    <div className="lock">
+      <form className="lock-card" onSubmit={(e) => { e.preventDefault(); unlock(); }}>
+        <LogoMark size={64} />
+        <div className="mt-4 text-[20px] font-semibold">Jeevan</div>
+        <div className="mt-1 text-[12.5px] text-white/60">G1OS is locked. Press Enter to unlock.</div>
+        <input autoFocus type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Password" />
+        <button type="submit" className="mt-3 rounded-lg bg-white/15 px-4 py-1.5 text-[13px]">Unlock</button>
+      </form>
     </div>
   );
 }
@@ -215,17 +254,16 @@ function SystemDialogModal() {
   const handleConfirm = () => {
     if (os.powerState === "shutdown_dialog") {
       os.setPowerState("shutting_down");
-      setTimeout(() => {
-        window.location.reload();
-      }, 2500);
+      window.setTimeout(() => {
+        os.setPowerState("running");
+        os.setLocked(true);
+      }, 1400);
     } else if (os.powerState === "restart_dialog") {
       os.setPowerState("restarting");
-      setTimeout(() => {
-        window.location.reload();
-      }, 2500);
+      window.setTimeout(() => os.setPowerState("running"), 1400);
     } else if (os.powerState === "logout_dialog") {
       os.setPowerState("running");
-      window.location.reload();
+      os.setLocked(true);
     } else if (os.powerState === "trash_dialog") {
       os.emptyTrash();
       os.setPowerState("running");
@@ -273,33 +311,24 @@ function SystemDialogModal() {
 
   const d = getDialogDetails();
 
+  const parent = os.wins.filter((w) => !w.min && w.ws === os.ws && w.animState !== "closing").sort((a, b) => b.z - a.z)[0];
+  const sheetStyle: React.CSSProperties = parent
+    ? { top: parent.y + 46, left: parent.x + parent.w / 2 }
+    : { top: 92, left: "50%" };
+
   return (
-    <div className="fixed inset-0 z-[800] grid place-items-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-[420px] max-w-[92%] rounded-2xl border border-white/20 bg-[#252834]/95 p-6 shadow-2xl backdrop-blur-xl text-center space-y-4 animate-in zoom-in-95 duration-200">
-        <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-white/10 shadow-inner">
+    <div className="sheet-scrim" onMouseDown={() => os.setPowerState("running")}>
+      <div className="sheet" style={sheetStyle} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="mb-2 flex items-center gap-3 text-left">
           {d.icon}
+          <div>
+            <h3 className="text-[15px] font-semibold">{d.title}</h3>
+            <p className="mt-0.5 text-[12.5px] leading-snug opacity-70">{d.body}</p>
+          </div>
         </div>
-
-        <div>
-          <h3 className="text-[17px] font-bold text-white tracking-wide">{d.title}</h3>
-          <p className="mt-1.5 text-[13px] leading-relaxed text-white/70">{d.body}</p>
-        </div>
-
-        <div className="flex items-center justify-end gap-3 pt-3">
-          <button
-            type="button"
-            onClick={() => os.setPowerState("running")}
-            className="rounded-xl bg-white/10 px-5 py-2 text-[13px] font-medium text-white hover:bg-white/20 transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirm}
-            className={`rounded-xl px-5 py-2 text-[13px] font-semibold text-white shadow-lg transition-all cursor-pointer ${d.confirmColor}`}
-          >
-            {d.confirmBtn}
-          </button>
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <button type="button" onClick={() => os.setPowerState("running")} className="rounded-lg px-3 py-1.5 text-[13px] opacity-70">Cancel</button>
+          <button type="button" onClick={handleConfirm} className="rounded-lg bg-[var(--acc)] px-3 py-1.5 text-[13px] font-semibold text-white">{d.confirmBtn}</button>
         </div>
       </div>
     </div>
@@ -317,7 +346,7 @@ function PowerOverlay() {
   const isRestart = os.powerState === "restarting";
 
   return (
-    <div className="fixed inset-0 z-[999] grid place-items-center bg-[#050608] select-none animate-in fade-in duration-700">
+    <div className="lock" style={{ zIndex: 980 }}>
       <div className="flex flex-col items-center space-y-4 text-center">
         <div className="relative mb-2">
           <LogoMark size={70} />
@@ -399,9 +428,7 @@ function Stage() {
 
   return (
     <div
-      className={`os-stage relative h-full w-full select-none ${os.perfMode ? "perf" : ""} ${
-        os.visualMode === "performance" ? "mode-perf" : os.visualMode === "beautiful" ? "mode-beautiful" : ""
-      }`}
+      className={`os-stage relative h-full w-full select-none ${os.perfMode || os.visualMode === "performance" ? "perf mode-perf" : os.visualMode === "beautiful" ? "mode-beautiful" : "mode-balanced"} ${os.appearance === "dark" ? "dark" : ""} ${os.contrast ? "contrast" : ""} ${os.reduceMotion ? "reduce-motion" : ""}`}
       style={{ ["--acc" as any]: os.accent }}
       onClick={() => {
         setSelectedDesktopIcon(null);
@@ -425,7 +452,11 @@ function Stage() {
         >
           <button
             onClick={() => {
-              os.notify("Finder", "New Folder", "Created 'Untitled Folder' on Desktop.");
+              const existing = new Set((os.fs.Desktop || []).map((f) => f.name));
+              let name = "Untitled Folder";
+              let n = 2;
+              while (existing.has(name)) name = `Untitled Folder ${n++}`;
+              os.addFsItem("Desktop", { name, kind: "folder", size: "—" });
               setContextMenu(null);
             }}
             className="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-blue-600 text-left transition-colors cursor-pointer"
@@ -465,7 +496,7 @@ function Stage() {
 
       {/* Desktop Volume & File Icons (Arranged in top-right grid with macOS layout) */}
       <div
-        className="absolute right-5 top-12 z-[30] flex flex-col items-center gap-5 select-none"
+        className="absolute right-5 top-12 z-[20] flex flex-col items-center gap-4 select-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Macintosh HD */}
@@ -556,6 +587,27 @@ function Stage() {
           </span>
         </button>
 
+        {(os.fs.Desktop || []).map((f) => (
+          <button
+            key={f.name}
+            onClick={() => {
+              setSelectedDesktopIcon(f.name);
+              if (f.kind === "folder") os.openApp("finder", "Desktop", f.name);
+              else if (f.kind === "text") os.openApp("textedit", f.name, f.name);
+              else os.openApp("finder", "Desktop", "Desktop");
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              os.moveToTrash(f, "Desktop");
+            }}
+            className="group flex w-[84px] flex-col items-center gap-1.5 p-1 active:scale-95"
+          >
+            <G1Icon name={f.kind === "folder" ? "folder" : `file-${f.kind}`} size={48} />
+            <span className={`desktop-label ${selectedDesktopIcon === f.name ? "on" : ""}`}>{f.name}</span>
+          </button>
+        ))}
+
         {/* Trash */}
         <button
           onClick={() => {
@@ -584,8 +636,7 @@ function Stage() {
         </button>
       </div>
 
-      {/* windows */}
-      <div className="absolute inset-0 top-7">
+      <div className="win-layer">
         {os.wins.filter((w) => w.ws === os.ws).map((w) => (
           <WindowFrame key={w.id} win={w} chrome>
             <AppBody win={w} />
@@ -593,12 +644,15 @@ function Stage() {
         ))}
       </div>
 
+      <div className="brightness-wash" style={{ opacity: (100 - os.brightness) / 140 }} />
       <Dock />
       <Toasts />
+      <Hud />
       <Spotlight />
       <Launchpad />
       <SystemDialogModal />
       <PowerOverlay />
+      <LockScreen />
 
       {/* hint */}
       {hint && (
