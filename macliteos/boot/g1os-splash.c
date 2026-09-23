@@ -122,7 +122,7 @@ static void read_memory_metrics(double *out_rss_mb, double *out_pss_mb)
 static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double t)
 {
     /* Background: Deep Obsidian / Sleek Slate (#080A0F) */
-    ml_color bg_col = ml_color_rgb(8, 10, 15);
+    ml_color bg_col = ml_rgb(8, 10, 15);
     ml_fill_rect(ctx, ml_rect_make(0, 0, screen_w, screen_h), bg_col);
 
     /* Responsive scaling based on reference height (1080p) */
@@ -134,9 +134,10 @@ static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double 
     int cy = screen_h / 2;
 
     /* Subtle ambient center radial glow */
-    ml_fill_radial_glow(ctx, ml_pointd_make(cx, cy - (int)(10 * scale)),
+    ml_pointd cp = { (double)cx, (double)(cy - (int)(10 * scale)) };
+    ml_fill_radial_glow(ctx, cp,
                         (double)screen_w * 0.35, (double)screen_h * 0.28,
-                        ml_color_rgba(25, 40, 65, 38));
+                        ml_rgba(25, 40, 65, 38));
 
     int title_px = (int)(54.0 * scale);
     if (title_px < 26) title_px = 26;
@@ -172,7 +173,7 @@ static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double 
         double ease_in = ml_ease_apply(ML_EASE_OUT_QUAD, p);
 
         uint8_t a = (uint8_t)(ease_in * 255.0);
-        ml_color text_col = ml_color_rgba(240, 244, 250, a);
+        ml_color text_col = ml_rgba(240, 244, 250, a);
 
         int draw_x = cx - w_jeevan / 2;
         ml_draw_text(ctx, font_bold, draw_x, baseline_y, text_jeevan, title_px, text_col);
@@ -187,7 +188,7 @@ static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double 
         /* 1. Converging JeevanOS letters */
         double alpha_j = (1.0 - ease) * (1.0 - ease);
         uint8_t a_j = (uint8_t)(alpha_j * 255.0);
-        ml_color col_j = ml_color_rgba(240, 244, 250, a_j);
+        ml_color col_j = ml_rgba(240, 244, 250, a_j);
 
         /* Calculate letter-by-letter convergence */
         size_t len_j = strlen(text_jeevan);
@@ -210,7 +211,7 @@ static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double 
         /* 2. Emerging G1OS letters */
         double alpha_g = ease * ease;
         uint8_t a_g = (uint8_t)(alpha_g * 255.0);
-        ml_color col_g = ml_color_rgba(248, 250, 252, a_g);
+        ml_color col_g = ml_rgba(248, 250, 252, a_g);
 
         size_t len_g = strlen(text_g1os);
         int pen_g = cx - w_g1os / 2;
@@ -239,7 +240,7 @@ static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double 
             int beam_y = baseline_y + (int)(16.0 * scale);
 
             uint8_t beam_a = (uint8_t)(beam_intensity * 140.0);
-            ml_color beam_col = ml_color_rgba(56, 189, 248, beam_a); /* Cyan 400 */
+            ml_color beam_col = ml_rgba(56, 189, 248, beam_a); /* Cyan 400 */
             ml_fill_rounded(ctx, ml_rect_make(beam_x, beam_y, beam_w, beam_h), 1.0, beam_col);
         }
     }
@@ -247,7 +248,7 @@ static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double 
         /* Phase 3 & 4 (0.85s+): Final G1OS Logo & Caption Fade-In */
         /* G1OS is fully formed in pristine white */
         int draw_x = cx - w_g1os / 2;
-        ml_color col_g = ml_color_rgb(255, 255, 255);
+        ml_color col_g = ml_rgb(255, 255, 255);
         ml_draw_text(ctx, font_bold, draw_x, baseline_y, text_g1os, title_px, col_g);
 
         /* Caption: "Giving Life to Older Machines" */
@@ -257,7 +258,7 @@ static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double 
         double ease_cap = ml_ease_apply(ML_EASE_OUT_CUBIC, p);
 
         uint8_t a_cap = (uint8_t)(ease_cap * 220.0);
-        ml_color col_cap = ml_color_rgba(156, 175, 198, a_cap); /* Elegant slate-blue silver */
+        ml_color col_cap = ml_rgba(156, 175, 198, a_cap); /* Elegant slate-blue silver */
 
         /* Subtle upward drift into place */
         int cap_x = cx - w_cap / 2;
@@ -275,7 +276,7 @@ static void render_splash_frame(ml_ctx *ctx, int screen_w, int screen_h, double 
         int bar_x = cx - bar_w / 2;
         int bar_y = baseline_y + (int)(14.0 * scale);
         uint8_t bar_a = (uint8_t)(ease_cap * 90.0);
-        ml_color bar_col = ml_color_rgba(125, 160, 200, bar_a);
+        ml_color bar_col = ml_rgba(125, 160, 200, bar_a);
         if (bar_w > 2 && bar_a > 2) {
             ml_fill_rect(ctx, ml_rect_make(bar_x, bar_y, bar_w, bar_h), bar_col);
         }
@@ -366,7 +367,7 @@ int main(int argc, char **argv)
     }
 
     /* Allocate surface matching actual display dimensions */
-    ml_surface *surf = ml_surface_create(screen_w, screen_h);
+    ml_surface *surf = ml_surface_new(screen_w, screen_h);
     if (!surf) {
         ml_display_close(&disp);
         printf("\n  G1OS — Giving Life to Older Machines\n\n");
@@ -417,7 +418,7 @@ int main(int argc, char **argv)
 
         /* Commit to display */
         ml_rect damage = ml_rect_make(0, 0, screen_w, screen_h);
-        ml_display_commit(&disp, surf->pixels, &damage, 1);
+        ml_display_commit(&disp, surf->px, &damage, 1);
         metrics.frames_rendered++;
 
         /* Frame timing throttle */
@@ -442,7 +443,7 @@ int main(int argc, char **argv)
     read_memory_metrics(&metrics.rss_mb, &metrics.pss_mb);
 
     /* Clean shutdown */
-    ml_surface_destroy(surf);
+    ml_surface_free(surf);
     ml_display_close(&disp);
 
     /* Output benchmark results if requested (Requirement §6) */
