@@ -23,20 +23,16 @@ if [ ! -s "$TARBALL" ]; then
 fi
 printf '%s  %s\n' "$KSHA" "$TARBALL" | sha256sum -c -
 
-rm -rf "$SRC"
+rm -rf "$SRC" "$OUT/kernel-build" "$OUT/kernel-modules"
 mkdir -p "$SRC"
 tar -xJf "$TARBALL" -C "$SRC" --strip-components=1
 
-# Start from upstream x86_64 defconfig, then apply the small G1OS fragment.
+# Start from the upstream x86_64 defconfig, merge the G1OS requirements, then
+# let Kconfig resolve dependencies and reject invalid/unknown settings.
 make -C "$SRC" O="$OUT/kernel-build" x86_64_defconfig
-scripts_config="$SRC/scripts/config"
-[ -x "$scripts_config" ] || chmod +x "$scripts_config"
-# Kconfig fragment is fed through KCONFIG_ALLCONFIG so dependency resolution is
-# performed by the kernel's own Kconfig machinery rather than text substitution.
-KCONFIG_ALLCONFIG="$PWD/kernel/g1os-x86_64.fragment" make -C "$SRC" O="$OUT/kernel-build" allnoconfig
+"$SRC/scripts/kconfig/merge_config.sh" -m "$OUT/kernel-build/.config" "$PWD/kernel/g1os-x86_64.fragment"
 make -C "$SRC" O="$OUT/kernel-build" olddefconfig
 
-# Required boot-path settings must resolve to the requested values.
 for setting in \
   CONFIG_BLK_DEV_INITRD=y CONFIG_DEVTMPFS=y CONFIG_DEVTMPFS_MOUNT=y \
   CONFIG_EFI=y CONFIG_EFI_STUB=y CONFIG_EFI_PARTITION=y \
@@ -46,7 +42,6 @@ for setting in \
 done
 
 make -C "$SRC" O="$OUT/kernel-build" -j"$JOBS" bzImage modules
-rm -rf "$OUT/kernel-modules"
 make -C "$SRC" O="$OUT/kernel-build" modules_install INSTALL_MOD_PATH="$OUT/kernel-modules"
 
 cp "$OUT/kernel-build/arch/x86/boot/bzImage" "$OUT/vmlinuz-maclite"
