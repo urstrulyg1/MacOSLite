@@ -1,0 +1,78 @@
+name: G1OS build and readiness gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build and ISO dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config bc bison flex libssl-dev libelf-dev \
+            libdrm-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libfreetype6-dev libudev-dev libx11-dev libasound2-dev \
+            xorriso grub-efi-amd64-bin squashfs-tools cpio xz-utils \
+            bzip2 file genisoimage shellcheck qemu-system-x86
+
+      - name: Shell syntax and ShellCheck
+        working-directory: macliteos
+        run: |
+          set -eu
+          for f in $(find . -type f \( -name '*.sh' -o -path './installer/maclite-install' -o -path './installer/maclite-installer-backend' \)); do
+            sh -n "$f"
+            shellcheck -s sh "$f"
+          done
+
+      - name: Build G1OS kernel
+        working-directory: macliteos
+        run: sh scripts/build-kernel.sh
+
+      - name: Build initramfs
+        working-directory: macliteos
+        run: |
+          sh scripts/build-busybox.sh
+          G1OS_BUSYBOX="$PWD/out/busybox" \
+          G1OS_KERNEL_MODULES="$PWD/out/kernel-modules" \
+            sh scripts/make-initrd.sh "$PWD/out/initrd-maclite.img"
+
+      - name: Build userspace and tests
+        working-directory: macliteos
+        run: |
+          ./configure
+          make -j"$(nproc)" all
+          sh scripts/run-tests.sh
+
+      - name: Assemble and independently verify ISO
+        working-directory: macliteos
+        run: |
+          G1OS_KERNEL="$PWD/out/vmlinuz-maclite" \
+          G1OS_INITRD="$PWD/out/initrd-maclite.img" \
+            sh scripts/make-iso.sh --verify
+          test -s out/G1OS.iso
+          test -s out/G1OS.iso.sha256
+          test -s out/iso-manifest.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: G1OS-build
+          path: |
+            macliteos/out/G1OS.iso
+            macliteos/out/G1OS.iso.sha256
+            macliteos/out/iso-manifest.txt
+            macliteos/out/iso-file-list.txt
+            macliteos/out/vmlinuz-maclite
+            macliteos/out/initrd-maclite.img
+            macliteos/out/kernel-version.txt
+            macliteos/out/kernel-source.sha256
