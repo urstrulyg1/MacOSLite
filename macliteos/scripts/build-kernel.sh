@@ -30,7 +30,7 @@ tar -xJf "$TARBALL" -C "$SRC" --strip-components=1
 # Start from the upstream x86_64 defconfig, merge the G1OS requirements, then
 # let Kconfig resolve dependencies and reject invalid/unknown settings.
 make -C "$SRC" O="$OUT/kernel-build" x86_64_defconfig
-"$SRC/scripts/kconfig/merge_config.sh" -m "$OUT/kernel-build/.config" "$PWD/kernel/g1os-x86_64.fragment"
+"$SRC/scripts/kconfig/merge_config.sh" -O "$OUT/kernel-build" -m "$OUT/kernel-build/.config" "$PWD/kernel/g1os-x86_64.fragment"
 make -C "$SRC" O="$OUT/kernel-build" olddefconfig
 
 for setting in \
