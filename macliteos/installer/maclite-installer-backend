@@ -1,391 +1,181 @@
 #!/bin/sh
-# MacLiteOS Installer Engine & Backend.
-# Performs automated installation, partition setup, base copy, UUID binding,
-# Apple EFI configuration, and first-boot pre-flight verification.
-# Emits structured progress events for GUI or terminal consumption.
-set -u
+# G1OS safe installer backend.
+# Destructive operations are explicit, validated and fail closed.
+set -eu
 
 DRY_RUN=0
 TARGET=""
 JSON=0
 
-die() {
-    echo "ERROR: $*" >&2
-    [ "$JSON" = 1 ] && echo "{\"status\":\"error\",\"message\":\"$*\"}"
-    exit 1
-}
+fail() { echo "ERROR: $*" >&2; [ "$JSON" = 1 ] && printf '{"status":"error","message":"%s"}\n' "$*"; exit 1; }
+step() { echo "[STEP $1 ($2%%)]: $3"; [ "$JSON" = 1 ] && printf '{"step":%s,"progress":%s,"message":"%s"}\n' "$1" "$2" "$3"; }
+run() { echo "+ $*"; [ "$DRY_RUN" = 1 ] || "$@" || fail "command failed: $*"; }
+need() { command -v "$1" >/dev/null 2>&1 || fail "required command missing: $1"; }
 
-log_step() {
-    STEP=$1; PCT=$2; MSG=$3
-    echo "[STEP $STEP ($PCT%)]: $MSG"
-    [ "$JSON" = 1 ] && echo "{\"step\":$STEP,\"progress\":$PCT,\"message\":\"$MSG\"}"
-}
-
-for arg in "$@"; do
-    case "$arg" in
-        --target=*) TARGET="${arg#*=}" ;;
-        --target) shift; TARGET="${1:-}" ;;
-        --dry-run) DRY_RUN=1 ;;
-        --json) JSON=1 ;;
-        -h|--help)
-            echo "usage: maclite-installer-backend [--target <disk>] [--dry-run] [--json]"
-            exit 0
-            ;;
-    esac
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --target=*) TARGET=${1#*=} ;;
+    --target) [ "$#" -ge 2 ] || fail "--target requires a disk"; shift; TARGET=$1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --json) JSON=1 ;;
+    -h|--help) echo "usage: maclite-installer-backend --target <disk> [--dry-run] [--json]"; exit 0 ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+  shift
 done
 
-# Require root unless dry-run
-if [ "$(id -u)" != 0 ] && [ "$DRY_RUN" = 0 ]; then
-    die "installer backend must run as root"
-fi
+[ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || fail "installer backend must run as root"
+[ -n "$TARGET" ] || fail "no target disk supplied; installer will never guess a disk"
+case "$TARGET" in /dev/*) TARGET=${TARGET#/dev/} ;; esac
+case "$TARGET" in ''|.|..|*[!A-Za-z0-9._-]*) fail "invalid target disk identifier" ;; esac
 
-run() {
-    echo "+ $*"
-    if [ "$DRY_RUN" = 1 ]; then
-        return 0
-    fi
-    "$@" || die "command failed: $*"
-}
-
-# ==============================================================================
-# 1. Automatic Disk & USB Detection
-# ==============================================================================
-log_step 1 10 "Scanning storage devices and detecting boot media..."
+DEV="/dev/$TARGET"
+[ "$DRY_RUN" = 1 ] || [ -b "$DEV" ] || fail "target block device does not exist: $DEV"
+[ "$DRY_RUN" = 1 ] || [ -e "/sys/block/$TARGET" ] || fail "target is not a whole block disk: $DEV"
+case "$TARGET" in loop*|ram*|sr*|dm-*|md*|zram*) fail "refusing non-physical installation target: $DEV" ;; esac
 
 BOOT_DISK=""
-for mp in /run/maclite-base /run/maclite-live /cdrom /mnt/live /; do
-    if [ -d "$mp" ]; then
-        DEV=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
-        if [ -n "$DEV" ]; then
-            BNAME=$(basename "$DEV" | sed -E 's/[0-9]+$//; s/p[0-9]+$//')
-            if [ -b "/dev/$BNAME" ]; then
-                BOOT_DISK="$BNAME"
-                break
-            fi
-        fi
-    fi
+for mp in /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
+  [ -d "$mp" ] || continue
+  src=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
+  [ -n "$src" ] || continue
+  case "$src" in
+    /dev/*)
+      b=${src#/dev/}
+      b=$(printf '%s' "$b" | sed -E 's/p?[0-9]+$//')
+      [ -e "/sys/block/$b" ] && { BOOT_DISK=$b; break; }
+      ;;
+  esac
 done
 
-# Also detect USB bus connection from sysfs
-if [ -z "$BOOT_DISK" ]; then
-    for d in /sys/block/sd* /sys/block/nvme*n1; do
-        [ -e "$d" ] || continue
-        BNAME=$(basename "$d")
-        DEVPATH=$(readlink -f "$d" 2>/dev/null || echo "")
-        case "$DEVPATH" in
-            */usb*|*/USB*)
-                BOOT_DISK="$BNAME"
-                break
-                ;;
-        esac
-    done
+[ -z "$BOOT_DISK" ] || [ "$TARGET" != "$BOOT_DISK" ] || fail "refusing to install to active live USB: $DEV"
+if [ "$DRY_RUN" = 0 ]; then
+  lsblk -nrpo NAME,MOUNTPOINT "$DEV" | awk '$2 != "" {print $1}' | grep -q . && fail "target disk or one of its partitions is mounted: $DEV"
 fi
 
-[ -n "$BOOT_DISK" ] && echo "  Detected live boot media: /dev/$BOOT_DISK (Protected)"
+MODEL=$(cat "/sys/block/$TARGET/device/model" 2>/dev/null || echo "unknown")
+SERIAL=$(cat "/sys/block/$TARGET/device/serial" 2>/dev/null || echo "unknown")
+SECTORS=$(cat "/sys/block/$TARGET/size" 2>/dev/null || echo 0)
+SIZE_GB=$((SECTORS * 512 / 1000 / 1000 / 1000))
+echo "SELECTED DISK: /dev/$TARGET"
+echo "MODEL: $MODEL"
+echo "SERIAL/IDENTIFIER: $SERIAL"
+echo "SIZE: ${SIZE_GB} GB"
+echo "LIVE MEDIA: ${BOOT_DISK:-not detected}"
 
-# If no target specified, automatically select first non-boot internal disk
-if [ -z "$TARGET" ]; then
-    for d in /sys/block/sd* /sys/block/nvme*n1; do
-        [ -e "$d" ] || continue
-        BNAME=$(basename "$d")
-        [ "$BNAME" = "$BOOT_DISK" ] && continue
-        REMOVABLE=$(cat "$d/removable" 2>/dev/null || echo 0)
-        DEVPATH=$(readlink -f "$d" 2>/dev/null || echo "")
-        case "$DEVPATH" in
-            */usb*|*/USB*) continue ;;
-        esac
-        if [ "$REMOVABLE" = 0 ]; then
-            TARGET="$BNAME"
-            break
-        fi
-    done
-fi
+need sgdisk; need mkfs.vfat; need mkfs.ext4; need blkid; need mount; need umount; need lsblk; need partprobe; need grub-mkimage; need mktemp
 
-# Fallback: if all disks appear removable, pick first non-boot device
-if [ -z "$TARGET" ]; then
-    for d in /sys/block/sd* /sys/block/nvme*n1; do
-        [ -e "$d" ] || continue
-        BNAME=$(basename "$d")
-        [ "$BNAME" = "$BOOT_DISK" ] && continue
-        TARGET="$BNAME"
-        break
-    done
-fi
+PREF=$TARGET
+case "$TARGET" in nvme*|mmcblk*) PREF=${TARGET}p ;; esac
+DEV_BOOT=/dev/${PREF}1
+DEV_DATA=/dev/${PREF}2
+DEV_BASE=/dev/${PREF}3
 
-[ -n "$TARGET" ] || die "no eligible internal installation disk found"
-
-# Safeguards against self-overwrite
-if [ -n "$BOOT_DISK" ] && [ "$TARGET" = "$BOOT_DISK" ]; then
-    die "Refusing to install to active live USB boot device (/dev/$TARGET). Target must be an internal drive."
-fi
-
-if [ "$DRY_RUN" = 0 ] && [ ! -b "/dev/$TARGET" ]; then
-    die "block device /dev/$TARGET does not exist"
-fi
-
-MODEL=$(cat "/sys/block/$TARGET/device/model" 2>/dev/null || echo "Internal Drive")
-SIZE_SECTORS=$(cat "/sys/block/$TARGET/size" 2>/dev/null || echo 0)
-SIZE_GB=$(( SIZE_SECTORS * 512 / 1000 / 1000 / 1000 ))
-
-echo "  Target disk: /dev/$TARGET ($MODEL, ${SIZE_GB} GB)"
-
-# ==============================================================================
-# 2. Disk Preparation & Thorough Signature Wiping
-# ==============================================================================
-log_step 2 25 "Wiping previous partition tables and signatures on /dev/$TARGET..."
-
-# Unmount any existing partitions on target disk
-for p in /dev/${TARGET}* /dev/${TARGET}p*; do
-    [ -b "$p" ] || continue
-    umount -f "$p" 2>/dev/null || true
+LIVE_BASE=""
+for p in /run/maclite-base /run/maclite-live; do
+  if [ -d "$p" ] && [ -n "$(find "$p" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)" ]; then LIVE_BASE=$p; break; fi
 done
+[ -n "$LIVE_BASE" ] || fail "live G1OS base is unavailable; refusing to create an empty installation"
 
-# Wipe old filesystem signatures (clears old Linux/MacLiteOS/APFS/FAT labels)
-if command -v wipefs >/dev/null 2>&1; then
-    run wipefs -a "/dev/$TARGET" 2>/dev/null || true
+KERNEL=""
+INITRD=""
+for p in /boot/vmlinuz-maclite /run/maclite-live/boot/vmlinuz-maclite; do [ -s "$p" ] && { KERNEL=$p; break; }; done
+for p in /boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img; do [ -s "$p" ] && { INITRD=$p; break; }; done
+[ -n "$KERNEL" ] || fail "real G1OS kernel image not found"
+[ -n "$INITRD" ] || fail "real G1OS initramfs not found"
+
+step 1 10 "Validated target disk, live media, base system, kernel and initramfs"
+step 2 20 "Unmounting target partitions"
+if [ "$DRY_RUN" = 0 ]; then
+  while read -r part; do umount "$part" 2>/dev/null || true; done <<EOF
+$(lsblk -lnpo NAME "$DEV" | tail -n +2)
+EOF
 fi
 
-# Zap GPT & MBR structures
-run sgdisk --zap-all "/dev/$TARGET"
+step 3 30 "Repartitioning target with EFI, persistent data and root partitions"
+run sgdisk --zap-all "$DEV"
+run sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT "$DEV"
+run sgdisk -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA "$DEV"
+run sgdisk -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE "$DEV"
+run partprobe "$DEV"
 
-# ==============================================================================
-# 3. Partitioning with Apple GPT Layout
-# ==============================================================================
-log_step 3 40 "Creating Apple GPT partitions (EFI, Data, System Base)..."
-# Partition 1: +256M FAT32 EFI (type ef00)
-# Partition 2: +4G ext4 persistent user storage (type 8300)
-# Partition 3: remaining space for immutable root base (type 8300)
-run sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT "/dev/$TARGET"
-run sgdisk -n 2:0:+4G   -t 2:8300 -c 2:MACLITE_DATA "/dev/$TARGET"
-run sgdisk -n 3:0:0     -t 3:8300 -c 3:MACLITE_BASE "/dev/$TARGET"
-
-# Refresh partition table in kernel
-if command -v partprobe >/dev/null 2>&1; then
-    partprobe "/dev/$TARGET" 2>/dev/null || true
-elif command -v blockdev >/dev/null 2>&1; then
-    blockdev --rereadpt "/dev/$TARGET" 2>/dev/null || true
-fi
-sleep 1
-
-# Handle NVMe naming (nvme0n1p1) vs SATA naming (sda1)
-P_PREF="${TARGET}"
-case "$TARGET" in
-    nvme*|mmcblk*) P_PREF="${TARGET}p" ;;
-esac
-
-DEV_BOOT="/dev/${P_PREF}1"
-DEV_DATA="/dev/${P_PREF}2"
-DEV_BASE="/dev/${P_PREF}3"
-
-# ==============================================================================
-# 4. Formatting Partitions & Extracting Unique UUIDs
-# ==============================================================================
-log_step 4 55 "Formatting partitions with fresh filesystems and UUIDs..."
+step 4 40 "Formatting fresh filesystems"
 run mkfs.vfat -F32 -n MACLITE_BOOT "$DEV_BOOT"
 run mkfs.ext4 -F -L MACLITE_DATA "$DEV_DATA"
-run mkfs.ext4 -F -L MACLITE_BASE_STAGING "$DEV_BASE"
+run mkfs.ext4 -F -L MACLITE_BASE "$DEV_BASE"
+BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT") || fail "unable to read EFI UUID"
+DATA_UUID=$(blkid -s UUID -o value "$DEV_DATA") || fail "unable to read data UUID"
+BASE_UUID=$(blkid -s UUID -o value "$DEV_BASE") || fail "unable to read root UUID"
+BASE_PARTUUID=$(blkid -s PARTUUID -o value "$DEV_BASE") || fail "unable to read root PARTUUID"
 
-# Extract exact UUIDs & PARTUUIDs for guaranteed single-target boot
-BOOT_UUID=""
-DATA_UUID=""
-BASE_UUID=""
-BASE_PARTUUID=""
+step 5 55 "Installing the verified live base onto the target root filesystem"
+BASE_MNT=$(mktemp -d /tmp/g1os-base.XXXXXX)
+BOOT_MNT=$(mktemp -d /tmp/g1os-boot.XXXXXX)
+cleanup() { umount "$BASE_MNT" 2>/dev/null || true; umount "$BOOT_MNT" 2>/dev/null || true; rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true; }
+trap cleanup EXIT HUP INT TERM
+run mount "$DEV_BASE" "$BASE_MNT"
+run cp -a "$LIVE_BASE/." "$BASE_MNT/"
+mkdir -p "$BASE_MNT/etc"
+cat > "$BASE_MNT/etc/fstab" <<EOF
+UUID=$BASE_UUID  /          ext4  ro,noatime,errors=remount-ro  0 1
+UUID=$DATA_UUID  /var/data  ext4  rw,noatime,errors=remount-ro  0 2
+UUID=$BOOT_UUID  /boot/efi  vfat  rw,umask=0077               0 1
+EOF
+printf '%s\n' "INSTALLED_DISK=/dev/$TARGET" "INSTALLED_SERIAL=$SERIAL" "INSTALLED_BASE_UUID=$BASE_UUID" "INSTALLED_BASE_PARTUUID=$BASE_PARTUUID" "INSTALLED_BOOT_UUID=$BOOT_UUID" "INSTALLED_DATA_UUID=$DATA_UUID" > "$BASE_MNT/etc/g1os-installed"
+run sync
+run umount "$BASE_MNT"
 
-if [ "$DRY_RUN" = 0 ]; then
-    BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT" 2>/dev/null || true)
-    DATA_UUID=$(blkid -s UUID -o value "$DEV_DATA" 2>/dev/null || true)
-    BASE_UUID=$(blkid -s UUID -o value "$DEV_BASE" 2>/dev/null || true)
-    BASE_PARTUUID=$(blkid -s PARTUUID -o value "$DEV_BASE" 2>/dev/null || true)
-fi
-
-# Fallback UUIDs for dry-run simulation
-BOOT_UUID=${BOOT_UUID:-"4A12-B8E9"}
-DATA_UUID=${DATA_UUID:-"d1829e34-5f12-4a7b-8910-bcde12345678"}
-BASE_UUID=${BASE_UUID:-"c49120de-2e88-40cf-b152-ef1928374650"}
-BASE_PARTUUID=${BASE_PARTUUID:-"a1b2c3d4-03"}
-
-echo "  Recorded Partition UUIDs:"
-echo "    BOOT: $BOOT_UUID"
-echo "    DATA: $DATA_UUID"
-echo "    BASE: $BASE_UUID"
-
-# ==============================================================================
-# 5. Copying Base System & Generating UUID-Bound /etc/fstab
-# ==============================================================================
-log_step 5 70 "Copying MacLiteOS system base and configuring /etc/fstab..."
-MNT="/tmp/maclite_target_base"
-mkdir -p "$MNT"
-run mount "$DEV_BASE" "$MNT"
-
-if [ -d "/run/maclite-base" ]; then
-    run cp -a /run/maclite-base/. "$MNT/"
-elif [ -d "/run/maclite-live" ]; then
-    run cp -a /run/maclite-live/. "$MNT/"
-else
-    mkdir -p "$MNT/etc" "$MNT/usr" "$MNT/bin" "$MNT/var"
-    touch "$MNT/etc/maclite-installed"
-fi
-
-mkdir -p "$MNT/etc"
-cat << FSTAB_EOF > "$MNT/etc/fstab"
-# MacLiteOS filesystem table (UUID-bound)
-UUID=$BASE_UUID     /             squashfs ro,defaults                          0 0
-UUID=$DATA_UUID     /var/data     ext4     rw,noatime,errors=remount-ro         0 2
-UUID=$BOOT_UUID     /boot/efi     vfat     rw,umask=0077                        0 1
-FSTAB_EOF
-
-# Record install stamp
-echo "INSTALLED_DISK=/dev/$TARGET" > "$MNT/etc/maclite-installed"
-echo "INSTALLED_BOOT_UUID=$BOOT_UUID" >> "$MNT/etc/maclite-installed"
-echo "INSTALLED_BASE_UUID=$BASE_UUID" >> "$MNT/etc/maclite-installed"
-
-run umount "$MNT"
-rmdir "$MNT"
-
-# ==============================================================================
-# 6. Configuring Apple EFI Bootloader & Fallback Path (BOOTX64.EFI)
-# ==============================================================================
-log_step 6 85 "Configuring Apple EFI bootloader, GRUB, and Apple startup label..."
-BOOT_MNT="/tmp/maclite_target_boot"
-mkdir -p "$BOOT_MNT"
+step 6 70 "Installing fallback EFI bootloader and UUID-bound boot configuration"
 run mount "$DEV_BOOT" "$BOOT_MNT"
-
-mkdir -p "$BOOT_MNT/EFI/BOOT"
-mkdir -p "$BOOT_MNT/boot/grub"
-
-# Install standard Apple fallback EFI binary
-if command -v grub-mkimage >/dev/null 2>&1; then
-    run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" \
-        -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
-elif [ -f /boot/bootx64.efi ]; then
-    run cp /boot/bootx64.efi "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
-elif [ -f /run/maclite-live/boot/bootx64.efi ]; then
-    run cp /run/maclite-live/boot/bootx64.efi "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
-elif command -v grub-install >/dev/null 2>&1; then
-    run grub-install --target=x86_64-efi --efi-directory="$BOOT_MNT" \
-        --boot-directory="$BOOT_MNT/boot" --removable 2>/dev/null || true
-fi
-
-# Generate UUID-pinned GRUB configuration (no ambiguous label references)
-cat << GRUB_EOF > "$BOOT_MNT/EFI/BOOT/grub.cfg"
-# MacLiteOS Apple EFI Bootloader
+mkdir -p "$BOOT_MNT/EFI/BOOT" "$BOOT_MNT/boot/grub"
+run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
+cat > "$BOOT_MNT/EFI/BOOT/grub.cfg" <<EOF
 set default=0
 set timeout=3
 insmod part_gpt
 insmod fat
 insmod search_fs_uuid
-
-# Bind directly to internal EFI partition
-search --no-floppy --fs-uuid --set=root $BOOT_UUID
-
-menuentry "MacLiteOS" {
-    search --no-floppy --fs-uuid --set=root $BOOT_UUID
-    linux /boot/vmlinuz-maclite root=UUID=$BASE_UUID ro quiet \\
-          rd.maclite=1 mitigations=off vt.global_cursordefault=0 \\
-          acpi_backlight=native radeon.modeset=1 radeon.uvd=1 \\
-          b43.fwok=1 reboot=pci
-    initrd /boot/initrd-maclite.img
+search --no-floppy --fs-uuid --set=boot $BOOT_UUID
+set root=(\$boot)
+menuentry "G1OS" {
+  search --no-floppy --fs-uuid --set=boot $BOOT_UUID
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1
+  initrd /boot/initrd-g1os.img
 }
-menuentry "MacLiteOS (Safe Graphics)" {
-    search --no-floppy --fs-uuid --set=root $BOOT_UUID
-    linux /boot/vmlinuz-maclite root=UUID=$BASE_UUID ro quiet \\
-          rd.maclite=1 maclite.gl=off acpi_backlight=native reboot=pci
-    initrd /boot/initrd-maclite.img
+menuentry "G1OS Safe Graphics" {
+  search --no-floppy --fs-uuid --set=boot $BOOT_UUID
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off
+  initrd /boot/initrd-g1os.img
 }
-menuentry "MacLiteOS Recovery" {
-    search --no-floppy --fs-uuid --set=root $BOOT_UUID
-    linux /boot/vmlinuz-maclite root=UUID=$BASE_UUID ro quiet \\
-          rd.maclite=recovery acpi_backlight=native reboot=pci
-    initrd /boot/initrd-maclite.img
+menuentry "G1OS Recovery" {
+  search --no-floppy --fs-uuid --set=boot $BOOT_UUID
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=recovery
+  initrd /boot/initrd-g1os.img
 }
-GRUB_EOF
+EOF
+run cp "$BOOT_MNT/EFI/BOOT/grub.cfg" "$BOOT_MNT/boot/grub/grub.cfg"
+run cp "$KERNEL" "$BOOT_MNT/boot/vmlinuz-g1os"
+run cp "$INITRD" "$BOOT_MNT/boot/initrd-g1os.img"
+printf 'G1OS' > "$BOOT_MNT/.disk_label"
 
-cp "$BOOT_MNT/EFI/BOOT/grub.cfg" "$BOOT_MNT/boot/grub/grub.cfg"
-
-# Copy kernel and initrd to boot partition
-mkdir -p "$BOOT_MNT/boot"
-if [ -f /boot/vmlinuz-maclite ]; then
-    run cp /boot/vmlinuz-maclite "$BOOT_MNT/boot/vmlinuz-maclite"
-elif [ -f /run/maclite-live/boot/vmlinuz-maclite ]; then
-    run cp /run/maclite-live/boot/vmlinuz-maclite "$BOOT_MNT/boot/vmlinuz-maclite"
-else
-    touch "$BOOT_MNT/boot/vmlinuz-maclite"
-fi
-
-if [ -f /boot/initrd-maclite.img ]; then
-    run cp /boot/initrd-maclite.img "$BOOT_MNT/boot/initrd-maclite.img"
-elif [ -f /run/maclite-live/boot/initrd-maclite.img ]; then
-    run cp /run/maclite-live/boot/initrd-maclite.img "$BOOT_MNT/boot/initrd-maclite.img"
-else
-    touch "$BOOT_MNT/boot/initrd-maclite.img"
-fi
-
-# Apple Option Boot Picker Disk Label
-printf "MacLiteOS" > "$BOOT_MNT/.disk_label"
-
-# Register NVRAM entry if supported (non-fatal if NVRAM resets)
-if command -v efibootmgr >/dev/null 2>&1; then
-    efibootmgr -c -d "/dev/$TARGET" -p 1 -L "MacLiteOS" -l "\\EFI\\BOOT\\BOOTX64.EFI" 2>/dev/null || true
-fi
-
-# ==============================================================================
-# 7. First-Boot Pre-Flight Verification Pass
-# ==============================================================================
-log_step 7 95 "Performing pre-flight verification on internal disk..."
-
-# Verify EFI loader exists
-if [ ! -f "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" ] && [ "$DRY_RUN" = 0 ]; then
-    umount "$BOOT_MNT" 2>/dev/null || true
-    die "Pre-flight check failed: EFI/BOOT/BOOTX64.EFI is missing from target EFI partition."
-fi
-
-# Verify GRUB config points to target UUID and has no USB references
-if [ ! -f "$BOOT_MNT/EFI/BOOT/grub.cfg" ] && [ "$DRY_RUN" = 0 ]; then
-    umount "$BOOT_MNT" 2>/dev/null || true
-    die "Pre-flight check failed: EFI/BOOT/grub.cfg is missing."
-fi
-
-if [ "$DRY_RUN" = 0 ]; then
-    if ! grep -q "$BOOT_UUID" "$BOOT_MNT/EFI/BOOT/grub.cfg"; then
-        umount "$BOOT_MNT" 2>/dev/null || true
-        die "Pre-flight check failed: grub.cfg does not bind to internal boot UUID $BOOT_UUID."
-    fi
-
-    if grep -q "maclite-live" "$BOOT_MNT/EFI/BOOT/grub.cfg"; then
-        umount "$BOOT_MNT" 2>/dev/null || true
-        die "Pre-flight check failed: grub.cfg contains references to live USB media."
-    fi
-fi
-
-# Verify kernel & initrd exist
-if [ ! -f "$BOOT_MNT/boot/vmlinuz-maclite" ] && [ "$DRY_RUN" = 0 ]; then
-    umount "$BOOT_MNT" 2>/dev/null || true
-    die "Pre-flight check failed: Kernel binary missing from target boot partition."
-fi
-
-if [ ! -f "$BOOT_MNT/boot/initrd-maclite.img" ] && [ "$DRY_RUN" = 0 ]; then
-    umount "$BOOT_MNT" 2>/dev/null || true
-    die "Pre-flight check failed: Initramfs image missing from target boot partition."
-fi
-
-# Verify Apple .disk_label
-if [ ! -f "$BOOT_MNT/.disk_label" ] && [ "$DRY_RUN" = 0 ]; then
-    umount "$BOOT_MNT" 2>/dev/null || true
-    die "Pre-flight check failed: Apple .disk_label missing."
-fi
-
+step 7 82 "Verifying EFI, kernel, initramfs and UUID references before success"
+[ "$DRY_RUN" = 1 ] || [ -s "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" ] || fail "EFI fallback loader is missing or empty"
+[ "$DRY_RUN" = 1 ] || [ -s "$BOOT_MNT/boot/vmlinuz-g1os" ] || fail "installed kernel is missing or empty"
+[ "$DRY_RUN" = 1 ] || [ -s "$BOOT_MNT/boot/initrd-g1os.img" ] || fail "installed initramfs is missing or empty"
+[ "$DRY_RUN" = 1 ] || grep -F "root=UUID=$BASE_UUID" "$BOOT_MNT/EFI/BOOT/grub.cfg" >/dev/null || fail "GRUB root UUID mismatch"
+[ "$DRY_RUN" = 1 ] || ! grep -Eq '/dev/(sd|nvme|mmcblk)' "$BOOT_MNT/EFI/BOOT/grub.cfg" || fail "GRUB contains unstable device-path references"
+run sync
 run umount "$BOOT_MNT"
-rmdir "$BOOT_MNT"
 
-# ==============================================================================
-# 8. Success & Completion
-# ==============================================================================
-log_step 8 100 "MacLiteOS Installation Complete — Remove USB and Restart"
-echo
-echo "================================================================="
-echo " SUCCESS: MacLiteOS has been fully installed to /dev/$TARGET."
-echo " Verified: Internal EFI, BOOTX64.EFI, UUID binding, and fstab."
-echo " Remove the live USB drive, then reboot your iMac."
-echo "================================================================="
-[ "$JSON" = 1 ] && echo "{\"status\":\"complete\",\"target\":\"/dev/$TARGET\",\"boot_uuid\":\"$BOOT_UUID\"}"
-exit 0
+step 8 92 "Verifying installed root filesystem"
+if [ "$DRY_RUN" = 0 ]; then
+  VERIFY_MNT=$(mktemp -d /tmp/g1os-verify.XXXXXX)
+  mount "$DEV_BASE" "$VERIFY_MNT" || fail "cannot remount target root for verification"
+  [ -s "$VERIFY_MNT/etc/fstab" ] || { umount "$VERIFY_MNT"; fail "installed fstab missing"; }
+  grep -F "UUID=$BOOT_UUID" "$VERIFY_MNT/etc/fstab" >/dev/null || { umount "$VERIFY_MNT"; fail "EFI UUID missing from fstab"; }
+  umount "$VERIFY_MNT" || fail "verification unmount failed"
+  rmdir "$VERIFY_MNT"
+fi
+
+step 9 100 "Installation verification passed"
+echo "SUCCESS: G1OS installation completed and passed pre-flight verification on /dev/$TARGET."
