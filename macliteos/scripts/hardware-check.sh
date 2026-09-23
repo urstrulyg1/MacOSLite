@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2010,SC2012
 # MacLiteOS hardware check — evidence-based runtime validation (spec §16/§21/§24).
 #
 # CRITICAL REQUIREMENT:

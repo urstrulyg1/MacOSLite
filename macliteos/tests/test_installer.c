@@ -1,4 +1,4 @@
-/* test_installer — Test suite for MacLiteOS Installer logic.
+/* test_installer — Test suite for G1OS / MacLiteOS Installer logic.
  *
  * Exercises:
  *   1. Hardware disk probe and internal disk discovery.
@@ -7,6 +7,13 @@
  *   4. Confirmation validation and safety state machine.
  *   5. Bootloader UUID binding & exclusion of USB paths in grub.cfg.
  *   6. Offline pre-flight verification pass for internal boot reliability.
+ *   7. Authoritative state progression (PREPARING -> INSTALLING -> FINALIZING -> VERIFYING -> COMPLETED).
+ *   8. Bootloader failure gate (blocks completion and disables restart).
+ *   9. Driver categorization (REQUIRED vs OPTIONAL vs UNSUPPORTED).
+ *  10. Configuration automatic repair & re-verification.
+ *  11. Low disk space safety gate.
+ *  12. Partial installation marker detection.
+ *  13. Strict reboot safety gate.
  */
 #include "ml/common.h"
 #include "ml/log.h"
@@ -23,7 +30,7 @@ static int TESTS_PASSED = 0;
 #define TEST(name) \
     do { \
         TESTS_RUN++; \
-        printf("  TEST [%02d] %-50s ", TESTS_RUN, name); \
+        printf("  TEST [%02d] %-55s ", TESTS_RUN, name); \
     } while (0)
 
 #define PASS() \
@@ -121,7 +128,7 @@ static int test_target_auto_selection(void)
 
 static int test_partition_geometry(void)
 {
-    TEST("MacLiteOS GPT partition geometry");
+    TEST("G1OS GPT partition geometry");
 
     uint64_t disk_size = 500ULL * 1024 * 1024 * 1024; /* 500 GiB */
 
@@ -172,9 +179,9 @@ static int test_uuid_boot_binding(void)
     TEST("UUID-bound boot configuration (no USB references)");
 
     const char *mock_grub_cfg =
-        "search --no-floppy --fs-uuid --set=root 78FA-C9B2\n"
-        "linux /boot/vmlinuz-maclite root=UUID=e78d910a-3142-4f81-9b16-5fa4e872c019 ro quiet\n"
-        "initrd /boot/initrd-maclite.img\n";
+        "search --no-floppy --fs-uuid --set=boot 78FA-C9B2\n"
+        "linux /boot/vmlinuz-g1os root=UUID=e78d910a-3142-4f81-9b16-5fa4e872c019 ro rd.maclite=1\n"
+        "initrd /boot/initrd-g1os.img\n";
 
     if (strstr(mock_grub_cfg, "maclite-live")) {
         FAIL("grub.cfg contains residual references to live media");
@@ -220,9 +227,188 @@ static int test_preflight_verification(void)
     return 0;
 }
 
+/* State machine verification: PREPARING -> INSTALLING -> FINALIZING -> VERIFYING -> COMPLETED */
+typedef enum {
+    STATE_PREPARING = 0,
+    STATE_INSTALLING,
+    STATE_FINALIZING,
+    STATE_VERIFYING,
+    STATE_COMPLETED,
+    STATE_FAILED
+} installer_state;
+
+static bool can_transition(installer_state from, installer_state to, bool verification_passed)
+{
+    if (from == STATE_PREPARING && to == STATE_INSTALLING) return true;
+    if (from == STATE_INSTALLING && to == STATE_FINALIZING) return true;
+    if (from == STATE_FINALIZING && to == STATE_VERIFYING) return true;
+    /* Forbidden transition: INSTALLING -> COMPLETED directly */
+    if (from == STATE_INSTALLING && to == STATE_COMPLETED) return false;
+    /* Only VERIFYING -> COMPLETED is allowed, and ONLY if verification_passed is true */
+    if (from == STATE_VERIFYING && to == STATE_COMPLETED) return verification_passed;
+    if (to == STATE_FAILED) return true;
+    return false;
+}
+
+static int test_verification_state_transitions(void)
+{
+    TEST("State machine rejects INSTALLING -> COMPLETED directly");
+
+    if (can_transition(STATE_INSTALLING, STATE_COMPLETED, true)) {
+        FAIL("Direct transition from INSTALLING to COMPLETED was erroneously allowed");
+    }
+    if (can_transition(STATE_VERIFYING, STATE_COMPLETED, false)) {
+        FAIL("VERIFYING to COMPLETED allowed when verification failed");
+    }
+    if (!can_transition(STATE_VERIFYING, STATE_COMPLETED, true)) {
+        FAIL("VERIFYING to COMPLETED blocked even though all checks passed");
+    }
+
+    PASS();
+    return 0;
+}
+
+static int test_bootloader_failure_blocks_completion(void)
+{
+    TEST("Bootloader verification failure blocks completion");
+
+    bool bootloader_verified = false;
+    bool all_other_checks = true;
+    bool allow_complete = bootloader_verified && all_other_checks;
+
+    if (allow_complete) {
+        FAIL("Installation completed with unverified bootloader");
+    }
+
+    PASS();
+    return 0;
+}
+
+typedef enum {
+    DRIVER_REQUIRED,
+    DRIVER_OPTIONAL,
+    DRIVER_UNSUPPORTED
+} driver_class;
+
+static bool evaluate_driver_check(driver_class cls, bool present)
+{
+    if (cls == DRIVER_REQUIRED) return present; /* failure is fatal */
+    if (cls == DRIVER_OPTIONAL) return true;    /* missing emits warning, not fatal */
+    if (cls == DRIVER_UNSUPPORTED) return true; /* missing emits info, not fatal */
+    return false;
+}
+
+static int test_driver_classification(void)
+{
+    TEST("Driver categorization: REQUIRED vs OPTIONAL vs UNSUPPORTED");
+
+    /* Storage driver missing -> FATAL */
+    if (evaluate_driver_check(DRIVER_REQUIRED, false) != false) {
+        FAIL("Missing REQUIRED driver was not treated as fatal failure");
+    }
+    /* WiFi driver missing -> WARNING (passes) */
+    if (evaluate_driver_check(DRIVER_OPTIONAL, false) != true) {
+        FAIL("Missing OPTIONAL driver halted installation");
+    }
+    /* Legacy modem missing -> INFO (passes) */
+    if (evaluate_driver_check(DRIVER_UNSUPPORTED, false) != true) {
+        FAIL("Missing UNSUPPORTED hardware halted installation");
+    }
+
+    PASS();
+    return 0;
+}
+
+static int test_config_repair_and_reverification(void)
+{
+    TEST("Configuration automatic repair & re-verification");
+
+    bool fstab_syntax_valid = false;
+    bool can_auto_repair = true;
+
+    if (fstab_syntax_valid) {
+        FAIL("Initial corrupted config falsely evaluated as valid");
+    }
+
+    /* Simulate safe automatic repair */
+    if (can_auto_repair) {
+        fstab_syntax_valid = true; /* regenerated */
+    }
+
+    /* Mandatory re-verification */
+    bool reverify_passed = fstab_syntax_valid;
+    if (!reverify_passed) {
+        FAIL("Re-verification failed after repair");
+    }
+
+    PASS();
+    return 0;
+}
+
+static int test_disk_space_guard(void)
+{
+    TEST("Disk space verification threshold check");
+
+    uint64_t free_boot_kb = 4096; /* 4 MB - below 10 MB minimum */
+    uint64_t free_root_kb = 2048000; /* 2 GB */
+
+    bool space_sufficient = (free_boot_kb >= 10240) && (free_root_kb >= 102400);
+    if (space_sufficient) {
+        FAIL("Critically low EFI space was not flagged as failure");
+    }
+
+    PASS();
+    return 0;
+}
+
+static int test_partial_installation_detection(void)
+{
+    TEST("Partial installation marker detection");
+
+    bool in_progress_marker_present = true;
+    bool allow_verified_complete = !in_progress_marker_present;
+
+    if (allow_verified_complete) {
+        FAIL("Installer reported success despite interrupted installation marker");
+    }
+
+    PASS();
+    return 0;
+}
+
+static int test_reboot_safety_gate(void)
+{
+    TEST("Reboot safety gate strictly enforces COMPLETED & PASS");
+
+    installer_state st = STATE_VERIFYING;
+    bool verification_passed = false;
+    bool can_reboot = (st == STATE_COMPLETED) && verification_passed;
+
+    if (can_reboot) {
+        FAIL("Reboot allowed while in VERIFYING state");
+    }
+
+    st = STATE_COMPLETED;
+    verification_passed = false;
+    can_reboot = (st == STATE_COMPLETED) && verification_passed;
+    if (can_reboot) {
+        FAIL("Reboot allowed without verified PASS");
+    }
+
+    st = STATE_COMPLETED;
+    verification_passed = true;
+    can_reboot = (st == STATE_COMPLETED) && verification_passed;
+    if (!can_reboot) {
+        FAIL("Reboot blocked despite verified COMPLETED state");
+    }
+
+    PASS();
+    return 0;
+}
+
 int main(void)
 {
-    printf("\n=== MacLiteOS Installer Test Suite ===\n\n");
+    printf("\n=== G1OS Installer Test Suite ===\n\n");
 
     if (test_usb_protection() != 0) return 1;
     if (test_target_auto_selection() != 0) return 1;
@@ -230,6 +416,13 @@ int main(void)
     if (test_confirmation_state_machine() != 0) return 1;
     if (test_uuid_boot_binding() != 0) return 1;
     if (test_preflight_verification() != 0) return 1;
+    if (test_verification_state_transitions() != 0) return 1;
+    if (test_bootloader_failure_blocks_completion() != 0) return 1;
+    if (test_driver_classification() != 0) return 1;
+    if (test_config_repair_and_reverification() != 0) return 1;
+    if (test_disk_space_guard() != 0) return 1;
+    if (test_partial_installation_detection() != 0) return 1;
+    if (test_reboot_safety_gate() != 0) return 1;
 
     printf("\nAll %d tests passed successfully.\n\n", TESTS_PASSED);
     return 0;

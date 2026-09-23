@@ -310,9 +310,12 @@ session() {
         return
     fi
     missing=""
-    for shot in $(grep -E '^[[:space:]]*shot ' "tests/scripts/$s.script" | awk '{print $2}'); do
+    while IFS= read -r shot; do
+        [ -n "$shot" ] || continue
         [ -f "out/$shot" ] || missing="$missing $shot"
-    done
+    done <<EOF
+$(grep -E '^[[:space:]]*shot ' "tests/scripts/$s.script" | awk '{print $2}')
+EOF
     if [ -n "$missing" ]; then
         echo "FAIL (missing screenshots:$missing)"
         record "session:$s" SANDBOX FAIL "missing screenshots:$missing"

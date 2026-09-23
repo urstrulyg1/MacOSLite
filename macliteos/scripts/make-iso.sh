@@ -71,6 +71,15 @@ grub-mkimage -O x86_64-efi -o "$ST/boot/bootx64.efi" -p /boot part_gpt part_msdo
 xorriso -as mkisofs -o out/G1OS.iso -e boot/bootx64.efi -no-emul-boot -isohybrid-gpt-basdat "$ST"
 [ -s out/G1OS.iso ] || { echo "ERROR: ISO missing or empty" >&2; exit 5; }
 sha256sum out/G1OS.iso > out/G1OS.iso.sha256
+{
+  echo "G1OS ISO Build Manifest"
+  echo "Build Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "Kernel: $(basename "$KERNEL")"
+  echo "Initramfs: $(basename "$INITRD")"
+  echo "Base: live/maclite-base.sqfs"
+  echo "ISO: out/G1OS.iso"
+  echo "SHA256: $(cat out/G1OS.iso.sha256)"
+} > out/iso-manifest.txt
 
 [ -s "$ST/boot/vmlinuz-maclite" ] || { echo "ERROR: staged kernel missing" >&2; exit 6; }
 [ -s "$ST/boot/initrd-maclite.img" ] || { echo "ERROR: staged initramfs missing" >&2; exit 6; }

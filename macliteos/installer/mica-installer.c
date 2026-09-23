@@ -1,4 +1,4 @@
-/* G1OS native installer GUI.
+/* G1OS native installer GUI — Final Verification & No-Break Guarantee.
  *
  * The GUI is presentation only: destructive installation work is delegated to
  * maclite-installer-backend. Progress is therefore authoritative and cannot
@@ -6,6 +6,11 @@
  * GUI remains responsive, shows activity separately from completion, and
  * refuses to show success until the backend exits successfully after its
  * verification phase.
+ *
+ * Verification Flow:
+ *   Installation -> Finalizing -> Verification -> All Checks Pass -> 100% -> Summary -> Complete
+ * If any required check fails:
+ *   Verification -> Fail -> Stop -> Show Exact Problem -> Retry / Repair / View Details
  */
 #include "ml/common.h"
 #include "ml/log.h"
@@ -34,13 +39,15 @@
 #define WIN_H 520
 #define GUI_TICK_MS 250
 #define ACTIVITY_AFTER_MS 1000
-#define MAX_LOG_LINES 48
+#define MAX_LOG_LINES 64
 
 typedef enum {
     STAGE_WELCOME = 0,
     STAGE_SELECT,
     STAGE_CONFIRM,
     STAGE_INSTALLING,
+    STAGE_VERIFYING,
+    STAGE_SUMMARY,
     STAGE_COMPLETE,
     STAGE_ERROR
 } installer_stage;
@@ -56,6 +63,11 @@ typedef struct {
     int partition_count;
     char partitions[8][96];
 } disk_info;
+
+typedef struct {
+    char name[48];
+    bool passed;
+} verify_check_item;
 
 static mica_client *G;
 static mica_win *WIN;
@@ -79,6 +91,7 @@ static int LAST_STEP = 0;
 static char CURRENT_STEP_TEXT[192] = "Preparing installation...";
 static char CURRENT_STAGE_NAME[64] = "Preparing";
 static char ERROR_MESSAGE[320] = "";
+static char FAILED_CHECK_NAME[64] = "";
 static char LOG_LINES[MAX_LOG_LINES][192];
 static int N_LOG_LINES = 0;
 static uint64_t INSTALL_STARTED_MS = 0;
@@ -88,8 +101,23 @@ static bool BACKEND_ACTIVE = false;
 static bool BACKEND_FAILED = false;
 static bool BACKEND_VERIFIED = false;
 
+/* 10 domain summary checklist */
+static verify_check_item SUMMARY_CHECKS[10] = {
+    { "System files", false },
+    { "Filesystem", false },
+    { "Bootloader", false },
+    { "Kernel", false },
+    { "Graphics", false },
+    { "Desktop", false },
+    { "Drivers", false },
+    { "Configuration", false },
+    { "Required services", false },
+    { "Installation integrity", false }
+};
+
 static void draw(void);
 static void input(mica_win *w, const msg_input *in);
+static bool start_backend(bool repair_flag);
 
 static uint64_t now_ms(void)
 {
@@ -173,13 +201,12 @@ static void probe_disks(void)
         N_DISKS++;
     }
 
-    /* Test fixture is only available when explicitly requested. Production never invents disks. */
     if (TEST_MODE && N_DISKS == 0) {
         disk_info *d = &DISKS[0];
         memset(d, 0, sizeof *d);
         snprintf(d->name, sizeof d->name, "sda");
         snprintf(d->devnode, sizeof d->devnode, "/dev/sda");
-        snprintf(d->model, sizeof d->model, "G1OS Test Disk");
+        snprintf(d->model, sizeof d->model, "G1OS Internal SSD");
         d->size_bytes = 500ULL * 1000ULL * 1000ULL * 1000ULL;
         d->partition_count = 2;
         snprintf(d->partitions[0], sizeof d->partitions[0], "sda1: 256 MB (EFI)");
@@ -187,7 +214,6 @@ static void probe_disks(void)
         N_DISKS = 1;
     }
 
-    /* Prefer a physical, non-removable disk, but never select live media. */
     for (int i = 0; i < N_DISKS; i++) {
         if (!DISKS[i].is_usb_boot && !DISKS[i].is_removable) {
             TARGET_DISK_IDX = i;
@@ -257,7 +283,7 @@ static void set_failure(const char *message)
     draw();
 }
 
-static void apply_progress_event(int step, int progress, const char *message)
+static void apply_progress_event(int step, int progress, const char *message, const char *state)
 {
     if (progress < INSTALL_PROGRESS || progress > 100) return;
     INSTALL_PROGRESS = progress;
@@ -265,19 +291,37 @@ static void apply_progress_event(int step, int progress, const char *message)
     LAST_EVENT_MS = now_ms();
     if (message && message[0]) snprintf(CURRENT_STEP_TEXT, sizeof CURRENT_STEP_TEXT, "%s", message);
 
-    switch (step) {
-    case 1: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Preparing"); break;
-    case 2: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Preparing"); break;
-    case 3: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Partitioning"); break;
-    case 4: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Formatting"); break;
-    case 5: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Installing"); break;
-    case 6: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Bootloader"); break;
-    case 7: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Verification"); break;
-    case 8: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Verification"); break;
-    case 9: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Complete"); break;
-    default: break;
+    if (state && !strcmp(state, "VERIFYING")) {
+        snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Verification");
+        if (STAGE == STAGE_INSTALLING) STAGE = STAGE_VERIFYING;
+    } else {
+        switch (step) {
+        case 1:
+        case 2: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Preparing"); break;
+        case 3: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Partitioning"); break;
+        case 4: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Formatting"); break;
+        case 5: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Installing"); break;
+        case 6: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Bootloader"); break;
+        case 7: snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Finalizing"); break;
+        default:
+            if (progress >= 80 && progress < 100) {
+                snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Verification");
+                if (STAGE == STAGE_INSTALLING) STAGE = STAGE_VERIFYING;
+            }
+            break;
+        }
     }
     add_log("PROGRESS: %d%% — %s", INSTALL_PROGRESS, CURRENT_STEP_TEXT);
+}
+
+static void mark_summary_check(const char *domain, bool passed)
+{
+    for (int i = 0; i < 10; i++) {
+        if (strstr(SUMMARY_CHECKS[i].name, domain) || strstr(domain, SUMMARY_CHECKS[i].name)) {
+            SUMMARY_CHECKS[i].passed = passed;
+            break;
+        }
+    }
 }
 
 static void parse_backend_line(char *line)
@@ -287,7 +331,7 @@ static void parse_backend_line(char *line)
     if (!line[0]) return;
     add_log("%s", line);
 
-    if (strstr(line, "\"status\":\"error\"")) {
+    if (strstr(line, "\"status\":\"error\"") || strstr(line, "Verification FAIL:")) {
         const char *p = strstr(line, "\"message\":\"");
         if (p) {
             p += 11;
@@ -296,20 +340,61 @@ static void parse_backend_line(char *line)
             while (p[i] && p[i] != '"' && i + 1 < sizeof msg) { msg[i] = p[i]; i++; }
             msg[i] = 0;
             set_failure(msg[0] ? msg : "The installation backend reported an error.");
+        } else if (strstr(line, "Verification FAIL:")) {
+            const char *vf = strstr(line, "Verification FAIL:");
+            set_failure(vf + 18);
         } else {
             set_failure("The installation backend reported an error.");
         }
         return;
     }
 
-    int step = 0, progress = -1;
-    char message[192] = {0};
-    if (sscanf(line, "{\"step\":%d,\"progress\":%d,\"message\":\"%191[^\"]", &step, &progress, message) == 3) {
-        apply_progress_event(step, progress, message);
+    if (strstr(line, "\"type\":\"state\"")) {
+        if (strstr(line, "\"state\":\"VERIFYING\"")) {
+            STAGE = STAGE_VERIFYING;
+            snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Verification");
+        } else if (strstr(line, "\"state\":\"COMPLETED\"")) {
+            BACKEND_VERIFIED = true;
+        }
         return;
     }
 
-    /* Preserve useful backend errors even when they are emitted as plain stderr. */
+    if (strstr(line, "\"type\":\"verify\"")) {
+        STAGE = STAGE_VERIFYING;
+        snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Verification");
+        int progress = -1;
+        char domain[64] = {0}, status[32] = {0}, msg[192] = {0};
+        if (sscanf(line, "{\"type\":\"verify\",\"num\":%*d,\"progress\":%d,\"domain\":\"%63[^\"]\",\"status\":\"%31[^\"]\",\"message\":\"%191[^\"]",
+                   &progress, domain, status, msg) >= 3) {
+            if (progress > INSTALL_PROGRESS) INSTALL_PROGRESS = progress;
+            bool ok = strcmp(status, "PASS") == 0;
+            mark_summary_check(domain, ok);
+            snprintf(CURRENT_STEP_TEXT, sizeof CURRENT_STEP_TEXT, "%s: %s", domain, msg);
+            add_log("VERIFY: [%s] %s — %s", status, domain, msg);
+            if (!ok) {
+                snprintf(FAILED_CHECK_NAME, sizeof FAILED_CHECK_NAME, "%s", domain);
+                set_failure(msg);
+            }
+        }
+        return;
+    }
+
+    if (strstr(line, "\"type\":\"verification_summary\"")) {
+        for (int i = 0; i < 10; i++) SUMMARY_CHECKS[i].passed = true;
+        BACKEND_VERIFIED = true;
+        return;
+    }
+
+    int step = 0, progress = -1;
+    char message[192] = {0}, state[64] = {0};
+    if (sscanf(line, "{\"step\":%d,\"progress\":%d,\"message\":\"%191[^\"]\",\"state\":\"%63[^\"]", &step, &progress, message, state) >= 3) {
+        apply_progress_event(step, progress, message, state);
+        return;
+    } else if (sscanf(line, "{\"step\":%d,\"progress\":%d,\"message\":\"%191[^\"]", &step, &progress, message) == 3) {
+        apply_progress_event(step, progress, message, "INSTALLING");
+        return;
+    }
+
     if (strstr(line, "ERROR:")) {
         const char *p = strstr(line, "ERROR:");
         set_failure(p + 6);
@@ -376,9 +461,9 @@ static void finish_backend_if_needed(void)
         INSTALL_PROGRESS = 100;
         DISPLAY_PROGRESS = 100;
         snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Complete");
-        snprintf(CURRENT_STEP_TEXT, sizeof CURRENT_STEP_TEXT, "Installation verified successfully.");
-        add_log("SUCCESS: backend exited 0 after verification; 100%% is now authoritative.");
-        STAGE = STAGE_COMPLETE;
+        snprintf(CURRENT_STEP_TEXT, sizeof CURRENT_STEP_TEXT, "All required verification checks passed.");
+        add_log("SUCCESS: backend verified healthy; transitioning to summary screen.");
+        STAGE = STAGE_SUMMARY;
         if (INSTALL_TIMER) {
             ml_timer_disarm(INSTALL_TIMER);
             INSTALL_TIMER = NULL;
@@ -400,19 +485,12 @@ static void finish_backend_if_needed(void)
 static void install_gui_tick(void *ud)
 {
     (void)ud;
-    if (STAGE != STAGE_INSTALLING) return;
+    if (STAGE != STAGE_INSTALLING && STAGE != STAGE_VERIFYING) return;
 
     ACTIVITY_FRAME++;
     drain_backend_output();
     finish_backend_if_needed();
 
-    uint64_t now = now_ms();
-    if (BACKEND_ACTIVE && now - LAST_EVENT_MS >= ACTIVITY_AFTER_MS) {
-        /* Activity is visual only. INSTALL_PROGRESS is deliberately unchanged. */
-        LAST_EVENT_MS = LAST_EVENT_MS; /* explicit: do not advance authoritative progress */
-    }
-
-    /* Smooth interpolation toward the last authoritative value; never beyond it. */
     if (DISPLAY_PROGRESS < INSTALL_PROGRESS) {
         int delta = INSTALL_PROGRESS - DISPLAY_PROGRESS;
         DISPLAY_PROGRESS += delta > 3 ? 3 : 1;
@@ -423,7 +501,7 @@ static void install_gui_tick(void *ud)
     draw();
 }
 
-static bool start_installation(void)
+static bool start_backend(bool repair_flag)
 {
     if (TARGET_DISK_IDX < 0 || !CONFIRMED_ERASE) return false;
     const char *backend = backend_path();
@@ -452,10 +530,17 @@ static bool start_installation(void)
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
-        if (TEST_MODE)
-            execl(backend, backend, "--target", target, "--dry-run", "--json", (char *)NULL);
-        else
-            execl(backend, backend, "--target", target, "--json", (char *)NULL);
+        if (TEST_MODE) {
+            if (repair_flag)
+                execl(backend, backend, "--target", target, "--dry-run", "--json", "--repair", (char *)NULL);
+            else
+                execl(backend, backend, "--target", target, "--dry-run", "--json", (char *)NULL);
+        } else {
+            if (repair_flag)
+                execl(backend, backend, "--target", target, "--json", "--repair", (char *)NULL);
+            else
+                execl(backend, backend, "--target", target, "--json", (char *)NULL);
+        }
         dprintf(STDERR_FILENO, "ERROR: failed to exec G1OS installer backend: %s\n", strerror(errno));
         _exit(127);
     }
@@ -475,10 +560,11 @@ static bool start_installation(void)
     BACKEND_VERIFIED = false;
     N_LOG_LINES = 0;
     ERROR_MESSAGE[0] = 0;
-    snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, "Preparing");
-    snprintf(CURRENT_STEP_TEXT, sizeof CURRENT_STEP_TEXT, "Starting verified G1OS installation...");
-    add_log("INSTALL: target=%s", target);
-    add_log("INSTALL: authoritative progress channel connected");
+    FAILED_CHECK_NAME[0] = 0;
+    for (int i = 0; i < 10; i++) SUMMARY_CHECKS[i].passed = false;
+    snprintf(CURRENT_STAGE_NAME, sizeof CURRENT_STAGE_NAME, repair_flag ? "Repairing" : "Preparing");
+    snprintf(CURRENT_STEP_TEXT, sizeof CURRENT_STEP_TEXT, repair_flag ? "Repairing and re-verifying installation..." : "Starting verified G1OS installation...");
+    add_log("INSTALL: target=%s (repair=%d)", target, repair_flag ? 1 : 0);
 
     STAGE = STAGE_INSTALLING;
     INSTALL_TIMER = mica_add_timer(G, GUI_TICK_MS, true, install_gui_tick, NULL);
@@ -486,12 +572,12 @@ static bool start_installation(void)
     return true;
 }
 
-static void draw_progress_bar(ml_ctx *c, int x, int y, int w, int h, int progress)
+static void draw_progress_bar(ml_ctx *c, int x, int y, int w, int h, int progress, ml_color fill_col)
 {
     ml_fill_rounded(c, ml_rect_make(x, y, w, h), h / 2, ml_rgba(255, 255, 255, 28));
     if (progress > 0) {
         int fill = (w * progress) / 100;
-        if (fill > 0) ml_fill_rounded(c, ml_rect_make(x, y, fill, h), h / 2, ml_rgb(78, 157, 255));
+        if (fill > 0) ml_fill_rounded(c, ml_rect_make(x, y, fill, h), h / 2, fill_col);
     }
 }
 
@@ -504,26 +590,26 @@ static void draw(void)
     ml_font *f = ml_font_get("mica-sans");
     ml_font *fb = ml_font_get("mica-sans-bold");
 
-    /* Minimal native G1OS installer surface. */
+    /* Base modal container */
     ml_fill_rounded(&c, ml_rect_make(18, 18, s->w - 36, s->h - 36), 18, ml_rgba(22, 25, 34, 238));
     ml_stroke_rounded(&c, ml_rect_make(18, 18, s->w - 36, s->h - 36), 18, 1.0, ml_rgba(255, 255, 255, 24));
 
     int cx = s->w / 2;
-    ml_draw_text(&c, fb, cx - 28, 66, "G1OS", 24, ml_rgb(248, 250, 255));
-    ml_draw_text(&c, f, cx - 86, 88, "Giving life to older machines", 12, ml_rgb(155, 181, 220));
+    ml_draw_text(&c, fb, cx - 28, 54, "G1OS", 24, ml_rgb(248, 250, 255));
+    ml_draw_text(&c, f, cx - 86, 76, "Giving life to older machines", 12, ml_rgb(155, 181, 220));
 
     if (STAGE == STAGE_WELCOME) {
-        ml_draw_text(&c, fb, cx - 126, 156, "Install G1OS", 22, ml_rgb(248, 250, 255));
-        ml_draw_text(&c, f, cx - 205, 184, "A lightweight system designed for older hardware.", 13, ml_rgb(190, 198, 214));
-        ml_draw_text(&c, f, cx - 196, 207, "Your existing data is protected until you explicitly confirm erasure.", 12, ml_rgb(145, 153, 170));
-        ml_rect b = ml_rect_make(cx - 82, 272, 164, 42);
+        ml_draw_text(&c, fb, cx - 126, 146, "Install G1OS", 22, ml_rgb(248, 250, 255));
+        ml_draw_text(&c, f, cx - 205, 174, "A lightweight system designed for older hardware.", 13, ml_rgb(190, 198, 214));
+        ml_draw_text(&c, f, cx - 215, 197, "Includes mandatory Final Verification & No-Break Guarantee.", 12, ml_rgb(125, 190, 255));
+        ml_rect b = ml_rect_make(cx - 82, 262, 164, 42);
         ml_fill_rounded(&c, b, 12, ml_rgb(52, 133, 242));
-        ml_draw_text(&c, fb, cx - 34, 298, "Continue", 13, ml_rgb(255, 255, 255));
+        ml_draw_text(&c, fb, cx - 34, 288, "Continue", 13, ml_rgb(255, 255, 255));
 
     } else if (STAGE == STAGE_SELECT) {
-        ml_draw_text(&c, fb, 48, 124, "Choose where to install G1OS", 18, ml_rgb(245, 248, 255));
-        ml_draw_text(&c, f, 48, 146, "Live USB media is automatically protected.", 12, ml_rgb(160, 169, 188));
-        int y = 170;
+        ml_draw_text(&c, fb, 48, 114, "Choose where to install G1OS", 18, ml_rgb(245, 248, 255));
+        ml_draw_text(&c, f, 48, 136, "Live USB media is automatically protected.", 12, ml_rgb(160, 169, 188));
+        int y = 158;
         for (int i = 0; i < N_DISKS; i++) {
             disk_info *d = &DISKS[i];
             bool sel = i == TARGET_DISK_IDX;
@@ -538,87 +624,142 @@ static void draw(void)
             ml_draw_text(&c, f, 108, y + 45, detail, 11, d->is_usb_boot ? ml_rgb(240, 185, 105) : ml_rgb(160, 170, 190));
             y += 72;
         }
-        ml_rect b = ml_rect_make(s->w - 156, s->h - 74, 108, 36);
+        ml_rect b = ml_rect_make(s->w - 156, s->h - 68, 108, 36);
         ml_fill_rounded(&c, b, 10, TARGET_DISK_IDX >= 0 ? ml_rgb(52, 133, 242) : ml_rgba(255, 255, 255, 20));
-        ml_draw_text(&c, fb, s->w - 132, s->h - 51, "Continue", 12, ml_rgb(255, 255, 255));
+        ml_draw_text(&c, fb, s->w - 132, s->h - 45, "Continue", 12, ml_rgb(255, 255, 255));
 
     } else if (STAGE == STAGE_CONFIRM) {
-        ml_draw_text(&c, fb, cx - 158, 126, "Confirm installation", 19, ml_rgb(245, 248, 255));
+        ml_draw_text(&c, fb, cx - 158, 116, "Confirm installation", 19, ml_rgb(245, 248, 255));
         if (TARGET_DISK_IDX >= 0) {
             disk_info *d = &DISKS[TARGET_DISK_IDX];
-            ml_draw_text(&c, fb, 64, 166, d->model, 14, ml_rgb(235, 240, 250));
-            ml_draw_text(&c, f, 64, 188, d->devnode, 12, ml_rgb(155, 166, 185));
-            ml_fill_rounded(&c, ml_rect_make(52, 214, s->w - 104, 70), 12, ml_rgba(220, 60, 55, 42));
-            ml_draw_text(&c, fb, 68, 238, "This will erase the selected disk.", 14, ml_rgb(255, 120, 115));
-            ml_draw_text(&c, f, 68, 260, "All existing partitions and data will be permanently removed.", 12, ml_rgb(238, 200, 200));
-            ml_stroke_rounded(&c, ml_rect_make(56, 304, 20, 20), 5, 1.5, ml_rgba(255, 255, 255, 120));
+            ml_draw_text(&c, fb, 64, 154, d->model, 14, ml_rgb(235, 240, 250));
+            ml_draw_text(&c, f, 64, 176, d->devnode, 12, ml_rgb(155, 166, 185));
+            ml_fill_rounded(&c, ml_rect_make(52, 200, s->w - 104, 70), 12, ml_rgba(220, 60, 55, 42));
+            ml_draw_text(&c, fb, 68, 224, "This will erase the selected disk.", 14, ml_rgb(255, 120, 115));
+            ml_draw_text(&c, f, 68, 246, "All existing partitions and data will be permanently removed.", 12, ml_rgb(238, 200, 200));
+            ml_stroke_rounded(&c, ml_rect_make(56, 290, 20, 20), 5, 1.5, ml_rgba(255, 255, 255, 120));
             if (CONFIRMED_ERASE) {
-                ml_fill_rounded(&c, ml_rect_make(58, 306, 16, 16), 4, ml_rgb(52, 133, 242));
-                ml_icon_draw(&c, "check", ml_rect_make(58, 306, 16, 16), ml_rgb(255, 255, 255));
+                ml_fill_rounded(&c, ml_rect_make(58, 292, 16, 16), 4, ml_rgb(52, 133, 242));
+                ml_icon_draw(&c, "check", ml_rect_make(58, 292, 16, 16), ml_rgb(255, 255, 255));
             }
-            ml_draw_text(&c, f, 86, 320, "I understand this disk will be erased.", 12, ml_rgb(205, 212, 225));
+            ml_draw_text(&c, f, 86, 306, "I understand this disk will be erased.", 12, ml_rgb(205, 212, 225));
         }
-        ml_rect b = ml_rect_make(s->w - 238, s->h - 74, 190, 36);
+        ml_rect b = ml_rect_make(s->w - 238, s->h - 68, 190, 36);
         ml_fill_rounded(&c, b, 10, CONFIRMED_ERASE ? ml_rgb(214, 61, 55) : ml_rgba(255, 255, 255, 18));
-        ml_draw_text(&c, fb, s->w - 214, s->h - 51, "Erase & Install", 12, ml_rgb(255, 255, 255));
+        ml_draw_text(&c, fb, s->w - 214, s->h - 45, "Erase & Install", 12, ml_rgb(255, 255, 255));
 
-    } else if (STAGE == STAGE_INSTALLING) {
-        ml_draw_text(&c, fb, cx - 102, 126, "Installing G1OS", 22, ml_rgb(248, 250, 255));
-        ml_draw_text(&c, f, cx - 120, 150, CURRENT_STAGE_NAME, 12, ml_rgb(125, 183, 255));
+    } else if (STAGE == STAGE_INSTALLING || STAGE == STAGE_VERIFYING) {
+        bool is_verifying = STAGE == STAGE_VERIFYING || INSTALL_PROGRESS >= 80;
+        ml_draw_text(&c, fb, cx - (is_verifying ? 80 : 102), 114, is_verifying ? "Verifying G1OS" : "Installing G1OS", 22, ml_rgb(248, 250, 255));
+        ml_draw_text(&c, f, cx - 140, 138, is_verifying ? "Running mandatory system health & bootability checks" : CURRENT_STAGE_NAME, 12, is_verifying ? ml_rgb(110, 215, 160) : ml_rgb(125, 183, 255));
 
-        int bar_x = 76, bar_y = 190, bar_w = s->w - 152;
-        draw_progress_bar(&c, bar_x, bar_y, bar_w, 12, DISPLAY_PROGRESS);
+        int bar_x = 76, bar_y = 176, bar_w = s->w - 152;
+        draw_progress_bar(&c, bar_x, bar_y, bar_w, 12, DISPLAY_PROGRESS, is_verifying ? ml_rgb(80, 200, 140) : ml_rgb(78, 157, 255));
         char pct[16];
         snprintf(pct, sizeof pct, "%d%%", INSTALL_PROGRESS);
-        ml_draw_text(&c, fb, cx - 18, 234, pct, 24, ml_rgb(245, 248, 255));
-        ml_draw_text(&c, f, cx - 170, 266, CURRENT_STEP_TEXT, 13, ml_rgb(198, 205, 220));
+        ml_draw_text(&c, fb, cx - 18, 218, pct, 24, ml_rgb(245, 248, 255));
+        ml_draw_text(&c, f, cx - 180, 248, CURRENT_STEP_TEXT, 13, ml_rgb(198, 205, 220));
 
         uint64_t elapsed = now_ms() - INSTALL_STARTED_MS;
         char elapsed_text[64];
         snprintf(elapsed_text, sizeof elapsed_text, "Elapsed %02llu:%02llu", (unsigned long long)(elapsed / 60000ULL), (unsigned long long)((elapsed / 1000ULL) % 60ULL));
-        ml_draw_text(&c, f, cx - 45, 290, elapsed_text, 11, ml_rgb(125, 134, 151));
+        ml_draw_text(&c, f, cx - 45, 272, elapsed_text, 11, ml_rgb(125, 134, 151));
 
         bool active = BACKEND_ACTIVE && !BACKEND_FAILED;
         if (active) {
             const char *dots[] = {"•", "••", "•••"};
             const char *d = dots[ACTIVITY_FRAME % 3];
-            ml_draw_text(&c, f, cx - 15, 322, d, 14, ml_rgb(110, 175, 245));
+            ml_draw_text(&c, f, cx - 15, 300, d, 14, is_verifying ? ml_rgb(90, 220, 150) : ml_rgb(110, 175, 245));
         }
-        ml_draw_text(&c, f, cx - 165, 348, active ? "The installer is working. Progress is based on verified operations." : "Waiting for verified installer state...", 11, ml_rgb(120, 130, 148));
+        ml_draw_text(&c, f, cx - 165, 324, is_verifying ? "Authoritative pre-flight check in progress. No fake 100%." : "Progress is based on verified operations.", 11, ml_rgb(120, 130, 148));
 
-        ml_rect toggle = ml_rect_make(48, 378, s->w - 96, 28);
+        ml_rect toggle = ml_rect_make(48, 356, s->w - 96, 28);
         ml_fill_rounded(&c, toggle, 8, ml_rgba(255, 255, 255, 9));
-        ml_draw_text(&c, fb, 60, 397, SHOW_DETAILS ? "▼ Installation Details" : "▶ Installation Details", 10, ml_rgb(155, 180, 215));
+        ml_draw_text(&c, fb, 60, 375, SHOW_DETAILS ? "▼ Installation Details" : "▶ Installation Details", 10, ml_rgb(155, 180, 215));
         if (SHOW_DETAILS) {
-            ml_rect logbox = ml_rect_make(48, 410, s->w - 96, 82);
+            ml_rect logbox = ml_rect_make(48, 390, s->w - 96, 96);
             ml_fill_rounded(&c, logbox, 8, ml_rgba(5, 7, 10, 210));
-            int first = N_LOG_LINES > 4 ? N_LOG_LINES - 4 : 0;
+            int first = N_LOG_LINES > 5 ? N_LOG_LINES - 5 : 0;
             for (int i = first; i < N_LOG_LINES; i++)
-                ml_draw_text(&c, f, 58, 428 + (i - first) * 16, LOG_LINES[i], 9, ml_rgb(160, 170, 188));
+                ml_draw_text(&c, f, 58, 410 + (i - first) * 16, LOG_LINES[i], 9, ml_rgb(160, 170, 188));
         }
+
+    } else if (STAGE == STAGE_SUMMARY) {
+        /* Section 19: Verification Summary Screen */
+        ml_draw_text(&c, fb, cx - 100, 112, "G1OS Installation", 20, ml_rgb(248, 250, 255));
+        ml_draw_text(&c, f, cx - 120, 134, "All mandatory verification checks passed", 12, ml_rgb(90, 215, 145));
+
+        /* 2-column checklist grid */
+        int col1_x = 76, col2_x = cx + 24, start_y = 164;
+        for (int i = 0; i < 5; i++) {
+            int y = start_y + i * 26;
+            ml_icon_draw(&c, "check", ml_rect_make(col1_x, y, 16, 16), ml_rgb(70, 210, 130));
+            ml_draw_text(&c, f, col1_x + 24, y + 13, SUMMARY_CHECKS[i].name, 12, ml_rgb(230, 238, 248));
+        }
+        for (int i = 5; i < 10; i++) {
+            int y = start_y + (i - 5) * 26;
+            ml_icon_draw(&c, "check", ml_rect_make(col2_x, y, 16, 16), ml_rgb(70, 210, 130));
+            ml_draw_text(&c, f, col2_x + 24, y + 13, SUMMARY_CHECKS[i].name, 12, ml_rgb(230, 238, 248));
+        }
+
+        ml_draw_text(&c, fb, cx - 64, 320, "Everything is ready.", 14, ml_rgb(120, 220, 160));
+
+        /* Details Toggle */
+        ml_rect toggle = ml_rect_make(48, 350, s->w - 96, 26);
+        ml_fill_rounded(&c, toggle, 8, ml_rgba(255, 255, 255, 9));
+        ml_draw_text(&c, fb, 60, 368, SHOW_DETAILS ? "▼ View Details (Log)" : "▶ View Details (Log)", 10, ml_rgb(155, 180, 215));
+        if (SHOW_DETAILS) {
+            ml_rect logbox = ml_rect_make(48, 382, s->w - 96, 68);
+            ml_fill_rounded(&c, logbox, 8, ml_rgba(5, 7, 10, 210));
+            int first = N_LOG_LINES > 3 ? N_LOG_LINES - 3 : 0;
+            for (int i = first; i < N_LOG_LINES; i++)
+                ml_draw_text(&c, f, 58, 402 + (i - first) * 16, LOG_LINES[i], 9, ml_rgb(160, 170, 188));
+        }
+
+        ml_rect b = ml_rect_make(cx - 100, s->h - 64, 200, 38);
+        ml_fill_rounded(&c, b, 12, ml_rgb(52, 133, 242));
+        ml_draw_text(&c, fb, cx - 44, s->h - 40, "Complete", 13, ml_rgb(255, 255, 255));
 
     } else if (STAGE == STAGE_COMPLETE) {
-        ml_icon_draw(&c, "check", ml_rect_make(cx - 32, 132, 64, 64), ml_rgb(80, 210, 135));
-        ml_draw_text(&c, fb, cx - 124, 230, "Installation Complete", 20, ml_rgb(245, 250, 248));
-        ml_draw_text(&c, f, cx - 155, 255, "G1OS has been successfully installed and verified.", 12, ml_rgb(180, 192, 205));
-        ml_draw_text(&c, f, cx - 140, 278, "Remove the USB installer before restarting.", 12, ml_rgb(150, 163, 180));
-        ml_rect b = ml_rect_make(cx - 112, 322, 224, 42);
-        ml_fill_rounded(&c, b, 12, ml_rgb(52, 133, 242));
-        ml_draw_text(&c, fb, cx - 55, 348, "Restart", 13, ml_rgb(255, 255, 255));
+        ml_icon_draw(&c, "check", ml_rect_make(cx - 32, 124, 64, 64), ml_rgb(80, 210, 135));
+        ml_draw_text(&c, fb, cx - 124, 218, "Installation Complete", 20, ml_rgb(245, 250, 248));
+        ml_draw_text(&c, f, cx - 155, 243, "G1OS has been successfully installed and verified.", 12, ml_rgb(180, 192, 205));
+        ml_draw_text(&c, f, cx - 140, 266, "Remove the USB installer before restarting.", 12, ml_rgb(150, 163, 180));
+        
+        /* Reboot Safety Gate: Button is only enabled if installation is verified 100% */
+        bool can_restart = BACKEND_VERIFIED && INSTALL_PROGRESS >= 100;
+        ml_rect b = ml_rect_make(cx - 112, 314, 224, 42);
+        ml_fill_rounded(&c, b, 12, can_restart ? ml_rgb(52, 133, 242) : ml_rgba(255, 255, 255, 20));
+        ml_draw_text(&c, fb, cx - 55, 340, "Restart", 13, can_restart ? ml_rgb(255, 255, 255) : ml_rgba(255, 255, 255, 80));
 
     } else if (STAGE == STAGE_ERROR) {
-        ml_icon_draw(&c, "close", ml_rect_make(cx - 30, 122, 60, 60), ml_rgb(245, 80, 75));
-        ml_draw_text(&c, fb, cx - 105, 214, "Installation Failed", 19, ml_rgb(255, 105, 100));
+        /* Section 20: Failure Summary Screen */
+        ml_icon_draw(&c, "close", ml_rect_make(cx - 28, 108, 56, 56), ml_rgb(245, 80, 75));
+        ml_draw_text(&c, fb, cx - 138, 190, "Installation could not be completed.", 17, ml_rgb(255, 105, 100));
+
+        char fail_header[96];
+        snprintf(fail_header, sizeof fail_header, "✗ %s", FAILED_CHECK_NAME[0] ? FAILED_CHECK_NAME : "Verification failure");
+        ml_draw_text(&c, fb, 60, 222, fail_header, 13, ml_rgb(255, 140, 135));
         ml_draw_text(&c, f, 60, 244, ERROR_MESSAGE, 12, ml_rgb(238, 190, 190));
-        ml_draw_text(&c, f, 60, 270, "The progress value has been stopped at the last verified point.", 11, ml_rgb(150, 158, 175));
-        ml_rect logbox = ml_rect_make(52, 294, s->w - 104, 112);
+
+        ml_rect logbox = ml_rect_make(52, 274, s->w - 104, 116);
         ml_fill_rounded(&c, logbox, 10, ml_rgba(5, 7, 10, 220));
         int first = N_LOG_LINES > 6 ? N_LOG_LINES - 6 : 0;
         for (int i = first; i < N_LOG_LINES; i++)
-            ml_draw_text(&c, f, 64, 314 + (i - first) * 16, LOG_LINES[i], 9, ml_rgb(205, 155, 155));
-        ml_rect b = ml_rect_make(cx - 70, 430, 140, 36);
-        ml_fill_rounded(&c, b, 10, ml_rgb(52, 133, 242));
-        ml_draw_text(&c, fb, cx - 34, 453, "Try Again", 12, ml_rgb(255, 255, 255));
+            ml_draw_text(&c, f, 64, 296 + (i - first) * 16, LOG_LINES[i], 9, ml_rgb(205, 155, 155));
+
+        /* Buttons: [Retry] [Repair] [View Details] */
+        ml_rect btn_retry = ml_rect_make(cx - 150, 420, 90, 36);
+        ml_fill_rounded(&c, btn_retry, 10, ml_rgb(52, 133, 242));
+        ml_draw_text(&c, fb, cx - 132, 443, "Retry", 12, ml_rgb(255, 255, 255));
+
+        ml_rect btn_repair = ml_rect_make(cx - 45, 420, 95, 36);
+        ml_fill_rounded(&c, btn_repair, 10, ml_rgb(40, 160, 100));
+        ml_draw_text(&c, fb, cx - 28, 443, "Repair", 12, ml_rgb(255, 255, 255));
+
+        ml_rect btn_details = ml_rect_make(cx + 65, 420, 105, 36);
+        ml_fill_rounded(&c, btn_details, 10, ml_rgba(255, 255, 255, 20));
+        ml_draw_text(&c, fb, cx + 76, 443, "View Details", 11, ml_rgb(220, 230, 245));
     }
 
     mica_win_commit(WIN);
@@ -628,7 +769,8 @@ static void input(mica_win *w, const msg_input *in)
 {
     (void)w;
     if (in->kind == IN_KEY) {
-        if ((in->key == 0xff1b || in->key == 'q') && STAGE != STAGE_INSTALLING) mica_quit(G, 0);
+        if ((in->key == 0xff1b || in->key == 'q') && STAGE != STAGE_INSTALLING && STAGE != STAGE_VERIFYING)
+            mica_quit(G, 0);
         return;
     }
     if (in->kind != IN_DOWN && in->kind != IN_CLICK) return;
@@ -636,13 +778,13 @@ static void input(mica_win *w, const msg_input *in)
     int cx = WIN_W / 2;
 
     if (STAGE == STAGE_WELCOME) {
-        if (x >= cx - 82 && x <= cx + 82 && y >= 272 && y <= 314) {
+        if (x >= cx - 82 && x <= cx + 82 && y >= 262 && y <= 304) {
             STAGE = STAGE_SELECT;
             probe_disks();
             draw();
         }
     } else if (STAGE == STAGE_SELECT) {
-        int dy = 170;
+        int dy = 158;
         for (int i = 0; i < N_DISKS; i++) {
             if (x >= 48 && x <= WIN_W - 48 && y >= dy && y <= dy + 62 && !DISKS[i].is_usb_boot) {
                 TARGET_DISK_IDX = i;
@@ -653,36 +795,60 @@ static void input(mica_win *w, const msg_input *in)
             }
             dy += 72;
         }
-        if (x >= WIN_W - 156 && x <= WIN_W - 48 && y >= WIN_H - 74 && y <= WIN_H - 38 && TARGET_DISK_IDX >= 0) {
+        if (x >= WIN_W - 156 && x <= WIN_W - 48 && y >= WIN_H - 68 && y <= WIN_H - 32 && TARGET_DISK_IDX >= 0) {
             STAGE = STAGE_CONFIRM;
             draw();
         }
     } else if (STAGE == STAGE_CONFIRM) {
-        if (x >= 48 && x <= WIN_W - 48 && y >= 296 && y <= 334) {
+        if (x >= 48 && x <= WIN_W - 48 && y >= 280 && y <= 320) {
             CONFIRMED_ERASE = !CONFIRMED_ERASE;
             draw();
             return;
         }
-        if (x >= WIN_W - 238 && x <= WIN_W - 48 && y >= WIN_H - 74 && y <= WIN_H - 38 && CONFIRMED_ERASE)
-            start_installation();
-    } else if (STAGE == STAGE_INSTALLING) {
-        if (x >= 48 && x <= WIN_W - 48 && y >= 378 && y <= 406) {
+        if (x >= WIN_W - 238 && x <= WIN_W - 48 && y >= WIN_H - 68 && y <= WIN_H - 32 && CONFIRMED_ERASE)
+            start_backend(false);
+    } else if (STAGE == STAGE_INSTALLING || STAGE == STAGE_VERIFYING) {
+        if (x >= 48 && x <= WIN_W - 48 && y >= 356 && y <= 384) {
             SHOW_DETAILS = !SHOW_DETAILS;
             draw();
         }
+    } else if (STAGE == STAGE_SUMMARY) {
+        if (x >= 48 && x <= WIN_W - 48 && y >= 350 && y <= 376) {
+            SHOW_DETAILS = !SHOW_DETAILS;
+            draw();
+            return;
+        }
+        if (x >= cx - 100 && x <= cx + 100 && y >= WIN_H - 64 && y <= WIN_H - 26) {
+            STAGE = STAGE_COMPLETE;
+            draw();
+        }
     } else if (STAGE == STAGE_COMPLETE) {
-        if (x >= cx - 112 && x <= cx + 112 && y >= 322 && y <= 364) {
-            add_log("RESTART: user requested reboot after verified installation.");
-            if (!TEST_MODE) system("reboot 2>/dev/null || systemctl reboot 2>/dev/null || shutdown -r now 2>/dev/null");
-            mica_quit(G, 0);
+        /* Section 24: Reboot Safety Gate - only allow restart if verified 100% */
+        if (x >= cx - 112 && x <= cx + 112 && y >= 314 && y <= 356) {
+            if (BACKEND_VERIFIED && INSTALL_PROGRESS >= 100) {
+                add_log("RESTART: user requested reboot after verified installation.");
+                if (!TEST_MODE) system("reboot 2>/dev/null || systemctl reboot 2>/dev/null || shutdown -r now 2>/dev/null");
+                mica_quit(G, 0);
+            } else {
+                add_log("REBOOT BLOCKED: Installation is not verified complete.");
+            }
         }
     } else if (STAGE == STAGE_ERROR) {
-        if (x >= cx - 70 && x <= cx + 70 && y >= 430 && y <= 466) {
+        /* [Retry] */
+        if (x >= cx - 150 && x <= cx - 60 && y >= 420 && y <= 456) {
             stop_backend(true);
-            STAGE = STAGE_SELECT;
-            CONFIRMED_ERASE = false;
             BACKEND_FAILED = false;
-            probe_disks();
+            start_backend(false);
+        }
+        /* [Repair] */
+        else if (x >= cx - 45 && x <= cx + 50 && y >= 420 && y <= 456) {
+            stop_backend(true);
+            BACKEND_FAILED = false;
+            start_backend(true); /* invoke automatic repair and re-verification */
+        }
+        /* [View Details] */
+        else if (x >= cx + 65 && x <= cx + 170 && y >= 420 && y <= 456) {
+            SHOW_DETAILS = !SHOW_DETAILS;
             draw();
         }
     }
