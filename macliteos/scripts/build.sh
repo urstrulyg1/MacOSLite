@@ -1,7 +1,7 @@
 #!/bin/sh
 # G1OS production build entry point.
-# A successful build is NOT a release-ready installation artifact unless a
-# fresh ISO is assembled and its contents are verified.
+# A successful build is NOT release-ready unless a fresh ISO is assembled and
+# independently verified.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -15,21 +15,19 @@ sh scripts/run-tests.sh
 
 echo
 echo "== production ISO"
-# Installation-readiness policy: never silently skip ISO creation. Missing
-# ISO tooling is a hard failure because the physical-install path cannot be
-# considered verified without a fresh artifact.
-for tool in xorriso grub-mkimage mksquashfs; do
+for tool in xorriso grub-mkimage mksquashfs cpio isoinfo unsquashfs sha256sum; do
     if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "ERROR: required ISO tool missing: $tool" >&2
+        echo "ERROR: required release tool missing: $tool" >&2
         exit 2
     fi
 done
 
 sh scripts/make-iso.sh --verify
 
-[ -s out/MacLiteOS.iso ] || { echo "ERROR: fresh ISO missing or empty" >&2; exit 3; }
-[ -s out/MacLiteOS.iso.sha256 ] || { echo "ERROR: ISO SHA-256 checksum missing" >&2; exit 3; }
+[ -s out/G1OS.iso ] || { echo "ERROR: fresh ISO missing or empty" >&2; exit 3; }
+[ -s out/G1OS.iso.sha256 ] || { echo "ERROR: ISO SHA-256 checksum missing" >&2; exit 3; }
 [ -s out/iso-manifest.txt ] || { echo "ERROR: ISO manifest missing" >&2; exit 3; }
+sha256sum -c out/G1OS.iso.sha256 >/dev/null || { echo "ERROR: ISO checksum verification failed" >&2; exit 4; }
 
 echo
 echo "BUILD STATUS: PASS"
