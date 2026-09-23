@@ -1,20 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Wifi,
-  Volume2,
-  Search,
-  Bell,
-  BatteryCharging,
-  MonitorSmartphone,
-  ChevronRight,
-  Fan,
-  Thermometer,
-  Sliders,
-  Sun,
-  Moon,
-  Zap,
-  Bluetooth,
-} from "lucide-react";
+  Wifi, Volume2, Search, Bell, BatteryCharging, MonitorSmartphone, ChevronRight,
+  Fan, Thermometer, Sliders, Sun, Bluetooth,
+} from "./icons/glyphs";
 import { APPS, useOS, type AppId } from "./os";
 
 /* ---- G1OS logomark ---- */
@@ -112,6 +100,7 @@ export default function MenuBar() {
     [
       { label: "as Icons", kbd: "⌘1", run: () => os.setFinderView("icon") },
       { label: "as List", kbd: "⌘2", run: () => os.setFinderView("list") },
+      { label: "as Columns", kbd: "⌘3", run: () => os.setFinderView("column") },
       { sep: true },
       { label: "Enter Full Screen", kbd: "⌃⌘F", run: () => focused && os.toggleFull(focused.id) },
     ],
@@ -143,13 +132,13 @@ export default function MenuBar() {
     { label: "Restart…", run: () => os.setPowerState("restart_dialog") },
     { label: "Shut Down…", run: () => os.setPowerState("shutdown_dialog") },
     { sep: true },
-    { label: "Lock Screen", kbd: "⌃⌘Q", run: () => os.setPowerState("logout_dialog") },
+    { label: "Lock Screen", kbd: "⌃⌘Q", run: () => os.setLocked(true) },
     { label: "Log Out Jeevan…", kbd: "⇧⌘Q", run: () => os.setPowerState("logout_dialog") },
   ];
 
   return (
     <div
-      className="glass absolute inset-x-0 top-0 z-[500] flex h-7 items-center justify-between bg-[rgba(246,246,250,0.75)] backdrop-blur-md px-2 text-[13px] text-black/85 shadow-[0_0.5px_0_rgba(0,0,0,0.12)] select-none"
+      className="menubar glass absolute inset-x-0 top-0 z-[500] flex h-7 items-center justify-between px-2 text-[13px] select-none"
       onMouseDown={() => os.setMenuOpen(null)}
     >
       {/* left */}
@@ -291,9 +280,10 @@ export default function MenuBar() {
                 <span className="flex items-center gap-1"><Sun size={12} /> Display Brightness</span>
               </div>
               <input
-                type="range" min={10} max={100} defaultValue={85}
+                type="range" min={20} max={100} value={os.brightness}
+                onChange={(e) => os.setBrightness(+e.target.value)}
                 className="os-range w-full"
-                style={{ ["--v" as any]: "85%" }}
+                style={{ ["--v" as any]: `${os.brightness}%` }}
               />
             </div>
           </div>

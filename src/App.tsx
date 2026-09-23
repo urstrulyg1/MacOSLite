@@ -5,7 +5,7 @@ import Performance from "./site/Performance";
 import Hardware from "./site/Hardware";
 import BuildKit from "./site/BuildKit";
 import { LogoMark } from "./os/MenuBar";
-import { ChevronDown, ArrowRight, User, Power, RotateCcw, Moon, Sparkles } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 
 const BOOT_LINES = [
   "Apple EFI 1.10 · 64-bit fallback loader verified",
@@ -103,9 +103,8 @@ export default function App() {
                     opacity: isG1OS ? 0 : 1,
                     transform: isG1OS ? "scale(0.35) translateY(-2px)" : "scale(1) translateY(0)",
                     letterSpacing: isG1OS ? "-0.08em" : "-0.01em",
-                    filter: isG1OS ? "blur(5px)" : "blur(0px)",
                     transition:
-                      "transform 1000ms cubic-bezier(0.25, 1, 0.4, 1), opacity 850ms ease-out, filter 900ms ease-out, letter-spacing 1000ms cubic-bezier(0.25, 1, 0.4, 1)",
+                      "transform 1000ms cubic-bezier(0.25, 1, 0.4, 1), opacity 850ms ease-out, letter-spacing 1000ms cubic-bezier(0.25, 1, 0.4, 1)",
                     pointerEvents: "none",
                   }}
                 >
@@ -120,9 +119,8 @@ export default function App() {
                   style={{
                     opacity: isG1OS ? 1 : 0,
                     transform: isG1OS ? "scale(1) translateY(0)" : "scale(0.5) translateY(4px)",
-                    filter: isG1OS ? "blur(0px)" : "blur(6px)",
                     transition:
-                      "transform 1000ms cubic-bezier(0.2, 0.9, 0.3, 1), opacity 800ms ease-out, filter 800ms ease-out",
+                      "transform 1000ms cubic-bezier(0.2, 0.9, 0.3, 1), opacity 800ms ease-out",
                     pointerEvents: "none",
                   }}
                 >

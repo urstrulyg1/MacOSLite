@@ -1,430 +1,331 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { APPS, DOCK_ORDER, useOS, type AppId, type Win } from "./os";
-import { LogoMark } from "./MenuBar";
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { APPS, DOCK_ORDER, useOS, type AppId } from "./os";
 import { G1Icon, FinderSquircle as FinderFace } from "./icons/IconSystem";
+import { setDockTarget } from "./dockRegistry";
+import { dockScale, dockShifts, motionProfile } from "./motion";
+import { DOCK_DIVIDER_GAP, DOCK_INFLUENCE, DOCK_PAD_X, DOCK_SPACING } from "./tokens";
 
 export { FinderFace };
 
-function AppTile({ app, size }: { app: AppId; size: number }) {
-  return <G1Icon name={app} size={Math.round(size)} />;
+interface ItemMeta {
+  key: string;
+  kind: "app" | "trash";
+  appId?: AppId;
+  label: string;
 }
 
-/* ------------------------------------------------------------------ */
-/* Main macOS Dock Component                                           */
-/* ------------------------------------------------------------------ */
-
+/**
+ * Floating Dock.
+ *
+ * The shell width is constant (worst-case magnification), so pointer
+ * distance is measured against a stable origin — scales cannot feedback
+ * into the coordinate they were computed from. Icons are translated by
+ * neighbor displacement and scaled from the shelf floor. A single rAF
+ * runs only while the pointer is over the Dock or the row is settling.
+ */
 export default function Dock() {
   const os = useOS();
-  const { dock, perfMode, reduceMotion } = os;
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const { dock, visualMode, reduceMotion } = os;
   const vertical = dock.pos !== "bottom";
+  const profile = motionProfile(visualMode, reduceMotion);
 
-  // Mouse coordinate offset from dock's center anchor point
-  const [mouseCoord, setMouseCoord] = useState<number | null>(null);
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-  const [bounced, setBounced] = useState<string | null>(null);
-  const [hoverStrip, setHoverStrip] = useState(false);
-  const rafRef = useRef<number | null>(null);
+  const base = dock.size || 54;
+  const gap = DOCK_SPACING;
+  const maxScale = dock.mag ? 1 + Math.max(0, dock.magScale) * profile.magAmount : 1;
+  const radius = base * DOCK_INFLUENCE;
 
-  const minimized = os.wins.filter((w) => w.min);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const glassRef = useRef<HTMLDivElement>(null);
+  const btnRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const dotRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const divRef = useRef<HTMLDivElement>(null);
+  const tipRef = useRef<HTMLDivElement>(null);
+  const mouseRef = useRef<number | null>(null);
+  const smoothRef = useRef<number | null>(null);
+  const scalesRef = useRef<number[]>([]);
+  const rafRef = useRef(0);
+  const liveRef = useRef(false);
+  const hoverRef = useRef(-1);
+  const [revealed, setRevealed] = useState(!dock.autohide);
+
   const running = useMemo(() => new Set(os.wins.map((w) => w.app)), [os.wins]);
-
-  const baseSize = dock.size || 50;
-  const gap = 8;
-  const dividerWidth = 14;
-  const isMagEnabled = dock.mag && !perfMode && !reduceMotion;
-  const maxScale = isMagEnabled ? 1 + (dock.magScale || 0.45) : 1.0;
-  const influenceRadius = baseSize * 2.8; // ~140px smooth influence zone
-
-  // Construct flat ordered list of items for layout indexing
-  interface ItemMeta {
-    key: string;
-    type: "app" | "minimized" | "trash";
-    appId?: AppId;
-    win?: Win;
-    label: string;
-  }
+  const trashCount = (os.fs.Trash || []).length;
 
   const items: ItemMeta[] = useMemo(() => {
-    const list: ItemMeta[] = [];
-    for (const app of DOCK_ORDER) {
-      const def = APPS[app] || APPS.finder;
-      list.push({ key: `app-${app}`, type: "app", appId: app, label: def.name });
-    }
-    for (const w of minimized) {
-      list.push({ key: `win-${w.id}`, type: "minimized", win: w, label: w.title });
-    }
-    const trashCount = (os.fs.Trash || []).length;
-    list.push({
-      key: "trash",
-      type: "trash",
-      label: trashCount > 0 ? `Trash (${trashCount} items)` : "Trash",
-    });
+    const list: ItemMeta[] = DOCK_ORDER.map((app) => ({
+      key: app,
+      kind: "app" as const,
+      appId: app,
+      label: APPS[app]?.name ?? app,
+    }));
+    list.push({ key: "trash", kind: "trash", label: trashCount ? `Trash, ${trashCount} items` : "Trash" });
     return list;
-  }, [minimized, os.fs.Trash]);
+  }, [trashCount]);
 
-  // Precompute static resting centers relative to the dock's center anchor
-  const restingOffsets = useMemo(() => {
-    const offsets: number[] = [];
-    let cur = 0;
-    const appCount = DOCK_ORDER.length;
+  const trashIndex = items.length - 1;
 
-    for (let i = 0; i < items.length; i++) {
-      if (i === appCount) {
-        cur += dividerWidth + gap;
-      }
-      const center = cur + baseSize / 2;
-      offsets.push(center);
-      cur += baseSize + gap;
+  const restingLeft = useCallback((i: number) => {
+    let x = 0;
+    for (let j = 0; j < i; j++) {
+      x += base + gap;
+      if (j === trashIndex - 1) x += DOCK_DIVIDER_GAP;
     }
+    return x;
+  }, [base, gap, trashIndex]);
 
-    const totalSpan = cur - gap;
-    return offsets.map((c) => c - totalSpan / 2);
-  }, [items.length, baseSize, gap]);
+  const contentWidth = restingLeft(Math.max(0, items.length - 1)) + base;
+  const maxGrow = items.length * base * Math.max(0, maxScale - 1);
+  const origin = maxGrow / 2 + DOCK_PAD_X;
+  const shellMain = contentWidth + maxGrow + DOCK_PAD_X * 2;
+  const shellCross = base + 22;
 
-  // Compute magnification scale factor for an item index
-  const getScale = useCallback(
-    (index: number) => {
-      if (!isMagEnabled || mouseCoord === null) return 1.0;
-      const targetOffset = restingOffsets[index] ?? 0;
-      const dist = Math.abs(mouseCoord - targetOffset);
-      if (dist >= influenceRadius) return 1.0;
-
-      // Cosine-squared taper for zero derivative at boundary (no jump or pop)
-      const ratio = dist / influenceRadius;
-      const cosVal = Math.cos((ratio * Math.PI) / 2);
-      return 1.0 + (maxScale - 1.0) * (cosVal * cosVal);
-    },
-    [isMagEnabled, mouseCoord, restingOffsets, influenceRadius, maxScale]
-  );
-
-  // Mouse tracker locked to requestAnimationFrame for locked 60/120 FPS
-  const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    setHoverStrip(false);
-    const rect = wrapRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    // Anchor dock center on screen
-    const dockCenter = vertical
-      ? rect.top + rect.height / 2
-      : rect.left + rect.width / 2;
-
-    const mousePos = vertical ? e.clientY : e.clientX;
-    const offset = mousePos - dockCenter;
-
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
-      setMouseCoord(offset);
+  const apply = useCallback((scales: number[]) => {
+    const extras = scales.map((s) => base * (s - 1));
+    const shifts = dockShifts(extras);
+    let minL = Infinity;
+    let maxR = -Infinity;
+    items.forEach((_, i) => {
+      const s = scales[i] || 1;
+      const shift = shifts[i] || 0;
+      const left = restingLeft(i) + shift - (base * (s - 1)) / 2;
+      const right = left + base * s;
+      if (left < minL) minL = left;
+      if (right > maxR) maxR = right;
+      const el = btnRefs.current[i];
+      if (el) {
+        el.style.transform = vertical
+          ? `translate3d(0, ${shift}px, 0) scale(${s})`
+          : `translate3d(${shift}px, 0, 0) scale(${s})`;
+      }
+      const dot = dotRefs.current[i];
+      if (dot) {
+        dot.style.transform = vertical
+          ? `translate3d(0, ${shift}px, 0)`
+          : `translate3d(${shift}px, 0, 0)`;
+      }
     });
-  };
+    const glass = glassRef.current;
+    if (glass && Number.isFinite(minL)) {
+      const gLeft = origin + minL - DOCK_PAD_X;
+      const gSize = maxR - minL + DOCK_PAD_X * 2;
+      if (vertical) {
+        glass.style.top = `${gLeft}px`;
+        glass.style.height = `${gSize}px`;
+        glass.style.left = "4px";
+        glass.style.width = `${shellCross - 8}px`;
+      } else {
+        glass.style.left = `${gLeft}px`;
+        glass.style.width = `${gSize}px`;
+        glass.style.bottom = "2px";
+        glass.style.height = `${shellCross - 6}px`;
+      }
+    }
+    const div = divRef.current;
+    if (div && trashIndex > 0) {
+      const boundary = restingLeft(trashIndex) - DOCK_DIVIDER_GAP / 2;
+      const shift = ((shifts[trashIndex - 1] || 0) + (shifts[trashIndex] || 0)) / 2;
+      div.style.transform = vertical
+        ? `translate3d(0, ${boundary + shift}px, 0)`
+        : `translate3d(${boundary + shift}px, 0, 0)`;
+    }
+    const tip = tipRef.current;
+    const hi = hoverRef.current;
+    if (tip) {
+      if (hi >= 0 && mouseRef.current != null) {
+        const s = scales[hi] || 1;
+        const shift = shifts[hi] || 0;
+        tip.textContent = items[hi]?.label ?? "";
+        tip.style.opacity = "1";
+        const along = origin + restingLeft(hi) + base / 2 + shift;
+        if (vertical) {
+          tip.style.top = `${along}px`;
+          tip.style.left = `${shellCross + 8}px`;
+        } else {
+          tip.style.left = `${along}px`;
+          tip.style.bottom = `${8 + base * s + 10}px`;
+        }
+      } else {
+        tip.style.opacity = "0";
+      }
+    }
+  }, [base, items, origin, restingLeft, shellCross, trashIndex, vertical]);
 
-  const onMouseLeave = () => {
+  const publish = useCallback(() => {
+    items.forEach((item, i) => {
+      const el = btnRefs.current[i];
+      if (!el) return;
+      const id = item.kind === "trash" ? "trash" : item.appId!;
+      const r = el.getBoundingClientRect();
+      setDockTarget(id, {
+        cx: r.left + r.width / 2,
+        cy: r.top + r.height / 2,
+        size: r.width,
+      });
+    });
+  }, [items]);
+
+  const stop = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    setMouseCoord(null);
-    setHoveredIdx(null);
-    setHoverStrip(false);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
+    rafRef.current = 0;
+    liveRef.current = false;
   }, []);
 
-  const bounce = (id: string) => {
-    setBounced(id);
-    setTimeout(() => setBounced(null), 1400);
+  const tick = useCallback(() => {
+    const n = items.length;
+    if (scalesRef.current.length !== n) scalesRef.current = Array(n).fill(1);
+    const target = mouseRef.current;
+    let goal: number[];
+    if (target == null || maxScale <= 1.001) {
+      goal = Array(n).fill(1);
+      smoothRef.current = null;
+    } else {
+      smoothRef.current = smoothRef.current == null ? target : smoothRef.current + (target - smoothRef.current) * 0.62;
+      goal = items.map((_, i) => dockScale(Math.abs(smoothRef.current! - (restingLeft(i) + base / 2)), radius, 1, maxScale));
+    }
+    const rate = target == null ? 0.22 : 0.58;
+    let moving = false;
+    const next = goal.map((g, i) => {
+      const v = scalesRef.current[i] + (g - scalesRef.current[i]) * rate;
+      if (Math.abs(v - g) > 0.003 || (target == null && Math.abs(v - 1) > 0.004)) moving = true;
+      return v;
+    });
+    scalesRef.current = next;
+    apply(next);
+    publish();
+    if (!moving && target == null) {
+      scalesRef.current = Array(n).fill(1);
+      apply(scalesRef.current);
+      publish();
+      stop();
+      return;
+    }
+    rafRef.current = requestAnimationFrame(tick);
+  }, [apply, base, items, maxScale, publish, radius, restingLeft, stop]);
+
+  const ensure = useCallback(() => {
+    if (liveRef.current) return;
+    liveRef.current = true;
+    rafRef.current = requestAnimationFrame(tick);
+  }, [tick]);
+
+  useLayoutEffect(() => {
+    scalesRef.current = Array(items.length).fill(1);
+    apply(scalesRef.current);
+    publish();
+    return () => stop();
+  }, [apply, items.length, publish, stop, base, dock.pos, maxScale]);
+
+  useLayoutEffect(() => {
+    if (!dock.autohide) setRevealed(true);
+  }, [dock.autohide]);
+
+  const onMove = (e: React.PointerEvent) => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    const r = shell.getBoundingClientRect();
+    mouseRef.current = vertical ? e.clientY - r.top - origin : e.clientX - r.left - origin;
+    let best = -1;
+    let bestD = base * 0.72;
+    items.forEach((_, i) => {
+      const d = Math.abs((mouseRef.current ?? 0) - (restingLeft(i) + base / 2));
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    hoverRef.current = best;
+    ensure();
   };
 
-  const hidden = dock.autohide && !hoverStrip && mouseCoord === null;
-
-  const stripCls: Record<string, string> = {
-    bottom: "inset-x-0 bottom-0 h-[10px]",
-    left: "left-0 inset-y-0 w-[10px] top-7",
-    right: "right-0 inset-y-0 w-[10px] top-7",
+  const onLeave = () => {
+    mouseRef.current = null;
+    hoverRef.current = -1;
+    ensure();
+    if (dock.autohide) setRevealed(false);
   };
 
-  const dockPos: Record<string, string> = {
-    bottom: "bottom-3 left-1/2 flex-row items-end",
-    left: "left-3 top-1/2 flex-col items-start",
-    right: "right-3 top-1/2 flex-col items-end",
+  const openApp = (app: AppId) => {
+    const mins = os.wins.filter((w) => w.app === app && w.min);
+    if (mins.length) {
+      os.setMin(mins[mins.length - 1].id, false);
+      return;
+    }
+    os.openApp(app);
   };
 
-  const hideShift: Record<string, string> = {
-    bottom: "translateY(130%)",
-    left: "translateX(-130%)",
-    right: "translateX(130%)",
-  };
-
-  const trashCount = (os.fs.Trash || []).length;
-  const isInteracting = mouseCoord !== null;
+  const posCls =
+    dock.pos === "left" ? "left-2 top-1/2" :
+    dock.pos === "right" ? "right-2 top-1/2" :
+    "bottom-1.5 left-1/2";
+  const parked = !revealed && dock.autohide;
+  const shellTransform =
+    dock.pos === "left" ? `translate(${parked ? "-120%" : "0"}, -50%)` :
+    dock.pos === "right" ? `translate(${parked ? "120%" : "0"}, -50%)` :
+    `translate(-50%, ${parked ? "130%" : "0"})`;
 
   return (
     <>
-      {/* Hover strip for autohide activation */}
       {dock.autohide && (
         <div
-          className={`absolute z-[390] ${stripCls[dock.pos]}`}
-          onMouseEnter={() => setHoverStrip(true)}
-          onMouseLeave={() => setHoverStrip(false)}
+          className={`absolute z-[390] ${dock.pos === "bottom" ? "inset-x-0 bottom-0 h-3" : dock.pos === "left" ? "left-0 inset-y-0 top-7 w-3" : "right-0 inset-y-0 top-7 w-3"}`}
+          onPointerEnter={() => setRevealed(true)}
         />
       )}
-
-      {/* Outer macOS Dock Wrapper */}
       <div
-        ref={wrapRef}
-        className={`absolute z-[400] flex select-none ${dockPos[dock.pos]}`}
-        style={{
-          transform: `${dock.pos === "bottom" ? "translateX(-50%)" : "translateY(-50%)"} ${hidden ? hideShift[dock.pos] : ""}`,
-          transition: "transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1)",
-        }}
-        onMouseMove={onMouseMove}
-        onMouseLeave={onMouseLeave}
+        ref={shellRef}
+        className={`dock-shell absolute z-[400] ${posCls}`}
+        style={vertical
+          ? { width: shellCross, height: shellMain, transform: shellTransform }
+          : { width: shellMain, height: shellCross, transform: shellTransform }}
+        onPointerEnter={() => setRevealed(true)}
+        onPointerMove={onMove}
+        onPointerLeave={onLeave}
+        onPointerDown={(e) => e.stopPropagation()}
       >
-        {/* Authentic macOS Glass Shelf Tray */}
-        <div
-          className={`dock-shelf relative flex items-end rounded-[24px] px-3.5 pt-2.5 pb-1.5`}
-          style={{
-            gap: gap,
-          }}
-        >
-          {items.map((item, idx) => {
-            const scale = getScale(idx);
-            const slotWidth = Math.round(baseSize * scale);
-            const isHovered = hoveredIdx === idx;
-            const isDividerBefore = idx === DOCK_ORDER.length;
-            const tooltipOffset = Math.round(baseSize * (scale - 1) + 12);
-
-            return (
-              <React.Fragment key={item.key}>
-                {/* Authentic macOS vertical frosted glass divider */}
-                {isDividerBefore && (
-                  <div
-                    className={`self-center rounded-full ${
-                      vertical
-                        ? "w-[30px] h-[1px] my-1 bg-white/35 shadow-[0_1px_1px_rgba(0,0,0,0.2)]"
-                        : "h-[34px] w-[1px] mx-1.5 bg-white/40 shadow-[1px_0_1px_rgba(0,0,0,0.2)]"
-                    }`}
-                  />
-                )}
-
-                {/* Individual Icon Slot (Slot width perfectly matches scaled icon) */}
-                <div
-                  className="relative flex flex-col items-center justify-end"
-                  style={{
-                    width: vertical ? baseSize : slotWidth,
-                    height: vertical ? slotWidth : undefined,
-                    transition: isInteracting
-                      ? "none"
-                      : "width 0.28s cubic-bezier(0.25, 1, 0.5, 1), height 0.28s cubic-bezier(0.25, 1, 0.5, 1)",
-                  }}
-                  onMouseEnter={() => setHoveredIdx(idx)}
-                >
-                  {/* Floating macOS Tooltip anchored above magnified icon */}
-                  {isHovered && isInteracting && (
-                    <div
-                      className={`pointer-events-none absolute z-50 whitespace-nowrap rounded-[7px] bg-[rgba(25,26,32,0.88)] px-2.5 py-1 text-[11.5px] font-medium tracking-tight text-white shadow-[0_4px_16px_rgba(0,0,0,0.32)] backdrop-blur-md border border-white/15 animate-fade-in ${
-                        vertical
-                          ? "left-[calc(100%+14px)] top-1/2 -translate-y-1/2"
-                          : "left-1/2 -translate-x-1/2"
-                      }`}
-                      style={{
-                        bottom: vertical ? undefined : `calc(100% + ${tooltipOffset}px)`,
-                      }}
-                    >
-                      {item.label}
-                      {/* Sub-pixel arrow indicator */}
-                      {!vertical && (
-                        <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 h-1 w-2 border-l-4 border-r-4 border-t-4 border-transparent border-t-[rgba(25,26,32,0.88)]" />
-                      )}
-                    </div>
-                  )}
-
-                  {/* Icon Button */}
-                  {item.type === "app" && item.appId && (
-                    <AppIconButton
-                      app={item.appId}
-                      baseSize={baseSize}
-                      scale={scale}
-                      isInteracting={isInteracting}
-                      isBouncing={bounced === item.appId || os.bouncingApp === item.appId}
-                      isRunning={running.has(item.appId)}
-                      onClick={() => {
-                        const hasWin = os.wins.some((w) => w.app === item.appId);
-                        if (!hasWin && item.appId !== "launchpad") bounce(item.appId);
-                        os.openApp(item.appId);
-                      }}
-                    />
-                  )}
-
-                  {item.type === "minimized" && item.win && (
-                    <MinimizedIconButton
-                      win={item.win}
-                      baseSize={baseSize}
-                      scale={scale}
-                      isInteracting={isInteracting}
-                      onClick={() => os.setMin(item.win!.id, false)}
-                    />
-                  )}
-
-                  {item.type === "trash" && (
-                    <TrashIconButton
-                      baseSize={baseSize}
-                      scale={scale}
-                      count={trashCount}
-                      isInteracting={isInteracting}
-                      onClick={() => os.openApp("finder", "Trash", "Trash")}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        os.setPowerState("trash_dialog");
-                      }}
-                    />
-                  )}
-                </div>
-              </React.Fragment>
-            );
-          })}
-        </div>
+        <div ref={glassRef} className="dock-shelf" />
+        <div ref={tipRef} className="dock-tip" />
+        {trashIndex > 0 && (
+          <div
+            ref={divRef}
+            className={`dock-divider ${vertical ? "is-h" : ""}`}
+            style={vertical ? { left: 8, top: origin } : { bottom: 10, left: origin }}
+          />
+        )}
+        {items.map((item, i) => {
+          const along = origin + restingLeft(i);
+          const runningApp = item.appId
+            ? running.has(item.appId) || (item.appId === "launchpad" && os.launchpad)
+            : false;
+          const bouncing = item.appId != null && os.bouncingApp === item.appId;
+          return (
+            <div
+              key={item.key}
+              className="dock-slot"
+              style={vertical
+                ? { top: along, left: 6, width: base, height: base }
+                : { left: along, bottom: 7, width: base, height: base }}
+            >
+              <button
+                ref={(el) => { btnRefs.current[i] = el; }}
+                className="dock-btn"
+                style={{ width: base, height: base, transformOrigin: vertical ? "center left" : "bottom center" }}
+                aria-label={item.label}
+                onClick={() => {
+                  if (item.kind === "trash") os.openApp("finder", "Trash", "Trash");
+                  else if (item.appId) openApp(item.appId);
+                }}
+                onContextMenu={(e) => {
+                  if (item.kind !== "trash") return;
+                  e.preventDefault();
+                  os.setPowerState("trash_dialog");
+                }}
+              >
+                <span className={bouncing ? "dock-bounce" : "dock-glyph"}>
+                  <G1Icon name={item.kind === "trash" ? "trash" : item.appId!} size={base} count={item.kind === "trash" ? trashCount : 0} />
+                </span>
+              </button>
+              <span ref={(el) => { dotRefs.current[i] = el; }} className={`dock-dot ${runningApp ? "on" : ""}`} />
+            </div>
+          );
+        })}
       </div>
     </>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Subcomponents for Individual Dock Tiles                            */
-/* ------------------------------------------------------------------ */
-
-function AppIconButton({
-  app,
-  baseSize,
-  scale,
-  isInteracting,
-  isBouncing,
-  isRunning,
-  onClick,
-}: {
-  app: AppId;
-  baseSize: number;
-  scale: number;
-  isInteracting: boolean;
-  isBouncing: boolean;
-  isRunning: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <div className="relative flex flex-col items-center justify-end select-none">
-      <button
-        className="group relative flex items-center justify-center cursor-pointer outline-none"
-        style={{
-          width: baseSize,
-          height: baseSize,
-          transform: `scale(${scale})`,
-          transformOrigin: "bottom center",
-          transition: isInteracting
-            ? "none"
-            : "transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)",
-        }}
-        onClick={onClick}
-      >
-        <div className={isBouncing ? "dock-bounce" : ""}>
-          <AppTile app={app} size={baseSize} />
-        </div>
-      </button>
-
-      {/* Running App Indicator Dot (Stationary on dock floor) */}
-      <div className="h-[6px] flex items-center justify-center mt-1">
-        <span
-          className="h-[4.5px] w-[4.5px] rounded-full bg-white shadow-[0_0_2px_rgba(0,0,0,0.6),0_1px_2px_rgba(0,0,0,0.4)]"
-        />
-      </div>
-    </div>
-  );
-}
-
-function MinimizedIconButton({
-  win,
-  baseSize,
-  scale,
-  isInteracting,
-  onClick,
-}: {
-  win: Win;
-  baseSize: number;
-  scale: number;
-  isInteracting: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <div className="relative flex flex-col items-center justify-end select-none">
-      <button
-        className="group relative flex items-center justify-center cursor-pointer outline-none"
-        style={{
-          width: baseSize,
-          height: baseSize,
-          transform: `scale(${scale})`,
-          transformOrigin: "bottom center",
-          transition: isInteracting
-            ? "none"
-            : "transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)",
-        }}
-        onClick={onClick}
-        title={`Restore: ${win.title}`}
-      >
-        <div
-          className="grid place-items-center rounded-[20%] bg-gradient-to-br from-slate-100 to-slate-300 shadow-[0_2px_8px_rgba(10,15,40,0.25),inset_0_1px_0_rgba(255,255,255,0.6)]"
-          style={{ width: baseSize, height: baseSize }}
-        >
-          <LogoMark size={Math.round(baseSize * 0.45)} />
-        </div>
-      </button>
-      <div className="h-[6px] flex items-center justify-center mt-1">
-        <span className="h-[4px] w-[4px] rounded-full bg-black/45" />
-      </div>
-    </div>
-  );
-}
-
-function TrashIconButton({
-  baseSize,
-  scale,
-  count,
-  isInteracting,
-  onClick,
-  onContextMenu,
-}: {
-  baseSize: number;
-  scale: number;
-  count: number;
-  isInteracting: boolean;
-  onClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <div className="relative flex flex-col items-center justify-end select-none">
-      <button
-        className="group relative flex items-center justify-center cursor-pointer outline-none"
-        style={{
-          width: baseSize,
-          height: baseSize,
-          transform: `scale(${scale})`,
-          transformOrigin: "bottom center",
-          transition: isInteracting
-            ? "none"
-            : "transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)",
-        }}
-        onClick={onClick}
-        onContextMenu={onContextMenu}
-        title="Trash (Right click to empty)"
-      >
-        <G1Icon name="trash" size={baseSize} count={count} />
-
-        {count > 0 && (
-          <span className="absolute -top-1 -right-1 grid h-4 w-4 place-items-center rounded-full bg-blue-500 text-[9px] font-bold text-white shadow-[0_1px_3px_rgba(0,0,0,0.3)]">
-            {count}
-          </span>
-        )}
-      </button>
-      <div className="h-[6px] mt-1" />
-    </div>
   );
 }

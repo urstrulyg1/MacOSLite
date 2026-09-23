@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Reveal, Section } from "./ui";
 import { APPS } from "../os/os";
-import { FinderFace } from "../os/Dock";
 import { LogoMark } from "../os/MenuBar";
+import { G1Icon } from "../os/icons/IconSystem";
 import {
   Copy, Check, TerminalSquare, ClipboardCheck, ArrowUpRight, FolderGit2,
 } from "lucide-react";
@@ -57,8 +57,8 @@ export default function BuildKit() {
               <div className="mt-5 grid grid-cols-4 gap-3 sm:grid-cols-5">
                 {Object.values(APPS).map((a) => (
                   <div key={a.id} className="group flex flex-col items-center gap-1.5">
-                    <span className={`grid h-[46px] w-[46px] place-items-center rounded-[24%] bg-gradient-to-b shadow-[0_6px_18px_rgba(0,0,0,0.4),inset_0_0.5px_0_rgba(255,255,255,0.35)] transition-transform duration-200 group-hover:scale-110 group-hover:-rotate-3 ${a.tile}`}>
-                      {a.icon === "finder" ? <FinderFace size={37} /> : <a.icon size={24} strokeWidth={1.8} className={a.glyph} />}
+                    <span className="grid h-[46px] w-[46px] place-items-center transition-transform duration-200 group-hover:scale-110 group-hover:-rotate-3">
+                      <G1Icon name={a.icon} size={46} />
                     </span>
                     <span className="text-center text-[10px] leading-tight text-white/50">{a.name}</span>
                   </div>

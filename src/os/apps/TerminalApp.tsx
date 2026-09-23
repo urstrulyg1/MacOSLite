@@ -4,7 +4,7 @@ import { useOS, type AppId } from "../os";
 interface Line { text: string; cls?: string; }
 
 const BANNER: Line[] = [
-  { text: "MacLiteOS 0.4.2 — tty1 · mica-wm 0.4 · linux 6.12.9-maclite", cls: "text-zinc-500" },
+  { text: "G1OS 1.0 — tty1 · mica-wm · Giving life to older machines.", cls: "text-zinc-500" },
   { text: 'Type "help" for commands. Try "media-os-benchmark".', cls: "text-zinc-500" },
 ];
 
@@ -107,7 +107,7 @@ profile chosen at boot: MULTIMEDIA (hw decode confirmed)`, "text-emerald-300");
       case "neofetch":
         out(`        ▄▄▄▄▄         you@iMac
       ▄█▀    ▀█▄       -------------
-     █▌  ▄▄▄  ▐█       OS: MacLiteOS 0.4.2 x86_64
+     █▌  ▄▄▄  ▐█       OS: G1OS 1.0 x86_64
      █▌ ▐▌ ▐▌ ▐█      Host: iMac11,2 (21.5-inch, Mid 2010)
       █▄ ▀▀▀ ▄█       Kernel: linux 6.12.9-maclite (NOHZ_FULL, tickless)
        ▀█▄▄▄█▀        WM: mica-wm 0.4 (DRM/KMS direct, no X11)

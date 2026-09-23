@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   Play, Pause, SkipBack, SkipForward, Volume2, Cpu, MemoryStick, HardDrive,
   Wifi, AudioLines, MonitorPlay, ShieldCheck, ZoomIn, ZoomOut, Maximize,
-} from "lucide-react";
+} from "../icons/glyphs";
 import { VIDEO_SRC } from "../os";
+import { LogoMark } from "../MenuBar";
 
 /* ---------------------------------------------------------------- */
 export function TextEditApp({ payload }: { payload?: string }) {

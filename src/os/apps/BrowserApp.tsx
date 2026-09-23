@@ -1,22 +1,7 @@
 import { useState } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
-  RotateCw,
-  Share,
-  Plus,
-  Lock,
-  Search,
-  Bookmark,
-  Tv,
-  Film,
-  Music,
-  Globe,
-  ShieldCheck,
-  Zap,
-  Maximize2,
-  ExternalLink,
-} from "lucide-react";
+  ArrowLeft, ArrowRight, RotateCw, Share, Plus, Lock, Bookmark, Globe, ShieldCheck, Zap,
+} from "../icons/glyphs";
 import { VIDEO_SRC } from "../os";
 
 interface BookmarkItem {
@@ -44,7 +29,7 @@ export default function BrowserApp() {
     { id: 1, title: "YouTube — Watch Live", url: "https://youtube.com" },
     { id: 2, title: "G1OS Documentation", url: "https://g1os.internal/docs" },
   ]);
-  const [isPlaying, setIsPlaying] = useState(true);
+
 
   const handleNavigate = (newUrl: string) => {
     setUrl(newUrl);

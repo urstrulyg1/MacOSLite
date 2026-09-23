@@ -1,21 +1,8 @@
 import { useState, useEffect } from "react";
 import {
-  HardDrive,
-  Usb,
-  AlertTriangle,
-  CheckCircle2,
-  XCircle,
-  RotateCw,
-  ShieldCheck,
-  ChevronRight,
-  ChevronDown,
-  Terminal,
-  Lock,
-  ArrowLeft,
-  Sparkles,
-  Check,
-  Info,
-} from "lucide-react";
+  AlertTriangle, CheckCircle2, XCircle, RotateCw, ShieldCheck, ChevronRight,
+  ChevronDown, Terminal, Lock, ArrowLeft, Check, Info,
+} from "../icons/glyphs";
 import { useOS } from "../os";
 import { G1Icon } from "../icons/IconSystem";
 
@@ -144,10 +131,9 @@ export default function InstallerApp() {
   };
 
   const handleRestart = () => {
-    os.notify("MacLiteOS", "System Restarting", "Rebooting into internal drive...");
-    setTimeout(() => {
-      window.location.reload();
-    }, 800);
+    os.notify("G1OS", "Restart", "The installer would reboot into the internal drive. The live demo stays open.", "restart");
+    os.setPowerState("restarting");
+    window.setTimeout(() => os.setPowerState("running"), 1600);
   };
 
   return (

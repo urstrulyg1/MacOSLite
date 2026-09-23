@@ -1,14 +1,11 @@
-import { useMemo, useState } from "react";
-import {
-  Clock, FileText, Download, Film, Music2, Image as ImageIcon, HardDrive,
-  Usb, Eject, Network, ChevronLeft, ChevronRight, LayoutGrid, List, Search,
-  Folder as FolderIcon, FileArchive, Table2, Presentation, Trash2,
-} from "lucide-react";
-import { useOS, type FSItem } from "../os";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useOS, type FSItem, type FinderView } from "../os";
 import { G1Icon } from "../icons/IconSystem";
+import { Symbol } from "../icons/symbols";
 
 const FAVS: { name: string; iconName: string }[] = [
   { name: "Recents", iconName: "clock" },
+  { name: "Desktop", iconName: "folder-desktop" },
   { name: "Documents", iconName: "folder-documents" },
   { name: "Downloads", iconName: "folder-downloads" },
   { name: "Movies", iconName: "folder-movies" },
@@ -17,217 +14,274 @@ const FAVS: { name: string; iconName: string }[] = [
   { name: "Trash", iconName: "trash" },
 ];
 
-const KIND_ICON: Record<string, any> = {
-  text: FileText, pdf: FileText, image: ImageIcon, video: Film, audio: Music2,
-  archive: FileArchive, sheet: Table2, keynote: Presentation, folder: FolderIcon,
-};
-const KIND_TILE: Record<string, string> = {
-  text: "from-slate-100 to-slate-200 text-slate-500",
-  pdf: "from-rose-100 to-rose-200 text-rose-500",
-  image: "from-teal-100 to-teal-200 text-teal-600",
-  video: "from-violet-100 to-violet-200 text-violet-600",
-  audio: "from-red-100 to-red-200 text-red-500",
-  archive: "from-amber-100 to-amber-200 text-amber-600",
-  sheet: "from-emerald-100 to-emerald-200 text-emerald-600",
-  keynote: "from-sky-100 to-sky-200 text-sky-600",
-  folder: "from-sky-300 to-blue-500 text-white",
-};
+const VIEWS: { id: FinderView; icon: string; label: string }[] = [
+  { id: "icon", icon: "grid-view", label: "Icon view" },
+  { id: "list", icon: "list-view", label: "List view" },
+  { id: "column", icon: "column-view", label: "Column view" },
+];
 
 export default function FinderApp() {
   const os = useOS();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
   const [usbMounted, setUsbMounted] = useState(true);
+  const [dir, setDir] = useState<1 | -1>(1);
+  const hist = useRef<string[]>([os.finderLoc]);
+  const histAt = useRef(0);
+  const skipHist = useRef(false);
   const loc = os.finderLoc;
 
+  useEffect(() => {
+    if (skipHist.current) {
+      skipHist.current = false;
+      return;
+    }
+    if (hist.current[histAt.current] === loc) return;
+    hist.current = hist.current.slice(0, histAt.current + 1).concat(loc);
+    histAt.current = hist.current.length - 1;
+    setDir(1);
+    setSel(null);
+    setQ("");
+  }, [loc]);
+
+  const go = (delta: number) => {
+    const next = histAt.current + delta;
+    if (next < 0 || next >= hist.current.length) return;
+    histAt.current = next;
+    skipHist.current = true;
+    setDir(delta < 0 ? -1 : 1);
+    os.setFinderLoc(hist.current[next]);
+  };
+
   const items = useMemo(() => {
-    const list = os.fs[loc] ?? [];
-    if (!q.trim()) return list;
-    return Object.values(os.fs).flat().filter((f) => f.name.toLowerCase().includes(q.toLowerCase()));
+    if (q.trim()) {
+      return Object.entries(os.fs).flatMap(([place, list]) =>
+        list.filter((f) => f.name.toLowerCase().includes(q.toLowerCase())).map((f) => ({ ...f, place })),
+      );
+    }
+    return (os.fs[loc] ?? []).map((f) => ({ ...f, place: loc }));
   }, [os.fs, loc, q]);
 
-  const openItem = (f: FSItem) => {
-    if (f.kind === "folder") return;
+  const openItem = (f: FSItem & { place?: string }) => {
+    if (f.kind === "folder") {
+      if (os.fs[f.name]) os.setFinderLoc(f.name);
+      else os.notify("Finder", f.name, "Folder is empty.", "folder");
+      return;
+    }
     if (f.kind === "video") os.openApp("player", f.name, f.name);
     else if (f.kind === "audio") os.openApp("music", f.name, f.name);
     else if (f.kind === "image") os.openApp("photos", f.name, f.name);
-    else if (f.kind === "text") os.openApp("textedit", f.name, f.name);
-    else os.notify("Finder", f.name, "Opening in native viewer.");
+    else if (f.kind === "text" || f.kind === "pdf") os.openApp("textedit", f.name, f.name);
+    else os.notify("Finder", f.name, "Opening in the native viewer.", `file-${f.kind}`);
   };
 
+  const commitRename = () => {
+    if (renaming) os.renameFsItem(loc, renaming, draft);
+    setRenaming(null);
+  };
+
+  const selected = items.find((f) => f.name === sel) ?? null;
+
   return (
-    <div className="flex h-full text-[13px] bg-[#f8f9fc] select-none text-zinc-900">
-      {/* sidebar */}
-      <aside className="glass flex w-[184px] flex-none flex-col gap-3 overflow-auto border-r border-black/10 bg-black/[0.04] p-2 pt-3">
-        <div>
-          <div className="px-2 pb-1 text-[11px] font-semibold text-black/45 uppercase tracking-wider">Favorites</div>
-          {FAVS.map(({ name, iconName }) => (
-            <button
-              key={name}
-              onClick={() => { os.setFinderLoc(name); setQ(""); }}
-              className={`flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[5px] text-left transition-colors cursor-pointer ${
-                loc === name && !q ? "bg-black/10 font-semibold text-black" : "hover:bg-black/5 text-black/75"
-              }`}
-            >
-              <G1Icon name={iconName} size={16} className={name === "Trash" ? "text-zinc-600" : "text-blue-600"} />
-              <span>{name}</span>
-              {name === "Trash" && (os.fs.Trash || []).length > 0 && (
-                <span className="ml-auto rounded-full bg-black/10 px-1.5 py-0.2 text-[10px] font-bold text-black/60">
-                  {(os.fs.Trash || []).length}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-        <div>
-          <div className="px-2 pb-1 text-[11px] font-semibold text-black/45 uppercase tracking-wider">Locations</div>
+    <div className="finder flex h-full select-none text-[13px]">
+      <aside className="finder-side">
+        <div className="finder-label">Favorites</div>
+        {FAVS.map(({ name, iconName }) => (
           <button
-            onClick={() => { os.setFinderLoc("Documents"); setQ(""); }}
-            className="flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[5px] hover:bg-black/5 text-black/75 cursor-pointer"
+            key={name}
+            onClick={() => os.setFinderLoc(name)}
+            className={`finder-row ${loc === name && !q ? "on" : ""}`}
           >
-            <G1Icon name="macintosh-hd" size={16} /> Macintosh HD
+            <G1Icon name={iconName} size={16} />
+            <span>{name}</span>
+            {name === "Trash" && (os.fs.Trash || []).length > 0 && (
+              <span className="finder-count">{os.fs.Trash.length}</span>
+            )}
           </button>
-          {usbMounted && (
-            <button
-              className="group flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[5px] hover:bg-black/5 text-black/75 cursor-pointer"
-              onClick={() => { os.setFinderLoc("Downloads"); setQ(""); }}
+        ))}
+        <div className="finder-label mt-3">Locations</div>
+        <button className="finder-row" onClick={() => os.setFinderLoc("Documents")}>
+          <G1Icon name="macintosh-hd" size={16} /> Macintosh HD
+        </button>
+        {usbMounted && (
+          <button className="finder-row group" onClick={() => os.setFinderLoc("Downloads")}>
+            <G1Icon name="usb-drive" size={16} />
+            <span className="min-w-0 flex-1 truncate text-left">G1OS USB</span>
+            <span
+              className="opacity-0 group-hover:opacity-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                setUsbMounted(false);
+                os.notify("Finder", "G1OS USB ejected", "Buffers flushed. Safe to disconnect.", "usb");
+              }}
             >
-              <G1Icon name="usb-drive" size={16} />
-              <span className="flex-1 text-left truncate">G1OS Live USB</span>
-              <Eject
-                size={13}
-                className="text-black/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-black/80"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setUsbMounted(false);
-                  os.notify("Finder", "G1OS USB Ejected", "Buffers synchronized. Safe to disconnect drive.");
-                }}
-              />
-            </button>
-          )}
-          <button className="flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[5px] hover:bg-black/5 text-black/50 cursor-not-allowed">
-            <G1Icon name="network-drive" size={16} className="text-black/40" /> Network
+              <Symbol name="eject" size={13} />
+            </span>
           </button>
-        </div>
-        <div className="mt-auto rounded-lg bg-black/5 p-2.5 text-[11px] leading-relaxed text-black/50">
-          <b className="text-black/70">G1OS Fast Storage</b> · 405.2 GB free space available.
-        </div>
+        )}
+        <button className="finder-row dim" disabled>
+          <G1Icon name="network-drive" size={16} /> Network
+        </button>
       </aside>
 
-      {/* main view */}
-      <div className="flex min-w-0 flex-1 flex-col bg-[rgba(252,252,253,0.85)]">
-        {/* toolbar */}
-        <div className="flex h-[46px] flex-none items-center gap-2 border-b border-black/10 px-3">
-          <div className="flex gap-1 text-black/50">
-            <button className="rounded-md p-1 hover:bg-black/5 cursor-pointer"><ChevronLeft size={17} /></button>
-            <button className="rounded-md p-1 hover:bg-black/5 cursor-pointer"><ChevronRight size={17} /></button>
-          </div>
-          <div className="ml-1 text-[15px] font-bold tracking-tight text-black">{q ? `Search: “${q}”` : loc}</div>
-
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="finder-toolbar">
+          <button className="icon-btn" aria-label="Back" disabled={histAt.current <= 0} onClick={() => go(-1)}>
+            <Symbol name="chevron-left" size={16} />
+          </button>
+          <button className="icon-btn" aria-label="Forward" disabled={histAt.current >= hist.current.length - 1} onClick={() => go(1)}>
+            <Symbol name="chevron-right" size={16} />
+          </button>
+          <div className="ml-1 text-[15px] font-semibold tracking-tight">{q ? `Search · “${q}”` : loc}</div>
           {loc === "Trash" && (os.fs.Trash || []).length > 0 && (
-            <button
-              onClick={() => os.setPowerState("trash_dialog")}
-              className="ml-3 rounded-lg bg-red-600/10 hover:bg-red-600/20 text-red-600 border border-red-600/20 px-2.5 py-1 text-[11.5px] font-semibold transition-colors cursor-pointer"
-            >
-              Empty Trash
-            </button>
+            <button className="finder-empty" onClick={() => os.setPowerState("trash_dialog")}>Empty Trash</button>
           )}
-
           <div className="ml-auto flex items-center gap-2">
-            <div className="flex rounded-lg bg-black/[0.06] p-[3px]">
-              {([["icon", LayoutGrid], ["list", List]] as const).map(([v, Icon]) => (
+            <button
+              className="icon-btn"
+              title="New Folder"
+              onClick={() => {
+                const name = uniqueName(os.fs[loc] || [], "Untitled Folder");
+                os.addFsItem(loc, { name, kind: "folder", size: "—" });
+                setSel(name);
+                setRenaming(name);
+                setDraft(name);
+              }}
+            >
+              <Symbol name="folder-plus" size={15} />
+            </button>
+            <div className="finder-seg">
+              {VIEWS.map((v) => (
                 <button
-                  key={v}
-                  onClick={() => os.setFinderView(v)}
-                  className={`rounded-[6px] p-1.5 cursor-pointer ${os.finderView === v ? "bg-white shadow-sm text-black" : "text-black/45"}`}
+                  key={v.id}
+                  title={v.label}
+                  className={os.finderView === v.id ? "on" : ""}
+                  onClick={() => os.setFinderView(v.id)}
                 >
-                  <Icon size={14} />
+                  <Symbol name={v.icon} size={14} />
                 </button>
               ))}
             </div>
-
-            <div className="flex w-44 items-center gap-1.5 rounded-lg bg-black/[0.06] px-2.5 py-1 text-[12px]">
-              <Search size={13} className="text-black/40" />
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Search"
-                className="w-full bg-transparent outline-none placeholder:text-black/35 text-black"
-              />
-            </div>
+            <label className="finder-search">
+              <Symbol name="search" size={13} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" />
+            </label>
           </div>
         </div>
 
-        {/* content */}
-        <div className="flex-1 overflow-auto p-4" onClick={() => setSel(null)}>
-          <div key={loc + os.finderView} className="animate-in fade-in duration-180">
+        <div className="relative min-h-0 flex-1 overflow-hidden" onClick={() => setSel(null)}>
+          <div key={loc + os.finderView + (q ? "q" : "")} className={`finder-pane ${dir < 0 ? "from-left" : "from-right"}`}>
             {items.length === 0 ? (
-              <div className="grid h-full place-items-center text-center text-black/40 text-[13px] py-16">
-                {loc === "Trash" ? "Trash is empty" : "No items found in this directory"}
+              <div className="grid h-full place-items-center py-16 text-[13px] opacity-50">
+                {loc === "Trash" ? "Trash is empty" : "This folder is empty"}
               </div>
-            ) : os.finderView === "icon" ? (
-              <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-3">
-                {items.map((f) => {
-                  const Icon = KIND_ICON[f.kind] || FileText;
-                  const tile = KIND_TILE[f.kind] || "from-slate-100 to-slate-200 text-slate-500";
-                  const isSelected = sel === f.name;
-                  return (
+            ) : os.finderView === "column" ? (
+              <div className="finder-columns">
+                <div className="finder-col">
+                  {FAVS.map((f) => (
+                    <button key={f.name} className={`finder-col-item ${loc === f.name ? "on" : ""}`} onClick={() => os.setFinderLoc(f.name)}>
+                      <G1Icon name={f.iconName} size={16} />
+                      <span className="truncate">{f.name}</span>
+                      <Symbol name="chevron-right" size={12} />
+                    </button>
+                  ))}
+                </div>
+                <div className="finder-col">
+                  {items.map((f) => (
                     <button
                       key={f.name}
+                      className={`finder-col-item ${sel === f.name ? "on" : ""}`}
                       onClick={(e) => { e.stopPropagation(); setSel(f.name); }}
                       onDoubleClick={() => openItem(f)}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        if (loc !== "Trash") os.moveToTrash(f);
-                      }}
-                      className={`flex flex-col items-center gap-1.5 rounded-xl p-2.5 text-center transition-all duration-120 active:scale-95 cursor-pointer ${
-                        isSelected ? "bg-[var(--acc)] text-white shadow-sm" : "hover:bg-black/5 text-black/85"
-                      }`}
+                      onContextMenu={(e) => { e.preventDefault(); if (loc !== "Trash") os.moveToTrash(f, f.place); }}
                     >
-                      <div className="transition-transform duration-120 group-hover:scale-105 drop-shadow-sm flex items-center justify-center h-12 w-12">
-                        <G1Icon name={f.kind === "folder" ? "folder" : `file-${f.kind}`} size={46} />
-                      </div>
-                      <span className="text-[12px] font-medium leading-tight max-w-[90px] truncate" title={f.name}>
-                        {f.name}
-                      </span>
-                      <span className={`text-[10px] ${isSelected ? "text-white/70" : "text-black/45"}`}>{f.size}</span>
+                      <G1Icon name={f.kind === "folder" ? "folder" : `file-${f.kind}`} size={16} />
+                      <span className="truncate">{f.name}</span>
                     </button>
-                  );
-                })}
+                  ))}
+                </div>
+                <div className="finder-preview">
+                  {selected ? (
+                    <>
+                      <G1Icon name={selected.kind === "folder" ? "folder" : `file-${selected.kind}`} size={72} />
+                      <div className="mt-3 text-[13px] font-semibold">{selected.name}</div>
+                      <div className="mt-1 text-[11.5px] opacity-55">{selected.meta || selected.kind} · {selected.size}</div>
+                    </>
+                  ) : (
+                    <div className="text-[12px] opacity-45">Select an item</div>
+                  )}
+                </div>
               </div>
-            ) : (
-              <div className="space-y-0.5">
-                {items.map((f) => {
-                  const isSelected = sel === f.name;
-                return (
+            ) : os.finderView === "list" ? (
+              <div className="px-2 py-1">
+                {items.map((f) => (
                   <div
-                    key={f.name}
+                    key={f.place + f.name}
+                    className={`finder-list ${sel === f.name ? "on" : ""}`}
                     onClick={(e) => { e.stopPropagation(); setSel(f.name); }}
                     onDoubleClick={() => openItem(f)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      if (loc !== "Trash") os.moveToTrash(f);
-                    }}
-                    className={`flex items-center justify-between rounded-lg px-3 py-1.5 text-[12.5px] transition-colors cursor-pointer ${
-                      isSelected ? "bg-[var(--acc)] text-white shadow-sm font-medium" : "hover:bg-black/5 text-black/85"
-                    }`}
+                    onContextMenu={(e) => { e.preventDefault(); if (loc !== "Trash") os.moveToTrash(f, f.place); }}
                   >
-                    <div className="flex items-center gap-2.5 truncate">
-                      <G1Icon name={f.kind === "folder" ? "folder" : `file-${f.kind}`} size={18} className={isSelected ? "text-white" : "text-blue-600"} />
+                    <G1Icon name={f.kind === "folder" ? "folder" : `file-${f.kind}`} size={18} />
+                    {renaming === f.name ? (
+                      <input
+                        autoFocus
+                        className="finder-rename"
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setRenaming(null); }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
                       <span className="truncate">{f.name}</span>
-                    </div>
-                    <div className="flex items-center gap-6 text-[11.5px]">
-                      <span className={isSelected ? "text-white/80" : "text-black/50"}>{f.meta || f.kind}</span>
-                      <span className={`w-16 text-right font-mono ${isSelected ? "text-white/90" : "text-black/60"}`}>{f.size}</span>
-                    </div>
+                    )}
+                    <span className="ml-auto w-28 truncate text-right text-[11.5px] opacity-55">{f.meta || f.kind}</span>
+                    <span className="w-16 text-right font-mono text-[11.5px] opacity-70">{f.size}</span>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-4 gap-1 p-3 sm:grid-cols-5 md:grid-cols-6">
+                {items.map((f) => (
+                  <button
+                    key={f.place + f.name}
+                    className={`finder-icon ${sel === f.name ? "on" : ""} ${f.born ? "born" : ""}`}
+                    onClick={(e) => { e.stopPropagation(); setSel(f.name); }}
+                    onDoubleClick={() => openItem(f)}
+                    onContextMenu={(e) => { e.preventDefault(); if (loc !== "Trash") os.moveToTrash(f, f.place); }}
+                  >
+                    <G1Icon name={f.kind === "folder" ? "folder" : `file-${f.kind}`} size={48} state={sel === f.name ? "selected" : "idle"} />
+                    {renaming === f.name ? (
+                      <input
+                        autoFocus
+                        className="finder-rename"
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setRenaming(null); }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <span>{f.name}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function uniqueName(list: FSItem[], base: string) {
+  const names = new Set(list.map((f) => f.name));
+  if (!names.has(base)) return base;
+  let i = 2;
+  while (names.has(`${base} ${i}`)) i++;
+  return `${base} ${i}`;
 }
