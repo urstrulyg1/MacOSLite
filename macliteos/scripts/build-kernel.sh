@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 KVER=${G1OS_KERNEL_VERSION:-6.12.101}
 KURL="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KVER}.tar.xz"
 # SHA-256 published by the Linux Kernel Archives for the pinned source tarball.
-KSHA="7d2e1b5d5ab36b3a01856e71782dad2a54e634fb2b37c0a42998def3bbf957c1"
+KSHA="0d21cd11933f49f7151b7c9dbb8cc3fddc8c8abe506434b850feecf41fc28a76"
 OUT="$PWD/out"
 SRC="$OUT/kernel-src"
 TARBALL="$OUT/linux-${KVER}.tar.xz"

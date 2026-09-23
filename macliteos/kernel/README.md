@@ -6,7 +6,7 @@ G1OS uses a pinned upstream Linux x86_64 long-term kernel as the hardware enable
 
 - Linux: `6.12.101`
 - Source archive: `https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.101.tar.xz`
-- Source SHA-256: `7d2e1b5d5ab36b3a01856e71782dad2a54e634fb2b37c0a42998def3bbf957c1`
+- Source SHA-256: `0d21cd11933f49f7151b7c9dbb8cc3fddc8c8abe506434b850feecf41fc28a76`
 - Configuration: `kernel/g1os-x86_64.fragment` merged into upstream `x86_64_defconfig`
 - Required boot/hardware paths include EFI/GPT, AHCI/SATA, USB mass storage, ISO9660, SquashFS, ext4, Radeon DRM, Broadcom TG3/B43 and Intel HDA audio.
 - Out-of-tree patches: none currently required.
