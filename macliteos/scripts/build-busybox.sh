@@ -22,10 +22,35 @@ mkdir -p "$SRC"
 tar -xjf "$TARBALL" -C "$SRC" --strip-components=1
 
 make -C "$SRC" defconfig
-"$SRC/scripts/config" --enable CONFIG_STATIC
-"$SRC/scripts/config" --disable CONFIG_PIE
-"$SRC/scripts/config" --enable CONFIG_CHROOT
-make -C "$SRC" olddefconfig
+
+set_config() {
+  _k="$1"
+  _v="$2"
+  case "$_v" in
+    y|m)
+      if grep -q "^# $_k is not set" "$SRC/.config"; then
+        sed -i "s/^# $_k is not set/$_k=$_v/" "$SRC/.config"
+      elif grep -q "^$_k=" "$SRC/.config"; then
+        sed -i "s/^$_k=.*/$_k=$_v/" "$SRC/.config"
+      else
+        echo "$_k=$_v" >> "$SRC/.config"
+      fi
+      ;;
+    n)
+      if grep -q "^$_k=" "$SRC/.config"; then
+        sed -i "s/^$_k=.*/# $_k is not set/" "$SRC/.config"
+      elif ! grep -q "^# $_k is not set" "$SRC/.config"; then
+        echo "# $_k is not set" >> "$SRC/.config"
+      fi
+      ;;
+  esac
+}
+
+set_config CONFIG_STATIC y
+set_config CONFIG_PIE n
+set_config CONFIG_CHROOT y
+
+make -C "$SRC" olddefconfig 2>/dev/null || yes "" 2>/dev/null | make -C "$SRC" oldconfig
 make -C "$SRC" -j"$JOBS"
 [ -s "$SRC/busybox" ] || { echo "ERROR: BusyBox build produced no binary" >&2; exit 3; }
 mkdir -p "$OUT"
