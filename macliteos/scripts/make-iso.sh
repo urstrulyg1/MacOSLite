@@ -1,5 +1,5 @@
 #!/bin/sh
-# Assemble a fresh, self-contained G1OS ISO. No placeholders are permitted.
+# Assemble a fresh, self-contained G1OS ISO and independently verify it.
 set -eu
 cd "$(dirname "$0")/.."
 VERIFY=0
@@ -12,7 +12,10 @@ for arg in "$@"; do
 done
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: required tool missing: $1" >&2; exit 2; }; }
-for tool in xorriso grub-mkimage mksquashfs cpio; do need "$tool"; done
+for tool in xorriso grub-mkimage mksquashfs cpio sha256sum; do need "$tool"; done
+if [ "$VERIFY" = 1 ]; then
+  for tool in isoinfo unsquashfs file; do need "$tool"; done
+fi
 
 KERNEL="${G1OS_KERNEL:-}"
 INITRD="${G1OS_INITRD:-}"
@@ -68,15 +71,6 @@ grub-mkimage -O x86_64-efi -o "$ST/boot/bootx64.efi" -p /boot part_gpt part_msdo
 xorriso -as mkisofs -o out/G1OS.iso -e boot/bootx64.efi -no-emul-boot -isohybrid-gpt-basdat "$ST"
 [ -s out/G1OS.iso ] || { echo "ERROR: ISO missing or empty" >&2; exit 5; }
 sha256sum out/G1OS.iso > out/G1OS.iso.sha256
-{
-  echo "G1OS ISO Build Manifest"
-  echo "Build Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  echo "Kernel: $(basename "$KERNEL")"
-  echo "Initramfs: $(basename "$INITRD")"
-  echo "Base: live/maclite-base.sqfs"
-  echo "ISO: out/G1OS.iso"
-  echo "SHA256: $(cat out/G1OS.iso.sha256)"
-} > out/iso-manifest.txt
 
 [ -s "$ST/boot/vmlinuz-maclite" ] || { echo "ERROR: staged kernel missing" >&2; exit 6; }
 [ -s "$ST/boot/initrd-maclite.img" ] || { echo "ERROR: staged initramfs missing" >&2; exit 6; }
@@ -85,13 +79,27 @@ sha256sum out/G1OS.iso > out/G1OS.iso.sha256
 [ -s "$ST/boot/grub.cfg" ] || { echo "ERROR: staged GRUB configuration missing" >&2; exit 6; }
 
 if [ "$VERIFY" = 1 ]; then
-  need isoinfo
-  ISO_FILES=$(mktemp)
-  trap 'rm -f "$ISO_FILES"' EXIT
-  isoinfo -i out/G1OS.iso -f > "$ISO_FILES"
+  echo "== independent ISO verification"
+  sha256sum -c out/G1OS.iso.sha256 >/dev/null || { echo "VERIFY = FAIL: ISO checksum mismatch" >&2; exit 7; }
+  isoinfo -i out/G1OS.iso -f > out/iso-file-list.txt
   for required in /boot/vmlinuz-maclite /boot/initrd-maclite.img /boot/bootx64.efi /boot/grub.cfg /live/maclite-base.sqfs; do
-    grep -F "$required" "$ISO_FILES" >/dev/null || { echo "ERROR: ISO missing $required" >&2; exit 7; }
+    grep -F "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 8; }
   done
+
+  EXTRACT=$(mktemp -d)
+  trap 'rm -rf "$EXTRACT"' EXIT
+  xorriso -osirrox on -indev out/G1OS.iso -extract /boot "$EXTRACT/boot" >/dev/null 2>&1 || { echo "VERIFY = FAIL: ISO boot tree cannot be extracted" >&2; exit 9; }
+  xorriso -osirrox on -indev out/G1OS.iso -extract /live "$EXTRACT/live" >/dev/null 2>&1 || { echo "VERIFY = FAIL: ISO live tree cannot be extracted" >&2; exit 9; }
+  [ -s "$EXTRACT/boot/vmlinuz-maclite" ] || { echo "VERIFY = FAIL: extracted kernel empty" >&2; exit 10; }
+  [ -s "$EXTRACT/boot/initrd-maclite.img" ] || { echo "VERIFY = FAIL: extracted initramfs empty" >&2; exit 10; }
+  [ -s "$EXTRACT/boot/bootx64.efi" ] || { echo "VERIFY = FAIL: extracted EFI loader empty" >&2; exit 10; }
+  [ -s "$EXTRACT/live/maclite-base.sqfs" ] || { echo "VERIFY = FAIL: extracted base filesystem empty" >&2; exit 10; }
+  file "$EXTRACT/boot/vmlinuz-maclite" | grep -Eiq 'Linux kernel|boot executable|PE32' || { echo "VERIFY = FAIL: kernel is not a recognized executable" >&2; exit 11; }
+  unsquashfs -s "$EXTRACT/live/maclite-base.sqfs" >/dev/null || { echo "VERIFY = FAIL: base SquashFS is invalid" >&2; exit 12; }
+  isoinfo -i out/G1OS.iso -d | grep -Eiq 'El Torito|EFI' || { echo "VERIFY = FAIL: ISO lacks a detectable El Torito/EFI boot record" >&2; exit 13; }
+
+  grep -F "G1OS ISO Build Manifest" out/iso-manifest.txt >/dev/null || { echo "VERIFY = FAIL: manifest missing" >&2; exit 14; }
+  echo "VERIFY = PASS: ISO readable, boot artifacts present/non-empty, SquashFS valid, EFI boot record detected, checksum valid"
 fi
 
 echo "SUCCESS: fresh G1OS ISO assembled and artifact checks passed: out/G1OS.iso"
