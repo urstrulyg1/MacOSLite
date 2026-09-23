@@ -32,7 +32,7 @@ int main(int argc, char **argv)
     mica_gpu_probe(&g);
     mica_drm_probe(&drm);
     mica_fb_probe(&fb);
-    msg_stats st;
+    msg_stats st = {0};
     bool live = comp_stats(&st);
 
     hw_report rep;

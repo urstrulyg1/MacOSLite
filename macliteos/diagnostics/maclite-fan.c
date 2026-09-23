@@ -222,7 +222,7 @@ int main(int argc, char **argv)
         if (!smc.present) {
             hw_report_add(&rep, "Thermal", "AppleSMC Hardware", false, HW_UNSUPPORTED,
                           "no applesmc device found (non-Apple host or module not loaded)");
-            hw_report_print(&rep);
+            hw_report_print(&rep, "AppleSMC Thermal Management");
             return HW_EXIT_UNSUPPORTED;
         }
 
@@ -248,7 +248,7 @@ int main(int argc, char **argv)
                           f->manual == 1 ? "manual" : "auto-smc");
         }
 
-        hw_report_print(&rep);
+        hw_report_print(&rep, "AppleSMC Thermal Management");
         return HW_EXIT_PASS;
     }
 
