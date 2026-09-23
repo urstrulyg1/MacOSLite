@@ -9,6 +9,17 @@ The React site at the repository root is a **design mockup** and is not part
 of the shipping OS; the dock magnification formula in `src/os/Dock.tsx` was
 ported into the real dock.
 
+## USB Boot & Installation (iMac Mid-2010)
+
+For the complete, step-by-step walkthrough on preparing a USB drive with Rufus or BalenaEtcher, booting the Apple EFI manager with the `Option` (⌥) key, and installing to an internal SSD/HDD, see the root [README.md](file:///c:/Users/jeeva/Desktop/Jeevan/MacOSLite/README.md).
+
+Quick summary:
+1. **Flash ISO**: Write `out/MacLiteOS.iso` to a USB flash drive (in **DD Image mode** if using Rufus).
+2. **Boot**: Insert USB into rear port, power on iMac while holding `Option` (⌥), select **EFI Boot**.
+3. **Hardware Check**: Run `sh scripts/hardware-check.sh --quick` in live terminal.
+4. **Install**: Run `sudo maclite-install` and confirm with `YES`.
+5. **Fan Control**: Run `maclite-fan --quiet` to regulate fans after an SSD upgrade.
+
 ## Quick start (development sandbox, no GPU needed)
 
     sh scripts/build.sh                 # configure + compile + test suite
