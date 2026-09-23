@@ -5,10 +5,15 @@
  * through here so the family stays one style. Pictorial icons are original
  * vector artwork. Chrome glyphs are the template symbol set. Nothing here
  * is a third-party pack, an emoji, or an Apple asset.
+ *
+ * Visual master policy: pictorial artwork is vector-first and resolution
+ * independent. The browser/compositor rasterizes it at the actual display
+ * scale, while assetPipeline.ts defines the same resolution policy for any
+ * future raster-backed assets. No low-resolution image is ever upscaled.
  */
 
-
 import { Symbol, GLYPHS } from "./symbols";
+import { getIconRenderProfile } from "./assetPipeline";
 import {
   FinderIcon,
   SafariIcon,
@@ -176,6 +181,7 @@ export function G1Icon({
   status,
 }: G1IconProps) {
   const key = name.replace(/^g1os-icon:\/\//, "").toLowerCase();
+  const profile = getIconRenderProfile(size);
   const pictorial = Pictorial({ name: key, size, count });
   const symbolName = GLYPHS[key] ? key : aliasSymbol(key);
   const motion = state === "press" ? "is-press" : state === "hover" ? "is-hover" : state === "selected" ? "is-selected" : "";
@@ -194,6 +200,9 @@ export function G1Icon({
       style={{ width: size, height: size }}
       title={title}
       data-icon={key}
+      data-icon-master="vector-8k"
+      data-icon-dpr={profile.scale}
+      data-icon-resolution={profile.resolution}
     >
       {body}
       {status && (
