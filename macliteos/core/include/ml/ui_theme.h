@@ -4,6 +4,11 @@
 #include "ml/common.h"
 #include "ml/anim.h"
 
+#ifndef ML_PERF_MODES_DEFINED
+#define ML_PERF_MODES_DEFINED
+enum { MODE_BEAUTIFUL = 0, MODE_BALANCED = 1, MODE_PERFORMANCE = 2 };
+#endif
+
 /* Central G1OS design tokens.  These are deliberately tiny, C-native values
  * so the shell/compositor does not need a heavyweight UI toolkit. */
 typedef struct {
