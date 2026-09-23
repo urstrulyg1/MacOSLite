@@ -2,17 +2,19 @@ import { useMemo, useState } from "react";
 import {
   Clock, FileText, Download, Film, Music2, Image as ImageIcon, HardDrive,
   Usb, Eject, Network, ChevronLeft, ChevronRight, LayoutGrid, List, Search,
-  Folder as FolderIcon, FileArchive, Table2, Presentation, CircleUserRound,
+  Folder as FolderIcon, FileArchive, Table2, Presentation, Trash2,
 } from "lucide-react";
-import { FS, useOS, type FSItem } from "../os";
+import { useOS, type FSItem } from "../os";
+import { G1Icon } from "../icons/IconSystem";
 
-const FAVS: { name: string; icon: any }[] = [
-  { name: "Recents", icon: Clock },
-  { name: "Documents", icon: FileText },
-  { name: "Downloads", icon: Download },
-  { name: "Movies", icon: Film },
-  { name: "Music", icon: Music2 },
-  { name: "Pictures", icon: ImageIcon },
+const FAVS: { name: string; iconName: string }[] = [
+  { name: "Recents", iconName: "clock" },
+  { name: "Documents", iconName: "folder-documents" },
+  { name: "Downloads", iconName: "folder-downloads" },
+  { name: "Movies", iconName: "folder-movies" },
+  { name: "Music", iconName: "folder-music" },
+  { name: "Pictures", iconName: "folder-pictures" },
+  { name: "Trash", iconName: "trash" },
 ];
 
 const KIND_ICON: Record<string, any> = {
@@ -39,10 +41,10 @@ export default function FinderApp() {
   const loc = os.finderLoc;
 
   const items = useMemo(() => {
-    const list = FS[loc] ?? [];
+    const list = os.fs[loc] ?? [];
     if (!q.trim()) return list;
-    return Object.values(FS).flat().filter((f) => f.name.toLowerCase().includes(q.toLowerCase()));
-  }, [loc, q]);
+    return Object.values(os.fs).flat().filter((f) => f.name.toLowerCase().includes(q.toLowerCase()));
+  }, [os.fs, loc, q]);
 
   const openItem = (f: FSItem) => {
     if (f.kind === "folder") return;
@@ -50,176 +52,182 @@ export default function FinderApp() {
     else if (f.kind === "audio") os.openApp("music", f.name, f.name);
     else if (f.kind === "image") os.openApp("photos", f.name, f.name);
     else if (f.kind === "text") os.openApp("textedit", f.name, f.name);
-    else os.notify("Finder", f.name, "Previews render on demand — no background indexer required.");
+    else os.notify("Finder", f.name, "Opening in native viewer.");
   };
 
   return (
-    <div className="flex h-full text-[13px]">
+    <div className="flex h-full text-[13px] bg-[#f8f9fc] select-none text-zinc-900">
       {/* sidebar */}
-      <aside className="glass flex w-[176px] flex-none flex-col gap-3 overflow-auto border-r border-black/10 bg-black/[0.04] p-2 pt-3">
+      <aside className="glass flex w-[184px] flex-none flex-col gap-3 overflow-auto border-r border-black/10 bg-black/[0.04] p-2 pt-3">
         <div>
-          <div className="px-2 pb-1 text-[11px] font-semibold text-black/40">Favorites</div>
-          {FAVS.map(({ name, icon: Icon }) => (
+          <div className="px-2 pb-1 text-[11px] font-semibold text-black/45 uppercase tracking-wider">Favorites</div>
+          {FAVS.map(({ name, iconName }) => (
             <button
               key={name}
               onClick={() => { os.setFinderLoc(name); setQ(""); }}
-              className={`flex w-full items-center gap-2 rounded-[6px] px-2 py-[4.5px] text-left ${loc === name && !q ? "bg-black/10 font-medium" : "hover:bg-black/5"}`}
+              className={`flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[5px] text-left transition-colors cursor-pointer ${
+                loc === name && !q ? "bg-black/10 font-semibold text-black" : "hover:bg-black/5 text-black/75"
+              }`}
             >
-              <Icon size={15} className="text-[var(--acc)]" strokeWidth={2.2} />
-              {name}
+              <G1Icon name={iconName} size={16} className={name === "Trash" ? "text-zinc-600" : "text-blue-600"} />
+              <span>{name}</span>
+              {name === "Trash" && (os.fs.Trash || []).length > 0 && (
+                <span className="ml-auto rounded-full bg-black/10 px-1.5 py-0.2 text-[10px] font-bold text-black/60">
+                  {(os.fs.Trash || []).length}
+                </span>
+              )}
             </button>
           ))}
         </div>
         <div>
-          <div className="px-2 pb-1 text-[11px] font-semibold text-black/40">Locations</div>
-          <button className="flex w-full items-center gap-2 rounded-[6px] px-2 py-[4.5px] hover:bg-black/5">
-            <HardDrive size={15} className="text-black/50" /> iMac HD
+          <div className="px-2 pb-1 text-[11px] font-semibold text-black/45 uppercase tracking-wider">Locations</div>
+          <button
+            onClick={() => { os.setFinderLoc("Documents"); setQ(""); }}
+            className="flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[5px] hover:bg-black/5 text-black/75 cursor-pointer"
+          >
+            <G1Icon name="macintosh-hd" size={16} /> Macintosh HD
           </button>
           {usbMounted && (
             <button
-              className="group flex w-full items-center gap-2 rounded-[6px] px-2 py-[4.5px] hover:bg-black/5"
-              onDoubleClick={() => os.notify("Finder", "KINGSTON 32 GB", "exFAT volume scanned in 0.4 s. Thumbnails generated on demand.")}
+              className="group flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[5px] hover:bg-black/5 text-black/75 cursor-pointer"
+              onClick={() => { os.setFinderLoc("Downloads"); setQ(""); }}
             >
-              <Usb size={15} className="text-black/50" />
-              <span className="flex-1 text-left">KINGSTON</span>
+              <G1Icon name="usb-drive" size={16} />
+              <span className="flex-1 text-left truncate">G1OS Live USB</span>
               <Eject
                 size={13}
-                className="text-black/30 opacity-0 transition-opacity group-hover:opacity-100 hover:text-black/70"
+                className="text-black/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-black/80"
                 onClick={(e) => {
                   e.stopPropagation();
                   setUsbMounted(false);
-                  os.notify("Finder", "KINGSTON ejected", "Buffers flushed — 0 writes pending. Safe to remove.");
+                  os.notify("Finder", "G1OS USB Ejected", "Buffers synchronized. Safe to disconnect drive.");
                 }}
               />
             </button>
           )}
-          <button className="flex w-full items-center gap-2 rounded-[6px] px-2 py-[4.5px] hover:bg-black/5">
-            <Network size={15} className="text-black/50" /> Network
+          <button className="flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[5px] hover:bg-black/5 text-black/50 cursor-not-allowed">
+            <G1Icon name="network-drive" size={16} className="text-black/40" /> Network
           </button>
         </div>
         <div className="mt-auto rounded-lg bg-black/5 p-2.5 text-[11px] leading-relaxed text-black/50">
-          <b className="text-black/70">No indexing daemon.</b> 412.3 GB free. Search scans on demand only.
+          <b className="text-black/70">G1OS Fast Storage</b> · 405.2 GB free space available.
         </div>
       </aside>
 
-      {/* main */}
-      <div className="flex min-w-0 flex-1 flex-col bg-[rgba(252,252,253,0.72)]">
+      {/* main view */}
+      <div className="flex min-w-0 flex-1 flex-col bg-[rgba(252,252,253,0.85)]">
         {/* toolbar */}
         <div className="flex h-[46px] flex-none items-center gap-2 border-b border-black/10 px-3">
-          <div className="flex gap-1 text-black/40">
-            <button className="rounded-md p-1 hover:bg-black/5"><ChevronLeft size={17} /></button>
-            <button className="rounded-md p-1 hover:bg-black/5"><ChevronRight size={17} /></button>
+          <div className="flex gap-1 text-black/50">
+            <button className="rounded-md p-1 hover:bg-black/5 cursor-pointer"><ChevronLeft size={17} /></button>
+            <button className="rounded-md p-1 hover:bg-black/5 cursor-pointer"><ChevronRight size={17} /></button>
           </div>
-          <div className="ml-1 text-[15px] font-bold tracking-tight">{q ? `Search: “${q}”` : loc}</div>
-          <div className="ml-auto flex items-center gap-1.5">
+          <div className="ml-1 text-[15px] font-bold tracking-tight text-black">{q ? `Search: “${q}”` : loc}</div>
+
+          {loc === "Trash" && (os.fs.Trash || []).length > 0 && (
+            <button
+              onClick={() => os.setPowerState("trash_dialog")}
+              className="ml-3 rounded-lg bg-red-600/10 hover:bg-red-600/20 text-red-600 border border-red-600/20 px-2.5 py-1 text-[11.5px] font-semibold transition-colors cursor-pointer"
+            >
+              Empty Trash
+            </button>
+          )}
+
+          <div className="ml-auto flex items-center gap-2">
             <div className="flex rounded-lg bg-black/[0.06] p-[3px]">
               {([["icon", LayoutGrid], ["list", List]] as const).map(([v, Icon]) => (
                 <button
                   key={v}
                   onClick={() => os.setFinderView(v)}
-                  className={`rounded-[6px] p-1.5 ${os.finderView === v ? "bg-white shadow-sm" : "text-black/45"}`}
+                  className={`rounded-[6px] p-1.5 cursor-pointer ${os.finderView === v ? "bg-white shadow-sm text-black" : "text-black/45"}`}
                 >
                   <Icon size={14} />
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-1.5 rounded-lg bg-black/[0.06] px-2.5 py-[5px]">
+
+            <div className="flex w-44 items-center gap-1.5 rounded-lg bg-black/[0.06] px-2.5 py-1 text-[12px]">
               <Search size={13} className="text-black/40" />
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search"
-                className="w-[110px] bg-transparent text-[12.5px] outline-none placeholder:text-black/35"
+                className="w-full bg-transparent outline-none placeholder:text-black/35 text-black"
               />
             </div>
           </div>
         </div>
 
         {/* content */}
-        <div className="min-h-0 flex-1 overflow-auto p-3" onClick={() => setSel(null)}>
-          {os.finderView === "icon" ? (
-            <div className="grid grid-cols-[repeat(auto-fill,92px)] justify-start gap-1">
-              {items.map((f) => (
-                <IconCell key={f.name} f={f} sel={sel === f.name} onSel={() => setSel(f.name)} onOpen={() => openItem(f)} />
-              ))}
-              {items.length === 0 && <Empty q={q} />}
-            </div>
-          ) : (
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="text-left text-[11px] text-black/40">
-                  <th className="border-b border-black/10 px-2 py-1 font-medium">Name</th>
-                  <th className="w-[110px] border-b border-black/10 px-2 py-1 font-medium">Size</th>
-                  <th className="w-[170px] border-b border-black/10 px-2 py-1 font-medium">Kind</th>
-                </tr>
-              </thead>
-              <tbody>
+        <div className="flex-1 overflow-auto p-4" onClick={() => setSel(null)}>
+          <div key={loc + os.finderView} className="animate-in fade-in duration-180">
+            {items.length === 0 ? (
+              <div className="grid h-full place-items-center text-center text-black/40 text-[13px] py-16">
+                {loc === "Trash" ? "Trash is empty" : "No items found in this directory"}
+              </div>
+            ) : os.finderView === "icon" ? (
+              <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-3">
                 {items.map((f) => {
-                  const Icon = f.kind === "folder" ? FolderIcon : KIND_ICON[f.kind];
+                  const Icon = KIND_ICON[f.kind] || FileText;
+                  const tile = KIND_TILE[f.kind] || "from-slate-100 to-slate-200 text-slate-500";
+                  const isSelected = sel === f.name;
                   return (
-                    <tr
+                    <button
                       key={f.name}
                       onClick={(e) => { e.stopPropagation(); setSel(f.name); }}
                       onDoubleClick={() => openItem(f)}
-                      className={`cursor-default ${sel === f.name ? "bg-[var(--acc)] text-white" : "hover:bg-black/[0.04]"}`}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        if (loc !== "Trash") os.moveToTrash(f);
+                      }}
+                      className={`flex flex-col items-center gap-1.5 rounded-xl p-2.5 text-center transition-all duration-120 active:scale-95 cursor-pointer ${
+                        isSelected ? "bg-[var(--acc)] text-white shadow-sm" : "hover:bg-black/5 text-black/85"
+                      }`}
                     >
-                      <td className="rounded-l-md px-2 py-[5px]">
-                        <span className="flex items-center gap-2">
-                          {f.kind === "folder" ? (
-                            <FolderIcon size={16} className={sel === f.name ? "text-white" : "text-sky-500"} fill="currentColor" strokeWidth={0} />
-                          ) : (
-                            <Icon size={16} className={sel === f.name ? "text-white" : "text-black/45"} />
-                          )}
-                          <span className="truncate">{f.name}</span>
-                        </span>
-                      </td>
-                      <td className={`px-2 py-[5px] text-[12px] ${sel === f.name ? "text-white/85" : "text-black/50"}`}>{f.size}</td>
-                      <td className={`rounded-r-md px-2 py-[5px] text-[12px] ${sel === f.name ? "text-white/85" : "text-black/50"}`}>
-                        {f.meta ?? `${f.kind} document`}
-                      </td>
-                    </tr>
+                      <div className="transition-transform duration-120 group-hover:scale-105 drop-shadow-sm flex items-center justify-center h-12 w-12">
+                        <G1Icon name={f.kind === "folder" ? "folder" : `file-${f.kind}`} size={46} />
+                      </div>
+                      <span className="text-[12px] font-medium leading-tight max-w-[90px] truncate" title={f.name}>
+                        {f.name}
+                      </span>
+                      <span className={`text-[10px] ${isSelected ? "text-white/70" : "text-black/45"}`}>{f.size}</span>
+                    </button>
                   );
                 })}
-                {items.length === 0 && <tr><td colSpan={3}><Empty q={q} /></td></tr>}
-              </tbody>
-            </table>
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                {items.map((f) => {
+                  const isSelected = sel === f.name;
+                return (
+                  <div
+                    key={f.name}
+                    onClick={(e) => { e.stopPropagation(); setSel(f.name); }}
+                    onDoubleClick={() => openItem(f)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      if (loc !== "Trash") os.moveToTrash(f);
+                    }}
+                    className={`flex items-center justify-between rounded-lg px-3 py-1.5 text-[12.5px] transition-colors cursor-pointer ${
+                      isSelected ? "bg-[var(--acc)] text-white shadow-sm font-medium" : "hover:bg-black/5 text-black/85"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 truncate">
+                      <G1Icon name={f.kind === "folder" ? "folder" : `file-${f.kind}`} size={18} className={isSelected ? "text-white" : "text-blue-600"} />
+                      <span className="truncate">{f.name}</span>
+                    </div>
+                    <div className="flex items-center gap-6 text-[11.5px]">
+                      <span className={isSelected ? "text-white/80" : "text-black/50"}>{f.meta || f.kind}</span>
+                      <span className={`w-16 text-right font-mono ${isSelected ? "text-white/90" : "text-black/60"}`}>{f.size}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
-        </div>
-
-        {/* status bar */}
-        <div className="flex h-[26px] flex-none items-center justify-between border-t border-black/10 px-3 text-[11px] text-black/45">
-          <span>{items.length} item{items.length === 1 ? "" : "s"}{sel ? `, “${sel}” selected` : ""}</span>
-          <span className="flex items-center gap-1.5"><CircleUserRound size={12} /> you · 412.3 GB available</span>
+          </div>
         </div>
       </div>
     </div>
   );
 }
-
-function IconCell({ f, sel, onSel, onOpen }: { f: FSItem; sel: boolean; onSel: () => void; onOpen: () => void }) {
-  const Icon = f.kind === "folder" ? FolderIcon : KIND_ICON[f.kind];
-  return (
-    <button
-      onClick={(e) => { e.stopPropagation(); onSel(); }}
-      onDoubleClick={onOpen}
-      className={`flex h-[104px] flex-col items-center justify-start gap-1.5 rounded-lg p-2 ${sel ? "bg-black/10" : "hover:bg-black/[0.05]"}`}
-    >
-      {f.kind === "folder" ? (
-        <FolderIcon size={44} className="text-sky-400 drop-shadow-sm" fill="currentColor" strokeWidth={0} />
-      ) : (
-        <span className={`grid h-[44px] w-[48px] place-items-center rounded-[9px] bg-gradient-to-b shadow-[0_1px_3px_rgba(0,0,0,0.12)] ${KIND_TILE[f.kind]}`}>
-          <Icon size={21} strokeWidth={1.8} />
-        </span>
-      )}
-      <span className={`line-clamp-2 w-full break-words text-center text-[11px] leading-[1.15] ${sel ? "font-medium" : ""}`}>
-        {f.name}
-      </span>
-    </button>
-  );
-}
-
-const Empty = ({ q }: { q: string }) => (
-  <div className="col-span-full py-14 text-center text-[12.5px] text-black/40">
-    {q ? `No results for “${q}”. On-demand scan completed in 0.2 s.` : "This folder is empty."}
-  </div>
-);

@@ -1,6 +1,7 @@
-# MacLiteOS — iMac Mid-2010 USB Boot & Installation Guide
+# G1OS — Giving life to older machines.
+### iMac Mid-2010 Operating System & Installation Guide
 
-An ultra-lightweight, macOS-inspired operating system engineered natively in C11 specifically for legacy Apple hardware, with first-class support for the **iMac (21.5-inch & 27-inch, Mid-2010 — `iMac11,2` / `iMac11,3`)**.
+An ultra-lightweight, classic macOS-inspired operating system engineered natively in C11 specifically for legacy Apple hardware, with first-class support for the **iMac (21.5-inch & 27-inch, Mid-2010 — `iMac11,2` / `iMac11,3`)**.
 
 ---
 
@@ -145,31 +146,71 @@ This verifies:
 
 ## Step 5: Installing to Internal Storage (HDD / SSD)
 
+The primary and recommended method to install MacLiteOS is directly through the **graphical user interface**—no terminal commands are required.
+
 > [!WARNING]
 > Installing MacLiteOS will wipe the selected target disk. Make sure you have backed up any important personal data from the iMac before proceeding.
 
-1. In the live desktop terminal, launch the installer:
-   ```bash
-   sudo maclite-install
-   ```
-2. The installer will display the available storage disks (e.g. `sda` for internal HDD/SSD).
-3. Type the disk name (e.g. `sda`) and press **Enter**.
-4. Review the disk details and confirm by typing:
-   ```text
-   YES
-   ```
-5. The installer will automatically format the disk using Apple-compatible GPT:
-   - **Partition 1 (`MACLITE_BOOT`)**: 256 MB FAT32 EFI partition containing `BOOTX64.EFI`, Apple disk labels, and GRUB.
-   - **Partition 2 (`MACLITE_DATA`)**: 4 GB+ ext4 persistent user storage (`/var/data`).
-   - **Partition 3 (`MACLITE_BASE`)**: Immutable read-only system base (`/`).
-6. Once completed, the installer will print:
-   ```text
-   SUCCESS: MacLiteOS has been fully installed to /dev/sda.
-   ```
-7. Remove your USB drive and reboot the iMac:
-   ```bash
-   sudo reboot
-   ```
+### Primary Method: Click-to-Install macOS GUI Wizard
+
+1. On the live desktop or Dock, click the prominent **“Install MacLiteOS”** icon.
+2. **Stage 1 — Welcome Screen**:
+   - Displays: **“Welcome to MacLiteOS”** · **“Give life to older machines.”**
+   - Highlights MacLiteOS features for vintage iMacs, including Apple EFI 1.1 fallback support and automatic USB protection.
+   - Click **Continue**.
+3. **Stage 2 — Select Installation Destination**:
+   - The installer scans storage hardware and controller buses.
+   - **Internal Storage Preferred**: Automatically selects internal SATA SSD/HDD (e.g. `Crucial CT500MX500SSD1` `/dev/sda`).
+   - **Live USB Safeguard**: Automatically identifies the live boot device (e.g. `/dev/sdb`) and locks it with a *“LOCKED / LIVE USB”* badge to prevent accidental overwrites.
+   - Displays disk model, capacity, device identifier, and existing partitions.
+   - Click **Continue**.
+4. **Stage 3 — Interactive Confirmation**:
+   - Displays a prominent summary:
+     - **Install MacLiteOS on:** Internal SSD/HDD
+     - **Model:** `Crucial CT500MX500SSD1`
+     - **Size:** `500.1 GB`
+     - **Device:** `/dev/sda`
+   - Explicit warning: *“This will erase the selected disk and all existing partitions.”*
+   - Check the confirmation box: *“I understand that all data on /dev/sda will be permanently erased.”*
+   - Click **Erase & Install MacLiteOS** (destructive red button).
+5. **Stage 4 — Automated Installation & Progress**:
+   - Smooth animated progress stages:
+     **Preparing → Detecting Disk → Partitioning → Formatting → Installing → Configuring Boot → Finalizing**
+   - Wipes legacy partition signatures (`wipefs -a` & `sgdisk --zap-all`).
+   - Allocates Apple-compatible GPT partitions:
+     - `MACLITE_BOOT` (256 MB FAT32 EFI partition)
+     - `MACLITE_DATA` (4 GB+ ext4 persistent storage for `/var/data`)
+     - `MACLITE_BASE` (Immutable base system `/`)
+   - Configures Apple EFI fallback bootloader at `/EFI/BOOT/BOOTX64.EFI` and `.disk_label` ("MacLiteOS").
+   - **UUID Boot Binding**: Binds GRUB configuration and `/etc/fstab` to unique filesystem UUIDs (`search --fs-uuid` and `root=UUID=...`) rather than device nodes or ambiguous labels, completely eliminating dependencies on the live USB.
+   - Collapsible **“Installation Details”** log viewer available for advanced users.
+6. **Stage 5 — Offline Pre-Flight Verification Pass**:
+   - Before reporting completion, the installer runs an automated pre-flight audit on the internal disk:
+     - ✓ Internal EFI partition exists and is mountable
+     - ✓ Fallback EFI loader `BOOTX64.EFI` exists and is valid
+     - ✓ `grub.cfg` references internal boot UUID and contains zero live USB references
+     - ✓ Linux kernel (`vmlinuz-maclite`) and initramfs (`initrd-maclite.img`) exist
+     - ✓ Apple Option Boot Picker label (`.disk_label`) exists
+     - ✓ Root filesystem is resolvable without USB media
+7. **Stage 6 — Installation Complete & First Boot**:
+   - Displays:
+     **“MacLiteOS Installation Complete”**
+     **“Remove the USB drive and restart your iMac.”**
+   - Displays verified component checklist.
+   - Unplug your USB flash drive.
+   - Click the large **Restart iMac Now** button.
+   - On reboot, the iMac will directly load MacLiteOS from the internal drive! If holding the Option (⌥) key at the startup chime, *MacLiteOS* appears with its branded drive icon.
+
+---
+
+### Advanced / Scripted Fallback: Terminal-Based Installation
+
+For headless, serial, or automated deployments, the CLI installer remains available and delegates to the same robust backend engine:
+```bash
+sudo maclite-install
+```
+Follow the interactive prompts or pass `--target /dev/sda --yes` for unattended execution.
+
 
 ---
 

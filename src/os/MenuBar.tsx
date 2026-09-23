@@ -1,17 +1,29 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Wifi, Volume2, Search, Bell, BatteryCharging, MonitorSmartphone,
-  ChevronRight, Fan, Thermometer,
+  Wifi,
+  Volume2,
+  Search,
+  Bell,
+  BatteryCharging,
+  MonitorSmartphone,
+  ChevronRight,
+  Fan,
+  Thermometer,
+  Sliders,
+  Sun,
+  Moon,
+  Zap,
+  Bluetooth,
 } from "lucide-react";
 import { APPS, useOS, type AppId } from "./os";
 
-/* ---- original logomark: layered "feather" strokes in a squircle ---- */
+/* ---- G1OS logomark ---- */
 export function LogoMark({ size = 18, dark = false }: { size?: number; dark?: boolean }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-label="MacLiteOS">
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-label="G1OS">
       <rect x="4" y="4" width="56" height="56" rx="16" fill={dark ? "#0b0b10" : "rgba(255,255,255,0.92)"} />
       <path d="M19 44c0-10 6-18 14-24 2 8-1 18-8 24" fill="none" stroke="#0a84ff" strokeWidth="5" strokeLinecap="round" />
-      <path d="M29 46c1-7 6-12 12-15 0 7-4 13-10 15" fill="none" stroke="#ff8f5e" strokeWidth="5" strokeLinecap="round" />
+      <path d="M29 46c1-7 6-12 12-15 0 7-4 13-10 15" fill="none" stroke="#38bdf8" strokeWidth="5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -28,7 +40,7 @@ function MenuList({ items, anchor }: { items: Item[]; anchor: React.ReactNode })
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => setMenuOpen(open ? null : id)}
         onMouseEnter={() => {
-          if (menuOpen && !["wifi", "vol", "sensors", "bell"].includes(menuOpen)) setMenuOpen(id);
+          if (menuOpen && !["wifi", "vol", "sensors", "bell", "control_center"].includes(menuOpen)) setMenuOpen(id);
         }}
         className={`px-2.5 h-[26px] flex items-center rounded-[4px] text-[13px] ${open ? "bg-black/10" : ""}`}
         style={{ lineHeight: 1 }}
@@ -36,7 +48,7 @@ function MenuList({ items, anchor }: { items: Item[]; anchor: React.ReactNode })
         {anchor}
       </button>
       {open && (
-        <div className="glass panel-in soft-shadow absolute left-0 top-[28px] min-w-[220px] rounded-lg bg-[rgba(242,242,247,0.82)] p-1 shadow-[0_10px_36px_rgba(10,15,40,0.3),0_0_0_0.5px_rgba(0,0,0,0.15)] z-[999]">
+        <div className="glass panel-in soft-shadow absolute left-0 top-[28px] min-w-[220px] rounded-lg bg-[rgba(242,242,247,0.85)] backdrop-blur-md p-1 shadow-[0_10px_36px_rgba(10,15,40,0.3),0_0_0_0.5px_rgba(0,0,0,0.15)] z-[999]">
           {items.map((it, i) =>
             it.sep ? (
               <div key={i} className="my-1 h-px bg-black/10" />
@@ -70,7 +82,7 @@ export default function MenuBar() {
     return () => clearInterval(t);
   }, []);
 
-  const app = APPS[os.activeApp];
+  const app = APPS[os.activeApp] || APPS.finder;
   const focused = os.wins.filter((w) => !w.min && w.ws === os.ws).sort((a, b) => b.z - a.z)[0];
 
   const openById = (id: AppId) => () => os.openApp(id);
@@ -114,27 +126,30 @@ export default function MenuBar() {
       { label: "Bring All to Front", run: openById("finder") },
     ],
     [
-      { label: `${app.name} Help`, run: () => os.notify("Help", "Light as air", "Every feature ships with offline, searchable documentation.") },
-      { label: "Keyboard Shortcuts", run: () => os.notify("Shortcuts", "⌘ Space · ⌘ Tab", "Spotlight, app switcher and window keys are all remappable.") },
+      { label: `${app.name} Help`, run: () => os.notify("Help", "Light as air", "G1OS documentation is built-in and offline.") },
+      { label: "Keyboard Shortcuts", run: () => os.notify("Shortcuts", "⌘ Space · ⌘ Tab", "Spotlight and window switcher are always active.") },
     ],
   ];
 
   const sysMenu: Item[] = [
-    { label: "About This Mac", run: openById("sysinfo") },
+    { label: "About G1OS", run: openById("sysinfo") },
     { sep: true },
     { label: "System Settings…", run: openById("settings") },
-    { label: "App Store…", dim: true },
+    { label: "G1OS App Store…", run: () => os.notify("App Store", "G1OS Package Center", "Offline native C11 packages enabled.") },
     { sep: true },
     { label: "Force Quit…", kbd: "⌥⌘⎋", run: () => focused && os.closeWin(focused.id) },
     { sep: true },
-    { label: "Sleep", dim: true },
-    { label: "Restart…", dim: true },
-    { label: "Shut Down…", dim: true },
+    { label: "Sleep", run: () => os.notify("Power", "Display Sleep", "Display backlight suspended via radeon_bl0.") },
+    { label: "Restart…", run: () => os.setPowerState("restart_dialog") },
+    { label: "Shut Down…", run: () => os.setPowerState("shutdown_dialog") },
+    { sep: true },
+    { label: "Lock Screen", kbd: "⌃⌘Q", run: () => os.setPowerState("logout_dialog") },
+    { label: "Log Out Jeevan…", kbd: "⇧⌘Q", run: () => os.setPowerState("logout_dialog") },
   ];
 
   return (
     <div
-      className="glass absolute inset-x-0 top-0 z-[500] flex h-7 items-center justify-between bg-[rgba(246,246,250,0.62)] px-2 text-[13px] text-black/85 shadow-[0_0.5px_0_rgba(0,0,0,0.12)]"
+      className="glass absolute inset-x-0 top-0 z-[500] flex h-7 items-center justify-between bg-[rgba(246,246,250,0.75)] backdrop-blur-md px-2 text-[13px] text-black/85 shadow-[0_0.5px_0_rgba(0,0,0,0.12)] select-none"
       onMouseDown={() => os.setMenuOpen(null)}
     >
       {/* left */}
@@ -155,7 +170,7 @@ export default function MenuBar() {
               key={n}
               title={`Desktop ${n + 1}`}
               onClick={() => os.setWs(n)}
-              className="grid place-items-center"
+              className="grid place-items-center cursor-pointer"
             >
               <span
                 className={`block rounded-full transition-all ${os.ws === n ? "h-[7px] w-[7px] bg-[var(--acc)]" : "h-[5px] w-[5px] bg-black/30 hover:bg-black/50"}`}
@@ -164,10 +179,11 @@ export default function MenuBar() {
           ))}
         </div>
 
+        {/* Wi-Fi */}
         <TrayBtn id="wifi" icon={<Wifi size={14} strokeWidth={2.2} />}>
           <div className="w-[240px] p-3">
             <div className="flex items-center justify-between">
-              <span className="text-[13px] font-semibold">Wi-Fi</span>
+              <span className="text-[13px] font-semibold">Wi-Fi (AirPort)</span>
               <div className="os-switch on scale-[0.8]" />
             </div>
             <div className="mt-2 rounded-md bg-black/5 p-2">
@@ -177,7 +193,7 @@ export default function MenuBar() {
               </div>
               <div className="mt-0.5 text-[11px] text-black/50">Connected · BCM43224 · 130 Mb/s</div>
             </div>
-            {["CoffeeHouse Guest", "TP-LINK_E22F"].map((n) => (
+            {["CoffeeHouse Guest", "iMac-Studio-5G"].map((n) => (
               <div key={n} className="mt-1 flex items-center justify-between rounded-md px-2 py-1 text-[13px] text-black/60 hover:bg-black/5">
                 {n} <Wifi size={12} className="opacity-40" />
               </div>
@@ -185,6 +201,7 @@ export default function MenuBar() {
           </div>
         </TrayBtn>
 
+        {/* Volume */}
         <TrayBtn id="vol" icon={<Volume2 size={15} strokeWidth={2.2} />}>
           <div className="w-[220px] p-3">
             <div className="text-[13px] font-semibold">Sound</div>
@@ -197,42 +214,112 @@ export default function MenuBar() {
                 style={{ ["--v" as any]: `${os.soundVol}%` }}
               />
             </div>
-            <div className="mt-2 flex items-center justify-between rounded-md bg-black/5 px-2 py-1.5 text-[12px]">
-              <span>Cirrus CS4206 · Internal Speakers</span>
+            <div className="mt-2 flex items-center justify-between rounded-md bg-black/5 px-2 py-1.5 text-[11.5px] text-black/70">
+              <span>Cirrus CS4206 · Internal Stereo</span>
             </div>
           </div>
         </TrayBtn>
 
+        {/* Hardware Sensors */}
         <TrayBtn id="sensors" icon={<Fan size={14} strokeWidth={2.2} />}>
           <div className="w-[230px] p-3 text-[12px]">
-            <div className="text-[13px] font-semibold">Sensors · applesmc</div>
+            <div className="text-[13px] font-semibold">AppleSMC Hardware Fans</div>
             <div className="mt-2 space-y-1.5 text-black/70">
-              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Thermometer size={12} /> CPU</span><b>41 °C</b></div>
-              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Thermometer size={12} /> GPU · r600</span><b>48 °C</b></div>
-              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Fan size={12} /> ODD fan</span><b>1199 rpm</b></div>
-              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Fan size={12} /> HDD fan</span><b>1100 rpm</b></div>
+              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Thermometer size={12} /> CPU Core</span><b>41 °C</b></div>
+              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Thermometer size={12} /> ATI GPU (r600)</span><b>47 °C</b></div>
+              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Fan size={12} /> ODD Fan</span><b>1000 rpm</b></div>
+              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Fan size={12} /> HDD Fan (SSD-quiet)</span><b>1100 rpm</b></div>
+              <div className="flex justify-between"><span className="flex items-center gap-1.5"><Fan size={12} /> CPU Fan</span><b>1200 rpm</b></div>
             </div>
           </div>
         </TrayBtn>
 
+        {/* Control Center */}
+        <TrayBtn id="control_center" icon={<Sliders size={14} strokeWidth={2.2} />}>
+          <div className="w-[260px] p-3 space-y-3">
+            <div className="text-[13px] font-bold text-black/90">Control Center</div>
+
+            {/* Quick Toggles */}
+            <div className="grid grid-cols-2 gap-2 text-[12px]">
+              <div className="flex items-center gap-2 rounded-xl bg-blue-500 text-white p-2.5 shadow-sm">
+                <Wifi size={16} />
+                <div>
+                  <div className="font-semibold text-[11.5px]">Wi-Fi</div>
+                  <div className="text-[10px] opacity-80">On</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-xl bg-blue-500 text-white p-2.5 shadow-sm">
+                <Bluetooth size={16} />
+                <div>
+                  <div className="font-semibold text-[11.5px]">Bluetooth</div>
+                  <div className="text-[10px] opacity-80">Active</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Visual Mode Selector */}
+            <div className="rounded-xl border border-black/10 bg-black/5 p-2.5 space-y-1.5">
+              <div className="flex justify-between text-[11px] font-semibold text-black/70">
+                <span>Hardware Rendering</span>
+                <span className="uppercase text-blue-600">{os.visualMode}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 text-[10.5px]">
+                <button
+                  onClick={() => os.setVisualMode("performance")}
+                  className={`rounded-lg py-1 font-medium transition-colors ${os.visualMode === "performance" ? "bg-white shadow text-black" : "text-black/60 hover:text-black"}`}
+                >
+                  Perf
+                </button>
+                <button
+                  onClick={() => os.setVisualMode("balanced")}
+                  className={`rounded-lg py-1 font-medium transition-colors ${os.visualMode === "balanced" ? "bg-white shadow text-black" : "text-black/60 hover:text-black"}`}
+                >
+                  Balanced
+                </button>
+                <button
+                  onClick={() => os.setVisualMode("beautiful")}
+                  className={`rounded-lg py-1 font-medium transition-colors ${os.visualMode === "beautiful" ? "bg-white shadow text-black" : "text-black/60 hover:text-black"}`}
+                >
+                  Beautiful
+                </button>
+              </div>
+            </div>
+
+            {/* Brightness Slider */}
+            <div className="rounded-xl border border-black/10 bg-black/5 p-2.5">
+              <div className="flex justify-between text-[11px] font-semibold text-black/70 mb-1">
+                <span className="flex items-center gap-1"><Sun size={12} /> Display Brightness</span>
+              </div>
+              <input
+                type="range" min={10} max={100} defaultValue={85}
+                className="os-range w-full"
+                style={{ ["--v" as any]: "85%" }}
+              />
+            </div>
+          </div>
+        </TrayBtn>
+
+        {/* Spotlight */}
         <button
-          className="rounded-[4px] p-1 hover:bg-black/10"
+          className="rounded-[4px] p-1 hover:bg-black/10 cursor-pointer"
           title="Spotlight (⌘ Space)"
           onClick={() => os.setSpotlight(true)}
         >
           <Search size={14} strokeWidth={2.4} />
         </button>
 
-        <div className="px-1.5 text-[12.5px] tabular-nums text-black/80">
+        {/* Clock */}
+        <div className="px-1.5 text-[12.5px] tabular-nums text-black/85 font-medium">
           {DAYS[clock.getDay()]} {MONTHS[clock.getMonth()]} {clock.getDate()}&nbsp;&nbsp;
           {clock.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
         </div>
 
+        {/* Notifications */}
         <TrayBtn id="bell" icon={<Bell size={14} strokeWidth={2.2} />} wide>
           <div className="w-[300px] p-3">
             <div className="flex items-center justify-between">
               <span className="text-[13px] font-semibold">Notification Center</span>
-              <button onClick={os.clearNotes} className="text-[11px] text-black/45 hover:text-black/80">Clear All</button>
+              <button onClick={os.clearNotes} className="text-[11px] text-black/45 hover:text-black/80 cursor-pointer">Clear All</button>
             </div>
             <div className="mt-2 max-h-[290px] space-y-1.5 overflow-auto">
               {os.notes.length === 0 && (
@@ -249,8 +336,8 @@ export default function MenuBar() {
               ))}
             </div>
             <div className="mt-2.5 flex items-center justify-between border-t border-black/10 pt-2.5 text-[12px] text-black/55">
-              <span className="flex items-center gap-1.5"><BatteryCharging size={13} /> Power Nap off</span>
-              <span className="flex items-center gap-1.5"><MonitorSmartphone size={13} /> Desktop {os.ws + 1} of 3 <ChevronRight size={12} /></span>
+              <span className="flex items-center gap-1.5"><BatteryCharging size={13} /> G1OS Power Saver</span>
+              <span className="flex items-center gap-1.5"><MonitorSmartphone size={13} /> iMac 21.5" <ChevronRight size={12} /></span>
             </div>
           </div>
         </TrayBtn>
@@ -266,12 +353,12 @@ function TrayBtn({ id, icon, children, wide }: { id: string; icon: React.ReactNo
     <div className="relative">
       <button
         onClick={() => setMenuOpen(open ? null : id)}
-        className={`grid h-[26px] w-[26px] place-items-center rounded-[4px] text-black/75 ${open ? "bg-black/10" : "hover:bg-black/5"}`}
+        className={`grid h-[26px] w-[26px] place-items-center rounded-[4px] text-black/75 cursor-pointer ${open ? "bg-black/10" : "hover:bg-black/5"}`}
       >
         {icon}
       </button>
       {open && (
-        <div className={`glass panel-in absolute right-0 top-[30px] z-[999] rounded-xl bg-[rgba(246,246,250,0.86)] text-black shadow-[0_14px_44px_rgba(10,15,40,0.32),0_0_0_0.5px_rgba(0,0,0,0.15)] ${wide ? "" : ""}`}>
+        <div className={`glass panel-in absolute right-0 top-[30px] z-[999] rounded-xl bg-[rgba(246,246,250,0.92)] backdrop-blur-md text-black shadow-[0_14px_44px_rgba(10,15,40,0.32),0_0_0_0.5px_rgba(0,0,0,0.15)] ${wide ? "" : ""}`}>
           {children}
         </div>
       )}

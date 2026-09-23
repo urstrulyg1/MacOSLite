@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Install MacLiteOS
+GenericName=Operating System Installer
+Comment=Install MacLiteOS onto your internal drive without using the terminal
+Exec=mica-installer
+Icon=app-installer
+Categories=System;Settings;
+StartupNotify=true
+Terminal=false

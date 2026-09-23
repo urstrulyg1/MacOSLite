@@ -5,7 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Calculator as CalcIcon, Image as ImageIcon, Info, Film, Music2,
   Settings2, SquareTerminal, StickyNote, LayoutGrid, Folder as FolderIcon,
-  FileText, FileArchive, Table2, Presentation,
+  FileText, FileArchive, Table2, Presentation, HardDrive, Compass,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -13,8 +13,21 @@ import {
 /* ------------------------------------------------------------------ */
 
 export type AppId =
-  | "finder" | "launchpad" | "settings" | "terminal" | "textedit"
+  | "finder" | "installer" | "browser" | "launchpad" | "settings" | "terminal" | "textedit"
   | "calc" | "music" | "photos" | "player" | "sysinfo";
+
+export type PowerState =
+  | "running"
+  | "shutdown_dialog"
+  | "restart_dialog"
+  | "logout_dialog"
+  | "trash_dialog"
+  | "shutting_down"
+  | "restarting";
+
+export type VisualMode = "performance" | "balanced" | "beautiful";
+
+export type WinAnimState = "opening" | "active" | "closing";
 
 export interface Win {
   id: number;
@@ -27,6 +40,7 @@ export interface Win {
   saved?: { x: number; y: number; w: number; h: number };
   payload?: string;
   ws: number;
+  animState?: WinAnimState;
 }
 
 export interface Note { id: number; app: string; title: string; body: string; time: string; }
@@ -37,7 +51,7 @@ export interface FSItem { name: string; kind: FSKind; size: string; meta?: strin
 export interface AppDef {
   id: AppId;
   name: string;
-  icon: LucideIcon | "finder";
+  icon: LucideIcon | "finder" | "browser";
   tile: string;           // gradient classes for squircle
   glyph: string;          // glyph color
   size: [number, number];
@@ -49,48 +63,61 @@ export interface AppDef {
 /* ------------------------------------------------------------------ */
 
 export const APPS: Record<AppId, AppDef> = {
-  finder:   { id: "finder",   name: "Finder",            icon: "finder",      tile: "from-sky-400 to-blue-600",      glyph: "text-white", size: [860, 540], dock: true },
-  launchpad:{ id: "launchpad",name: "Launchpad",         icon: LayoutGrid,    tile: "from-slate-400 to-slate-600",   glyph: "text-white", size: [700, 480], dock: true },
-  settings: { id: "settings", name: "System Settings",   icon: Settings2,     tile: "from-zinc-400 to-zinc-600",     glyph: "text-white", size: [760, 540], dock: true },
-  terminal: { id: "terminal", name: "Terminal",          icon: SquareTerminal,tile: "from-zinc-700 to-zinc-900",     glyph: "text-emerald-300", size: [680, 440], dock: true },
-  textedit: { id: "textedit", name: "TextEdit",          icon: StickyNote,    tile: "from-amber-100 to-amber-300",   glyph: "text-amber-900", size: [620, 460], dock: true },
-  calc:     { id: "calc",     name: "Calculator",        icon: CalcIcon,      tile: "from-orange-400 to-orange-600", glyph: "text-white", size: [280, 420], dock: true },
-  music:    { id: "music",    name: "Music",             icon: Music2,        tile: "from-rose-400 to-red-500",      glyph: "text-white", size: [560, 360], dock: true },
-  photos:   { id: "photos",   name: "Photos",            icon: ImageIcon,     tile: "from-teal-300 to-cyan-500",     glyph: "text-white", size: [760, 540], dock: true },
-  player:   { id: "player",   name: "QuickPlayer",       icon: Film,          tile: "from-violet-400 to-purple-600", glyph: "text-white", size: [820, 560], dock: true },
-  sysinfo:  { id: "sysinfo",  name: "System Information",icon: Info,          tile: "from-sky-300 to-indigo-500",    glyph: "text-white", size: [620, 540], dock: false },
+  finder:   { id: "finder",   name: "Finder",          icon: "finder",      tile: "from-sky-400 to-blue-600",      glyph: "text-white", size: [860, 540], dock: true },
+  installer:{ id: "installer",name: "Install G1OS",    icon: HardDrive,     tile: "from-sky-500 to-blue-700",      glyph: "text-white", size: [720, 520], dock: true },
+  browser:  { id: "browser",  name: "Safari",          icon: Compass,       tile: "from-sky-300 via-blue-500 to-indigo-600", glyph: "text-white", size: [900, 580], dock: true },
+  launchpad:{ id: "launchpad",name: "Launchpad",       icon: LayoutGrid,    tile: "from-slate-400 to-slate-600",   glyph: "text-white", size: [700, 480], dock: true },
+  settings: { id: "settings", name: "System Settings", icon: Settings2,     tile: "from-zinc-400 to-zinc-600",     glyph: "text-white", size: [780, 550], dock: true },
+  terminal: { id: "terminal", name: "Terminal",        icon: SquareTerminal,tile: "from-zinc-700 to-zinc-900",     glyph: "text-emerald-300", size: [680, 440], dock: true },
+  textedit: { id: "textedit", name: "TextEdit",        icon: StickyNote,    tile: "from-amber-100 to-amber-300",   glyph: "text-amber-900", size: [620, 460], dock: true },
+  calc:     { id: "calc",     name: "Calculator",      icon: CalcIcon,      tile: "from-orange-400 to-orange-600", glyph: "text-white", size: [280, 420], dock: true },
+  music:    { id: "music",    name: "Music",           icon: Music2,        tile: "from-rose-400 to-red-500",      glyph: "text-white", size: [600, 400], dock: true },
+  photos:   { id: "photos",   name: "Photos",          icon: ImageIcon,     tile: "from-teal-300 to-cyan-500",     glyph: "text-white", size: [760, 540], dock: true },
+  player:   { id: "player",   name: "QuickPlayer",     icon: Film,          tile: "from-violet-400 to-purple-600", glyph: "text-white", size: [820, 560], dock: true },
+  sysinfo:  { id: "sysinfo",  name: "About G1OS",      icon: Info,          tile: "from-sky-300 to-indigo-500",    glyph: "text-white", size: [620, 540], dock: false },
 };
 
-export const DOCK_ORDER: AppId[] = ["finder", "launchpad", "settings", "terminal", "music", "photos", "player", "calc", "textedit"];
+export const DOCK_ORDER: AppId[] = [
+  "finder",
+  "installer",
+  "browser",
+  "launchpad",
+  "settings",
+  "terminal",
+  "music",
+  "photos",
+  "player",
+  "calc",
+  "textedit",
+];
 
 /* ------------------------------------------------------------------ */
 /* file system                                                         */
 /* ------------------------------------------------------------------ */
 
-export const FS: Record<string, FSItem[]> = {
+export const INITIAL_FS: Record<string, FSItem[]> = {
   Recents: [
-    { name: "reef-drift-1080p.mp4", kind: "video", size: "84.2 MB", meta: "H.264 · VDPAU" },
+    { name: "reef-drift-1080p.mp4", kind: "video", size: "84.2 MB", meta: "H.264 · VDPAU 1080p" },
     { name: "morning-bloom.flac", kind: "audio", size: "21.6 MB", meta: "FLAC 24/96" },
     { name: "valley-sunrise.jpg", kind: "image", size: "6.1 MB", meta: "4288 × 2848" },
-    { name: "design-philosophy.md", kind: "text", size: "4 KB" },
-    { name: "MacLiteOS-0.4.2.iso", kind: "archive", size: "612 MB" },
+    { name: "giving-life-to-older-machines.md", kind: "text", size: "4 KB" },
+    { name: "G1OS-1.0.iso", kind: "archive", size: "612 MB" },
   ],
   Documents: [
-    { name: "Design Philosophy.md", kind: "text", size: "4 KB", meta: "Edited today" },
-    { name: "Boot Sequence.key", kind: "keynote", size: "1.2 MB" },
-    { name: "Hardware Matrix.numbers", kind: "sheet", size: "88 KB" },
-    { name: "Firmware Notes.txt", kind: "text", size: "11 KB" },
-    { name: "iMac 11,3 Study.pdf", kind: "pdf", size: "2.4 MB" },
-    { name: "Specs", kind: "folder", size: "—" },
+    { name: "G1OS Manifesto.md", kind: "text", size: "4 KB", meta: "Edited today" },
+    { name: "iMac 2010 Architecture.key", kind: "keynote", size: "1.2 MB" },
+    { name: "Hardware Benchmarks.numbers", kind: "sheet", size: "88 KB" },
+    { name: "AppleSMC Thermal Control.txt", kind: "text", size: "11 KB" },
+    { name: "iMac 11,2 Hardware Study.pdf", kind: "pdf", size: "2.4 MB" },
   ],
   Downloads: [
-    { name: "MacLiteOS-0.4.2.iso", kind: "archive", size: "612 MB", meta: "sha256 verified" },
-    { name: "firmware-bcm4322.tar", kind: "archive", size: "1.1 MB" },
-    { name: "mesa-r600-notes.txt", kind: "text", size: "9 KB" },
+    { name: "G1OS-1.0-x86_64.iso", kind: "archive", size: "612 MB", meta: "sha256 verified" },
+    { name: "firmware-bcm43224.tar", kind: "archive", size: "1.1 MB" },
+    { name: "mesa-r600-acceleration.txt", kind: "text", size: "9 KB" },
   ],
   Movies: [
     { name: "reef-drift-1080p.mp4", kind: "video", size: "84.2 MB", meta: "H.264 High@L4.1", src: "video" },
-    { name: "Tide Pools.m4v", kind: "video", size: "142 MB", meta: "1080p24" },
+    { name: "Ocean Tide Pools.m4v", kind: "video", size: "142 MB", meta: "1080p24" },
   ],
   Music: [
     { name: "morning-bloom.flac", kind: "audio", size: "21.6 MB", meta: "FLAC 24-bit/96 kHz", src: "audio" },
@@ -101,6 +128,9 @@ export const FS: Record<string, FSItem[]> = {
     { name: "valley-sunrise.jpg", kind: "image", size: "6.1 MB", meta: "4288 × 2848", src: "image" },
     { name: "wall-dunes.heic", kind: "image", size: "3.9 MB" },
     { name: "keystones.png", kind: "image", size: "1.8 MB" },
+  ],
+  Trash: [
+    { name: "old-installer-cache.tmp", kind: "archive", size: "32 MB" },
   ],
 };
 
@@ -133,11 +163,19 @@ interface OSCtx {
   ws: number; setWs: (n: number) => void;
   accent: string; setAccent: (a: string) => void;
   perfMode: boolean; setPerfMode: (v: boolean) => void;
+  visualMode: VisualMode; setVisualMode: (m: VisualMode) => void;
+  reduceMotion: boolean; setReduceMotion: (v: boolean) => void;
   wall: number; setWall: (n: number) => void;
   dock: DockCfg; setDock: (d: Partial<DockCfg>) => void;
   finderLoc: string; setFinderLoc: (l: string) => void;
   finderView: "icon" | "list"; setFinderView: (v: "icon" | "list") => void;
   soundVol: number; setSoundVol: (v: number) => void;
+  powerState: PowerState; setPowerState: (s: PowerState) => void;
+  isLoggedIn: boolean; setIsLoggedIn: (v: boolean) => void;
+  bouncingApp: AppId | null; triggerAppBounce: (a: AppId) => void;
+  fs: Record<string, FSItem[]>;
+  emptyTrash: () => void;
+  moveToTrash: (item: FSItem) => void;
 }
 
 const Ctx = createContext<OSCtx>(null as any);
@@ -155,16 +193,32 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
   const [ws, setWs] = useState(0);
   const [accent, setAccentState] = useState("#0a84ff");
   const [perfMode, setPerfMode] = useState(false);
+  const [visualMode, setVisualModeState] = useState<VisualMode>("balanced");
+  const [reduceMotion, setReduceMotion] = useState(false);
   const [wall, setWall] = useState(0);
-  const [dock, setDockCfg] = useState<DockCfg>({ size: 52, mag: true, magScale: 0.5, autohide: false, pos: "bottom" });
+  const [dock, setDockCfg] = useState<DockCfg>({ size: 52, mag: true, magScale: 0.45, autohide: false, pos: "bottom" });
   const [finderLoc, setFinderLoc] = useState("Recents");
   const [finderView, setFinderView] = useState<"icon" | "list">("icon");
-  const [soundVol, setSoundVol] = useState(62);
+  const [soundVol, setSoundVol] = useState(68);
+  const [powerState, setPowerState] = useState<PowerState>("running");
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
+  const [bouncingApp, setBouncingApp] = useState<AppId | null>(null);
+  const [fs, setFs] = useState<Record<string, FSItem[]>>(INITIAL_FS);
 
   const zTop = useRef(10);
   const idSeq = useRef(1);
   const noteSeq = useRef(0);
   const cascade = useRef(0);
+
+  const setVisualMode = useCallback((m: VisualMode) => {
+    setVisualModeState(m);
+    setPerfMode(m === "performance");
+  }, []);
+
+  const triggerAppBounce = useCallback((app: AppId) => {
+    setBouncingApp(app);
+    setTimeout(() => setBouncingApp(null), 1200);
+  }, []);
 
   const focusWin = useCallback((id: number) => {
     zTop.current += 1;
@@ -173,20 +227,23 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
 
   const openApp = useCallback((app: AppId, payload?: string, title?: string) => {
     if (app === "launchpad") { setLaunchpad((v) => !v); return; }
+    triggerAppBounce(app);
+
     setWins((w) => {
       const existing = payload == null ? w.find((x) => x.app === app) : undefined;
       if (existing && payload == null) {
         zTop.current += 1;
-        return w.map((x) => (x.id === existing.id ? { ...x, z: zTop.current, min: false } : x));
+        return w.map((x) => (x.id === existing.id ? { ...x, z: zTop.current, min: false, animState: "active" } : x));
       }
       zTop.current += 1;
-      const def = APPS[app];
+      const def = APPS[app] || APPS.finder;
       const off = (cascade.current++ % 5) * 26;
       const [cw, ch] = def.size;
       const ww = Math.min(cw, stageW - 24);
       const wh = Math.min(ch, stageH - 70);
+      const newId = idSeq.current++;
       const win: Win = {
-        id: idSeq.current++,
+        id: newId,
         app,
         title: title ?? def.name,
         x: Math.max(12, (stageW - ww) / 2 + off - 40),
@@ -196,13 +253,41 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
         min: false, full: false,
         payload,
         ws,
+        animState: "opening",
       };
+
+      // Transition smoothly from opening to active on next animation frame
+      requestAnimationFrame(() => {
+        setWins((curr) =>
+          curr.map((item) => (item.id === newId ? { ...item, animState: "active" } : item))
+        );
+      });
+
       return [...w, win];
     });
-  }, [stageW, stageH, ws]);
+  }, [stageW, stageH, ws, triggerAppBounce]);
 
-  const closeWin = useCallback((id: number) => setWins((w) => w.filter((x) => x.id !== id)), []);
-  const setMin = useCallback((id: number, v: boolean) => setWins((w) => w.map((x) => (x.id === id ? { ...x, min: v } : x))), []);
+  const closeWin = useCallback((id: number) => {
+    // Play macOS close dissolution animation before removing from state
+    setWins((w) => w.map((x) => (x.id === id ? { ...x, animState: "closing" } : x)));
+    setTimeout(() => {
+      setWins((w) => w.filter((x) => x.id !== id));
+    }, 190);
+  }, []);
+
+  const setMin = useCallback((id: number, v: boolean) => {
+    setWins((w) =>
+      w.map((x) => {
+        if (x.id !== id) return x;
+        if (!v) {
+          // Restoring from dock
+          zTop.current += 1;
+          return { ...x, min: false, z: zTop.current, animState: "active" };
+        }
+        return { ...x, min: true };
+      })
+    );
+  }, []);
   const toggleFull = useCallback((id: number) =>
     setWins((w) =>
       w.map((x) => {
@@ -223,13 +308,26 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
 
   const notify = useCallback((app: string, title: string, body: string) => {
     noteSeq.current += 1;
-    setNotes((n) => [...n.slice(-7), { id: noteSeq.current, app, title, body, time: now() }]);
+    setNotes((n) => [...n.slice(-6), { id: noteSeq.current, app, title, body, time: now() }]);
   }, []);
   const dismissNote = useCallback((id: number) => setNotes((n) => n.filter((x) => x.id !== id)), []);
   const clearNotes = useCallback(() => setNotes([]), []);
 
   const setAccent = useCallback((a: string) => setAccentState(a), []);
   const setDock = useCallback((d: Partial<DockCfg>) => setDockCfg((c) => ({ ...c, ...d })), []);
+
+  const emptyTrash = useCallback(() => {
+    setFs((prev) => ({ ...prev, Trash: [] }));
+    notify("Finder", "Trash Emptied", "All items have been permanently deleted.");
+  }, [notify]);
+
+  const moveToTrash = useCallback((item: FSItem) => {
+    setFs((prev) => ({
+      ...prev,
+      Trash: [...(prev.Trash || []), item],
+    }));
+    notify("Finder", "Moved to Trash", `"${item.name}" was moved to the Trash.`);
+  }, [notify]);
 
   const activeApp: AppId = useMemo(() => {
     const visible = wins.filter((w) => !w.min && w.ws === ws);
@@ -241,9 +339,11 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
     wins, notes, openApp, closeWin, focusWin, setMin, toggleFull, moveWin, resizeWin,
     notify, dismissNote, clearNotes, activeApp,
     menuOpen, setMenuOpen, spotlight, setSpotlight, launchpad, setLaunchpad,
-    ws, setWs, accent, setAccent, perfMode, setPerfMode, wall, setWall,
+    ws, setWs, accent, setAccent, perfMode, setPerfMode, visualMode, setVisualMode,
+    reduceMotion, setReduceMotion, wall, setWall,
     dock, setDock, finderLoc, setFinderLoc, finderView, setFinderView,
-    soundVol, setSoundVol,
+    soundVol, setSoundVol, powerState, setPowerState, isLoggedIn, setIsLoggedIn,
+    bouncingApp, triggerAppBounce, fs, emptyTrash, moveToTrash,
   };
 
   return <Ctx.Provider value={val}>{children}</Ctx.Provider>;

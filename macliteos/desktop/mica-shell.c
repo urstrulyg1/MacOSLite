@@ -226,13 +226,13 @@ static int run_panel(void)
 /* ============================== DOCK =================================== */
 typedef struct {
     mica_win *win;
-    const mica_app_def *apps[12];
+    const mica_app_def *apps[16];
     int n;
-    double size[12];          /* current animated size per icon */
-    double vel[12];
-    ml_anim *spr[12];
+    double size[16];          /* current animated size per icon */
+    double vel[16];
+    ml_anim *spr[16];
     ml_source *anim_timer;
-    bool running[12];
+    bool running[16];
     int hover;
     shell_menu *menu;
     bool autohide, hidden, hovered, mag;
@@ -259,7 +259,7 @@ static void dock_draw(void)
     ml_surface *s = D.win->surf;
     ml_ctx c;
     ml_ctx_init(&c, s, ml_rect_make(0, 0, s->w, s->h));
-    double xs[12], widths[12], total;
+    double xs[16], widths[16], total;
     dock_layout(xs, widths, &total);
     int ph = s->h;
     ml_rect panel = ml_rect_make((s->w - (int)total) / 2, 6, (int)total, ph - 12);
@@ -301,7 +301,7 @@ static void dock_anim_tick(void *ud)
 }
 static void dock_retarget(int pointer_x_in_dock)
 {
-    double xs[12], widths[12], total;
+    double xs[16], widths[16], total;
     dock_layout(xs, widths, &total);
     double ox = (D.win->w - total) / 2 - 12;
     double mag = (G->info.mode == MODE_PERFORMANCE || !D.mag) ? 0 : 24.0;
@@ -369,7 +369,7 @@ static void dock_input(mica_win *w, const msg_input *in)
         return;
     }
     if (in->kind != IN_UP) return;
-    double xs[12], widths[12], total;
+    double xs[16], widths[16], total;
     dock_layout(xs, widths, &total);
     double ox = (w->w - total) / 2 - 12;
     for (int i = 0; i < D.n; i++) {
@@ -415,9 +415,12 @@ static void dock_event(mica_client *c, const msg_event *e)
 
 static int run_dock(void)
 {
-    const char *order[] = { "finder", "browser", "vlc", "terminal", "settings", "sysinfo",
+    const char *order[] = { "finder", "installer", "browser", "vlc", "terminal", "settings", "sysinfo",
                             "imageview", "pdf", "textedit", "diagnostics" };
-    for (size_t i = 0; i < ML_ARRAY_SIZE(order); i++) D.apps[D.n++] = mica_app_find(order[i]);
+    for (size_t i = 0; i < ML_ARRAY_SIZE(order); i++) {
+        const mica_app_def *def = mica_app_find(order[i]);
+        if (def && D.n < 16) D.apps[D.n++] = def;
+    }
     int w = 12 * (DOCK_BASE + 6) + 96, h = DOCK_BASE + 30 + 14;
     D.win = mica_win_new(G, w, h, "", "dock", WIN_F_BORDERLESS | WIN_F_TOPMOST | WIN_F_NO_FOCUS);
     if (!D.win) return 1;
@@ -447,11 +450,23 @@ static desk_t K;
 static void desk_scan(void)
 {
     K.n = 0;
+
+    /* If in live session or uninstalled, guarantee 'Install MacLiteOS' icon is present */
+    bool is_live = !ml_file_exists("/etc/maclite-installed") ||
+                   ml_file_exists("/run/maclite-live") ||
+                   ml_file_exists("/run/maclite-base");
+    if (is_live) {
+        snprintf(K.names[K.n], sizeof K.names[0], "Install MacLiteOS");
+        K.isdir[K.n] = false;
+        K.n++;
+    }
+
     DIR *d = opendir(K.dir);
     if (!d) return;
     struct dirent *e;
     while ((e = readdir(d)) && K.n < 64) {
         if (e->d_name[0] == '.') continue;
+        if (is_live && strstr(e->d_name, "Install")) continue;
         snprintf(K.names[K.n], sizeof K.names[0], "%s", e->d_name);
         char *p = ml_path_join(K.dir, e->d_name);
         K.isdir[K.n] = ml_is_dir(p);
@@ -470,7 +485,10 @@ static void desk_draw(void)
     ml_font *f = ml_font_get("mica-sans");
     for (int i = 0; i < K.n; i++) {
         int cx = s->w - 96, cy = 40 + i * 96;
-        ml_icon_draw(&c, K.isdir[i] ? "folder" : "file", ml_rect_make(cx, cy, 56, 56), ml_rgba(255, 255, 255, 240));
+        const char *icon = K.isdir[i] ? "folder" : "file";
+        if (strstr(K.names[i], "Install") || strstr(K.names[i], "installer"))
+            icon = "app-installer";
+        ml_icon_draw(&c, icon, ml_rect_make(cx, cy, 56, 56), ml_rgba(255, 255, 255, 240));
         ml_draw_text_box(&c, f, ml_rect_make(cx - 32, cy + 60, 120, 16), K.names[i], 12,
                          ml_rgba(240, 244, 252, 235), ML_ALIGN_CENTER);
     }
@@ -497,6 +515,10 @@ static void desk_input(mica_win *w, const msg_input *in)
         for (int i = 0; i < K.n; i++) {
             int cx = w->w - 96, cy = 40 + i * 96;
             if (in->x >= cx - 8 && in->x <= cx + 64 && in->y >= cy && in->y <= cy + 76) {
+                if (strstr(K.names[i], "Install") || strstr(K.names[i], "installer")) {
+                    mica_launch(G, "mica-installer");
+                    return;
+                }
                 char *p = ml_path_join(K.dir, K.names[i]);
                 char *cmd = K.isdir[i] ? ml_strdupf("mica-finder \"%s\"", p)
                                        : ml_strdupf("mica-viewer \"%s\"", p);

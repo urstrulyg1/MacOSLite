@@ -256,32 +256,33 @@ export function PlayerApp({ payload }: { payload?: string }) {
 /* ---------------------------------------------------------------- */
 export function SysInfoApp() {
   const rows: [string, React.ReactNode, string][] = [
-    ["CPU", <Cpu size={16} />, "Intel Core i3-540 · 3.06 GHz · 2C/4T · SSE4.2 (no AVX — and nothing asks for it)"],
-    ["GPU", <MonitorPlay size={16} />, "ATI Radeon HD 4670 (RV730) · 256 MB · Mesa r600 · DRM/KMS native"],
-    ["RAM", <MemoryStick size={16} />, "8 GB DDR3-1333 · 384 MB in use (4.9%)"],
-    ["Storage", <HardDrive size={16} />, "500 GB SATA · ext4 · 92 MB/s seq · near-zero idle writes"],
-    ["Wi-Fi", <Wifi size={16} />, "Broadcom BCM43224 · brcmfmac · connected @ 130 Mb/s"],
+    ["OS Branding", <LogoMark size={16} />, "G1OS 1.0 · Giving life to older machines"],
+    ["CPU", <Cpu size={16} />, "Intel Core i3-540 · 3.06 GHz · 2C/4T · SSE4.2 (Clarkdale 32nm)"],
+    ["GPU", <MonitorPlay size={16} />, "ATI Radeon HD 4670 (RV730) · 256 MB GDDR3 · Mesa r600 · DRM/KMS native"],
+    ["RAM", <MemoryStick size={16} />, "4 GB DDR3-1333 · 384 MB in use (9.6%)"],
+    ["Storage", <HardDrive size={16} />, "Crucial CT500MX500SSD1 · 500.1 GB SATA · ext4 (noatime)"],
+    ["Wi-Fi", <Wifi size={16} />, "Broadcom BCM43224 · AirPort Extreme 802.11n · 130 Mb/s"],
     ["Audio", <AudioLines size={16} />, "Cirrus CS4206 · ALSA direct — zero sound-server overhead"],
-    ["Video acceleration", <ShieldCheck size={16} />, "VDPAU ✓ — H.264 High, MPEG-2, VC-1 hardware decode"],
+    ["Video acceleration", <ShieldCheck size={16} />, "VDPAU ✓ — 1080p 60fps hardware decode online"],
   ];
   return (
-    <div className="flex h-full flex-col overflow-auto bg-[rgba(250,250,252,0.85)] p-6">
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--acc)]">System Information</div>
-      <h2 className="text-[21px] font-bold tracking-tight">iMac (21.5-inch, Mid 2010)</h2>
-      <div className="mb-4 text-[12px] text-black/45">Everything below was auto-detected at first boot — nothing hand-configured.</div>
+    <div className="flex h-full flex-col overflow-auto bg-[rgba(250,250,252,0.92)] p-6 select-none text-zinc-900">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-600">Operating System</div>
+      <h2 className="text-[22px] font-bold tracking-tight text-black">G1OS for iMac (Mid-2010)</h2>
+      <div className="mb-4 text-[12.5px] text-blue-600 font-medium">“Giving life to older machines.”</div>
       <div className="space-y-2">
         {rows.map(([k, icon, v]) => (
-          <div key={k} className="flex items-center gap-3 rounded-xl border border-black/[0.07] bg-white/75 px-3.5 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-            <span className="grid h-8 w-8 flex-none place-items-center rounded-lg bg-[var(--acc)]/15 text-[var(--acc)]">{icon}</span>
+          <div key={k} className="flex items-center gap-3 rounded-xl border border-black/[0.07] bg-white px-3.5 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+            <span className="grid h-8 w-8 flex-none place-items-center rounded-lg bg-blue-500/15 text-blue-600">{icon}</span>
             <div className="min-w-0">
-              <div className="text-[10.5px] font-semibold uppercase tracking-wide text-black/40">{k}</div>
-              <div className="truncate text-[12.5px] text-black/80">{v}</div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-wide text-black/45">{k}</div>
+              <div className="truncate text-[12.5px] text-black/85 font-mono">{v}</div>
             </div>
           </div>
         ))}
       </div>
-      <div className="mt-4 rounded-xl bg-emerald-500/10 p-3 text-[12px] leading-relaxed text-emerald-800">
-        <b>Hardware probe result:</b> 8/8 subsystems online. 1080p H.264 plays with single-digit CPU via VDPAU. Fallback stack (FFmpeg-mt) verified by killing the video driver at runtime — desktop never blinked.
+      <div className="mt-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3 text-[12px] leading-relaxed text-emerald-900">
+        <b>Hardware verification passed:</b> 8/8 subsystems verified. 1080p H.264 streams with single-digit CPU usage via hardware VDPAU. Dual-tier Apple EFI fallback ensures independent internal booting.
       </div>
     </div>
   );

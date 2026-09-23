@@ -26,7 +26,7 @@ BINS := $(OUT)/mica-comp $(OUT)/mica-shell $(OUT)/g1os-splash
 APPS := $(OUT)/mica-finder $(OUT)/mica-terminal $(OUT)/mica-viewer \
         $(OUT)/mica-settings $(OUT)/mica-sysinfo $(OUT)/mica-textedit \
         $(OUT)/mica-player $(OUT)/mica-music $(OUT)/mica-pdf \
-        $(OUT)/maclite-browser $(OUT)/maclite-video
+        $(OUT)/maclite-browser $(OUT)/maclite-video $(OUT)/mica-installer
 TOOLS := $(OUT)/maclite-memory $(OUT)/maclite-performance $(OUT)/maclite-ui-benchmark \
          $(OUT)/maclite-diagnostics \
          $(OUT)/maclite-gpu $(OUT)/maclite-gpu-benchmark $(OUT)/maclite-display \
@@ -35,7 +35,7 @@ TOOLS := $(OUT)/maclite-memory $(OUT)/maclite-performance $(OUT)/maclite-ui-benc
          $(OUT)/maclite-power $(OUT)/maclite-hardware $(OUT)/maclite-cpu \
          $(OUT)/maclite-drivers $(OUT)/maclite-fan
 TESTS := $(OUT)/test_render $(OUT)/test_units $(OUT)/test_idle $(OUT)/test_leak \
-         $(OUT)/test_hardware
+         $(OUT)/test_hardware $(OUT)/test_installer
 
 .PHONY: all core hw bins apps tools tests clean
 all: core hw bins apps tools tests
@@ -104,6 +104,9 @@ $(OUT)/maclite-browser: applications/maclite-browser.c $(HWLIB) $(LIB)
 $(OUT)/maclite-video: multimedia/maclite-video.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
+$(OUT)/mica-installer: installer/mica-installer.c $(CLIENT_OBJ) $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+
 # v0.1 measurement tools
 $(OUT)/maclite-memory: performance/maclite-memory.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
@@ -153,6 +156,8 @@ $(OUT)/test_idle: tests/test_idle.c $(LIB)
 $(OUT)/test_leak: tests/test_leak.c $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 $(OUT)/test_hardware: tests/test_hardware.c $(HWLIB) $(LIB)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/test_installer: tests/test_installer.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 bins: $(BINS)

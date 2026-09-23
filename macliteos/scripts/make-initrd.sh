@@ -19,7 +19,20 @@ cat > "$W/init" <<'INIT'
 mount -t proc proc /proc; mount -t sysfs sysfs /sys; mount -t devtmpfs devtmpfs /dev
 # load what initrd.list shipped; udev-free on purpose (fast boot, spec §5)
 for m in radeon tg3 b43 snd-hda-intel; do modprobe "$m" 2>/dev/null || true; done
-mount -o ro LABEL=MACLITE_BASE /mnt || echo "recovery: base missing"
+
+# Parse root= from /proc/cmdline to support UUID/PARTUUID without label ambiguity
+ROOT_TARGET=""
+for param in $(cat /proc/cmdline); do
+    case "$param" in
+        root=*) ROOT_TARGET="${param#root=}" ;;
+    esac
+done
+
+if [ -n "$ROOT_TARGET" ]; then
+    mount -o ro "$ROOT_TARGET" /mnt || mount -o ro LABEL=MACLITE_BASE /mnt || echo "recovery: base missing"
+else
+    mount -o ro LABEL=MACLITE_BASE /mnt || echo "recovery: base missing"
+fi
 # Recovery mode: no session, just tools on a console (spec §16). This is what
 # the cmdline documents as rd.maclite=recovery.
 case "$(cat /proc/cmdline)" in

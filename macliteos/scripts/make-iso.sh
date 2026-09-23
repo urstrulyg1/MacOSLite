@@ -53,7 +53,7 @@ out/maclite-memory out/maclite-performance out/maclite-ui-benchmark out/maclite-
 out/maclite-gpu out/maclite-gpu-benchmark out/maclite-display out/maclite-brightness \
 out/maclite-audio out/maclite-video-test out/maclite-network out/maclite-usb out/maclite-storage \
 out/maclite-power out/maclite-hardware out/maclite-cpu out/maclite-drivers \
-out/maclite-fan out/maclite-browser out/maclite-video out/g1os-splash"
+out/maclite-fan out/maclite-browser out/maclite-video out/mica-installer out/g1os-splash"
 
 MISSING_BINS=""
 for bin in $REQUIRED_BINS; do
@@ -79,6 +79,9 @@ for bin in $REQUIRED_BINS; do
     cp "$bin" "$ST/base/usr/bin/"
 done
 
+[ -f installer/maclite-install ] && cp installer/maclite-install "$ST/base/usr/bin/" && chmod +x "$ST/base/usr/bin/maclite-install"
+[ -f installer/maclite-installer-backend ] && cp installer/maclite-installer-backend "$ST/base/usr/bin/" && chmod +x "$ST/base/usr/bin/maclite-installer-backend"
+
 cp scripts/hardware-check.sh "$ST/base/usr/share/maca-lite/scripts/"
 chmod +x "$ST/base/usr/share/maca-lite/scripts/hardware-check.sh"
 
@@ -90,6 +93,10 @@ if [ -d rootfs/etc ]; then
     cp -r rootfs/etc "$ST/base/etc"
 else
     mkdir -p "$ST/base/etc"
+fi
+
+if [ -d rootfs/usr ]; then
+    cp -r rootfs/usr/* "$ST/base/usr/" 2>/dev/null || true
 fi
 
 # 4. Create base squashfs image

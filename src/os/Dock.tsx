@@ -1,74 +1,142 @@
-import React, { useMemo, useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
-import { APPS, DOCK_ORDER, useOS, type AppId } from "./os";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { APPS, DOCK_ORDER, useOS, type AppId, type Win } from "./os";
 import { LogoMark } from "./MenuBar";
+import { G1Icon, FinderSquircle as FinderFace } from "./icons/IconSystem";
+
+export { FinderFace };
 
 function AppTile({ app, size }: { app: AppId; size: number }) {
-  const def = APPS[app];
-  const s = Math.round(size);
-  return (
-    <div
-      className={`grid place-items-center rounded-[24%] bg-gradient-to-b ${def.tile} shadow-[0_2px_8px_rgba(10,15,40,0.3),inset_0_0.5px_0_rgba(255,255,255,0.4)]`}
-      style={{ width: s, height: s }}
-    >
-      {def.icon === "finder" ? (
-        <FinderFace size={s} />
-      ) : (
-        React.createElement(def.icon as any, { size: Math.round(s * 0.56), strokeWidth: 1.9, className: def.glyph })
-      )}
-    </div>
-  );
+  return <G1Icon name={app} size={Math.round(size)} />;
 }
 
-/* original two-tone finder-ish face */
-export function FinderFace({ size }: { size: number }) {
-  const s = Math.round(size);
-  return (
-    <svg width={s} height={s} viewBox="0 0 64 64">
-      <defs>
-        <linearGradient id="ff-l" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#7cc4ff" /><stop offset="1" stopColor="#2f8bff" />
-        </linearGradient>
-        <linearGradient id="ff-r" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#eef6ff" /><stop offset="1" stopColor="#b8d9ff" />
-        </linearGradient>
-      </defs>
-      <rect x="5" y="5" width="54" height="54" rx="14" fill="url(#ff-l)" />
-      <path d="M32 5.2C24 14 21 26 21.6 37c.3 6 2.6 12.6 5.4 21.9l-8 .1a14 14 0 0 1-14-14V19a14 14 0 0 1 14-14Z" fill="url(#ff-r)" opacity="0.9" />
-      <path d="M25 24v8M40 24v8" stroke="#123" strokeWidth="3.4" strokeLinecap="round" opacity="0.75" />
-      <path d="M22 42c3.5 3.2 6.7 4.6 10.2 4.6S39 45.2 42.5 42" stroke="#123" strokeWidth="3.4" strokeLinecap="round" fill="none" opacity="0.75" />
-    </svg>
-  );
-}
+/* ------------------------------------------------------------------ */
+/* Main macOS Dock Component                                           */
+/* ------------------------------------------------------------------ */
 
 export default function Dock() {
   const os = useOS();
-  const { dock } = os;
-  const [mouse, setMouse] = useState<number | null>(null);
-  const [bounced, setBounced] = useState<string | null>(null);
-  const [hoverStrip, setHoverStrip] = useState(false);
+  const { dock, perfMode, reduceMotion } = os;
   const wrapRef = useRef<HTMLDivElement>(null);
   const vertical = dock.pos !== "bottom";
+
+  // Mouse coordinate offset from dock's center anchor point
+  const [mouseCoord, setMouseCoord] = useState<number | null>(null);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [bounced, setBounced] = useState<string | null>(null);
+  const [hoverStrip, setHoverStrip] = useState(false);
+  const rafRef = useRef<number | null>(null);
 
   const minimized = os.wins.filter((w) => w.min);
   const running = useMemo(() => new Set(os.wins.map((w) => w.app)), [os.wins]);
 
-  const iconSize = (center: number) => {
-    const base = dock.size;
-    if (!dock.mag || mouse == null) return base;
-    const d = Math.abs(center - mouse);
-    const sigma = base * 1.35;
-    return base + base * dock.magScale * Math.exp(-(d * d) / (2 * sigma * sigma));
-  };
+  const baseSize = dock.size || 50;
+  const gap = 8;
+  const dividerWidth = 14;
+  const isMagEnabled = dock.mag && !perfMode && !reduceMotion;
+  const maxScale = isMagEnabled ? 1 + (dock.magScale || 0.45) : 1.0;
+  const influenceRadius = baseSize * 2.8; // ~140px smooth influence zone
 
-  const hidden = dock.autohide && !hoverStrip && mouse == null;
+  // Construct flat ordered list of items for layout indexing
+  interface ItemMeta {
+    key: string;
+    type: "app" | "minimized" | "trash";
+    appId?: AppId;
+    win?: Win;
+    label: string;
+  }
 
-  const onMove = (e: React.MouseEvent) => {
+  const items: ItemMeta[] = useMemo(() => {
+    const list: ItemMeta[] = [];
+    for (const app of DOCK_ORDER) {
+      const def = APPS[app] || APPS.finder;
+      list.push({ key: `app-${app}`, type: "app", appId: app, label: def.name });
+    }
+    for (const w of minimized) {
+      list.push({ key: `win-${w.id}`, type: "minimized", win: w, label: w.title });
+    }
+    const trashCount = (os.fs.Trash || []).length;
+    list.push({
+      key: "trash",
+      type: "trash",
+      label: trashCount > 0 ? `Trash (${trashCount} items)` : "Trash",
+    });
+    return list;
+  }, [minimized, os.fs.Trash]);
+
+  // Precompute static resting centers relative to the dock's center anchor
+  const restingOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let cur = 0;
+    const appCount = DOCK_ORDER.length;
+
+    for (let i = 0; i < items.length; i++) {
+      if (i === appCount) {
+        cur += dividerWidth + gap;
+      }
+      const center = cur + baseSize / 2;
+      offsets.push(center);
+      cur += baseSize + gap;
+    }
+
+    const totalSpan = cur - gap;
+    return offsets.map((c) => c - totalSpan / 2);
+  }, [items.length, baseSize, gap]);
+
+  // Compute magnification scale factor for an item index
+  const getScale = useCallback(
+    (index: number) => {
+      if (!isMagEnabled || mouseCoord === null) return 1.0;
+      const targetOffset = restingOffsets[index] ?? 0;
+      const dist = Math.abs(mouseCoord - targetOffset);
+      if (dist >= influenceRadius) return 1.0;
+
+      // Cosine-squared taper for zero derivative at boundary (no jump or pop)
+      const ratio = dist / influenceRadius;
+      const cosVal = Math.cos((ratio * Math.PI) / 2);
+      return 1.0 + (maxScale - 1.0) * (cosVal * cosVal);
+    },
+    [isMagEnabled, mouseCoord, restingOffsets, influenceRadius, maxScale]
+  );
+
+  // Mouse tracker locked to requestAnimationFrame for locked 60/120 FPS
+  const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    setHoverStrip(false);
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect) return;
-    setHoverStrip(false);
-    setMouse(vertical ? e.clientY - rect.top : e.clientX - rect.left);
+
+    // Anchor dock center on screen
+    const dockCenter = vertical
+      ? rect.top + rect.height / 2
+      : rect.left + rect.width / 2;
+
+    const mousePos = vertical ? e.clientY : e.clientX;
+    const offset = mousePos - dockCenter;
+
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      setMouseCoord(offset);
+    });
   };
+
+  const onMouseLeave = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    setMouseCoord(null);
+    setHoveredIdx(null);
+    setHoverStrip(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  const bounce = (id: string) => {
+    setBounced(id);
+    setTimeout(() => setBounced(null), 1400);
+  };
+
+  const hidden = dock.autohide && !hoverStrip && mouseCoord === null;
 
   const stripCls: Record<string, string> = {
     bottom: "inset-x-0 bottom-0 h-[10px]",
@@ -77,24 +145,23 @@ export default function Dock() {
   };
 
   const dockPos: Record<string, string> = {
-    bottom: "bottom-2 left-1/2 -translate-x-1/2 flex-row items-end",
-    left: "left-2 top-1/2 -translate-y-1/2 flex-col items-start",
-    right: "right-2 top-1/2 -translate-y-1/2 flex-col items-end",
+    bottom: "bottom-3 left-1/2 flex-row items-end",
+    left: "left-3 top-1/2 flex-col items-start",
+    right: "right-3 top-1/2 flex-col items-end",
   };
+
   const hideShift: Record<string, string> = {
-    bottom: "translateY(120%)",
+    bottom: "translateY(130%)",
     left: "translateX(-130%)",
     right: "translateX(130%)",
   };
 
-  const bounce = (id: string) => {
-    setBounced(id);
-    setTimeout(() => setBounced(null), 1450);
-  };
+  const trashCount = (os.fs.Trash || []).length;
+  const isInteracting = mouseCoord !== null;
 
   return (
     <>
-      {/* hover strip for autohide */}
+      {/* Hover strip for autohide activation */}
       {dock.autohide && (
         <div
           className={`absolute z-[390] ${stripCls[dock.pos]}`}
@@ -102,117 +169,262 @@ export default function Dock() {
           onMouseLeave={() => setHoverStrip(false)}
         />
       )}
+
+      {/* Outer macOS Dock Wrapper */}
       <div
         ref={wrapRef}
-        className={`glass absolute z-[400] flex rounded-[26px] bg-[rgba(240,242,248,0.42)] p-[7px] shadow-[0_0_0_0.5px_rgba(0,0,0,0.14),0_14px_42px_rgba(10,15,40,0.3)] ${dockPos[dock.pos]}`}
+        className={`absolute z-[400] flex select-none ${dockPos[dock.pos]}`}
         style={{
-          gap: 5,
-          transform: `${dock.pos === "bottom" ? "translateX(-50%)" : dock.pos === "left" || dock.pos === "right" ? "translateY(-50%)" : ""} ${hidden ? hideShift[dock.pos] : ""}`,
-          transition: "transform 0.35s cubic-bezier(0.3, 0.9, 0.3, 1)",
+          transform: `${dock.pos === "bottom" ? "translateX(-50%)" : "translateY(-50%)"} ${hidden ? hideShift[dock.pos] : ""}`,
+          transition: "transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1)",
         }}
-        onMouseMove={onMove}
-        onMouseLeave={() => { setMouse(null); setHoverStrip(false); }}
-        onMouseEnter={() => dock.autohide && setHoverStrip(false)}
+        onMouseMove={onMouseMove}
+        onMouseLeave={onMouseLeave}
       >
-        {DOCK_ORDER.map((app) => {
-          const def = APPS[app];
-          return (
-            <DockIcon key={app} vertical={vertical} label={def.name} moved={mouse != null}>
-              {({ center }) => (
-                <button
-                  className={`dock-icon relative grid place-items-center ${bounced === app ? "dock-bounce" : ""}`}
-                  style={{ width: iconSize(center), height: iconSize(center) }}
-                  onClick={() => {
-                    const hasWin = os.wins.some((w) => w.app === app);
-                    if (!hasWin && app !== "launchpad") bounce(app);
-                    os.openApp(app);
-                  }}
-                >
-                  <AppTile app={app} size={iconSize(center)} />
-                  <span
-                    className={`absolute rounded-full bg-black/45 transition-opacity ${vertical ? "-left-[7px] top-1/2 -translate-y-1/2 h-[5px] w-[5px]" : "-bottom-[4.5px] left-1/2 -translate-x-1/2 h-[4.5px] w-[4.5px]"} ${running.has(app) ? "opacity-100" : "opacity-0"}`}
+        {/* Authentic macOS Glass Shelf Tray */}
+        <div
+          className={`dock-shelf relative flex items-end rounded-[24px] px-3.5 pt-2.5 pb-1.5`}
+          style={{
+            gap: gap,
+          }}
+        >
+          {items.map((item, idx) => {
+            const scale = getScale(idx);
+            const slotWidth = Math.round(baseSize * scale);
+            const isHovered = hoveredIdx === idx;
+            const isDividerBefore = idx === DOCK_ORDER.length;
+            const tooltipOffset = Math.round(baseSize * (scale - 1) + 12);
+
+            return (
+              <React.Fragment key={item.key}>
+                {/* Authentic macOS vertical frosted glass divider */}
+                {isDividerBefore && (
+                  <div
+                    className={`self-center rounded-full ${
+                      vertical
+                        ? "w-[30px] h-[1px] my-1 bg-white/35 shadow-[0_1px_1px_rgba(0,0,0,0.2)]"
+                        : "h-[34px] w-[1px] mx-1.5 bg-white/40 shadow-[1px_0_1px_rgba(0,0,0,0.2)]"
+                    }`}
                   />
-                </button>
-              )}
-            </DockIcon>
-          );
-        })}
+                )}
 
-        {(minimized.length > 0 || true) && (
-          <div className={`self-stretch ${vertical ? "h-px w-full my-[3px]" : "w-px h-full mx-[3px]"} bg-black/15`} />
-        )}
-
-        {minimized.map((w) => (
-          <DockIcon key={w.id} vertical={vertical} label={w.title} moved={mouse != null}>
-            {({ center }) => (
-              <button
-                className="dock-icon grid place-items-center"
-                style={{ width: iconSize(center), height: iconSize(center) }}
-                onClick={() => os.setMin(w.id, false)}
-                title={`Restore: ${w.title}`}
-              >
+                {/* Individual Icon Slot (Slot width perfectly matches scaled icon) */}
                 <div
-                  className={`grid place-items-center rounded-[8px] bg-gradient-to-br from-slate-100 to-slate-300 shadow-inner`}
-                  style={{ width: iconSize(center) * 0.86, height: iconSize(center) * 0.7 }}
+                  className="relative flex flex-col items-center justify-end"
+                  style={{
+                    width: vertical ? baseSize : slotWidth,
+                    height: vertical ? slotWidth : undefined,
+                    transition: isInteracting
+                      ? "none"
+                      : "width 0.28s cubic-bezier(0.25, 1, 0.5, 1), height 0.28s cubic-bezier(0.25, 1, 0.5, 1)",
+                  }}
+                  onMouseEnter={() => setHoveredIdx(idx)}
                 >
-                  <LogoMark size={Math.round(iconSize(center) * 0.4)} />
-                </div>
-              </button>
-            )}
-          </DockIcon>
-        ))}
+                  {/* Floating macOS Tooltip anchored above magnified icon */}
+                  {isHovered && isInteracting && (
+                    <div
+                      className={`pointer-events-none absolute z-50 whitespace-nowrap rounded-[7px] bg-[rgba(25,26,32,0.88)] px-2.5 py-1 text-[11.5px] font-medium tracking-tight text-white shadow-[0_4px_16px_rgba(0,0,0,0.32)] backdrop-blur-md border border-white/15 animate-fade-in ${
+                        vertical
+                          ? "left-[calc(100%+14px)] top-1/2 -translate-y-1/2"
+                          : "left-1/2 -translate-x-1/2"
+                      }`}
+                      style={{
+                        bottom: vertical ? undefined : `calc(100% + ${tooltipOffset}px)`,
+                      }}
+                    >
+                      {item.label}
+                      {/* Sub-pixel arrow indicator */}
+                      {!vertical && (
+                        <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 h-1 w-2 border-l-4 border-r-4 border-t-4 border-transparent border-t-[rgba(25,26,32,0.88)]" />
+                      )}
+                    </div>
+                  )}
 
-        <DockIcon vertical={vertical} label="Trash" moved={mouse != null}>
-          {({ center }) => (
-            <button
-              className="dock-icon grid place-items-center"
-              style={{ width: iconSize(center), height: iconSize(center) }}
-              onClick={() => os.notify("Trash", "Trash is empty", "Nothing to recover. Zero bytes wasted on indexing, naturally.")}
-              title="Trash"
-            >
-              <div
-                className="grid place-items-center rounded-[24%] bg-gradient-to-b from-zinc-200/80 to-zinc-400/80 text-zinc-700 shadow-[inset_0_0.5px_0_rgba(255,255,255,0.6)]"
-                style={{ width: iconSize(center) * 0.94, height: iconSize(center) * 0.94 }}
-              >
-                <Trash2 size={Math.round(iconSize(center) * 0.5)} strokeWidth={1.7} />
-              </div>
-            </button>
-          )}
-        </DockIcon>
+                  {/* Icon Button */}
+                  {item.type === "app" && item.appId && (
+                    <AppIconButton
+                      app={item.appId}
+                      baseSize={baseSize}
+                      scale={scale}
+                      isInteracting={isInteracting}
+                      isBouncing={bounced === item.appId || os.bouncingApp === item.appId}
+                      isRunning={running.has(item.appId)}
+                      onClick={() => {
+                        const hasWin = os.wins.some((w) => w.app === item.appId);
+                        if (!hasWin && item.appId !== "launchpad") bounce(item.appId);
+                        os.openApp(item.appId);
+                      }}
+                    />
+                  )}
+
+                  {item.type === "minimized" && item.win && (
+                    <MinimizedIconButton
+                      win={item.win}
+                      baseSize={baseSize}
+                      scale={scale}
+                      isInteracting={isInteracting}
+                      onClick={() => os.setMin(item.win!.id, false)}
+                    />
+                  )}
+
+                  {item.type === "trash" && (
+                    <TrashIconButton
+                      baseSize={baseSize}
+                      scale={scale}
+                      count={trashCount}
+                      isInteracting={isInteracting}
+                      onClick={() => os.openApp("finder", "Trash", "Trash")}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        os.setPowerState("trash_dialog");
+                      }}
+                    />
+                  )}
+                </div>
+              </React.Fragment>
+            );
+          })}
+        </div>
       </div>
     </>
   );
 }
 
-/* measures each icon's center so magnification math stays cheap */
-function DockIcon({
-  children, vertical, label, moved,
+/* ------------------------------------------------------------------ */
+/* Subcomponents for Individual Dock Tiles                            */
+/* ------------------------------------------------------------------ */
+
+function AppIconButton({
+  app,
+  baseSize,
+  scale,
+  isInteracting,
+  isBouncing,
+  isRunning,
+  onClick,
 }: {
-  children: (p: { center: number }) => React.ReactNode;
-  vertical: boolean;
-  label: string;
-  moved: boolean;
+  app: AppId;
+  baseSize: number;
+  scale: number;
+  isInteracting: boolean;
+  isBouncing: boolean;
+  isRunning: boolean;
+  onClick: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  void moved;
-  const rect = ref.current?.getBoundingClientRect();
-  const parentRect = ref.current?.parentElement?.getBoundingClientRect();
-  let center = 0;
-  if (rect && parentRect) {
-    center = vertical
-      ? rect.top - parentRect.top + rect.height / 2
-      : rect.left - parentRect.left + rect.width / 2;
-  }
   return (
-    <div ref={ref} className="group relative grid place-items-center">
-      {children({ center })}
-      <span
-        className={`pointer-events-none absolute z-10 whitespace-nowrap rounded-md bg-[rgba(40,42,52,0.9)] px-2.5 py-1 text-[12px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 ${
-          vertical ? "left-[calc(100%+12px)] top-1/2 -translate-y-1/2" : "-top-9 left-1/2 -translate-x-1/2"
-        }`}
+    <div className="relative flex flex-col items-center justify-end select-none">
+      <button
+        className="group relative flex items-center justify-center cursor-pointer outline-none"
+        style={{
+          width: baseSize,
+          height: baseSize,
+          transform: `scale(${scale})`,
+          transformOrigin: "bottom center",
+          transition: isInteracting
+            ? "none"
+            : "transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)",
+        }}
+        onClick={onClick}
       >
-        {label}
-      </span>
+        <div className={isBouncing ? "dock-bounce" : ""}>
+          <AppTile app={app} size={baseSize} />
+        </div>
+      </button>
+
+      {/* Running App Indicator Dot (Stationary on dock floor) */}
+      <div className="h-[6px] flex items-center justify-center mt-1">
+        <span
+          className="h-[4.5px] w-[4.5px] rounded-full bg-white shadow-[0_0_2px_rgba(0,0,0,0.6),0_1px_2px_rgba(0,0,0,0.4)]"
+        />
+      </div>
+    </div>
+  );
+}
+
+function MinimizedIconButton({
+  win,
+  baseSize,
+  scale,
+  isInteracting,
+  onClick,
+}: {
+  win: Win;
+  baseSize: number;
+  scale: number;
+  isInteracting: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div className="relative flex flex-col items-center justify-end select-none">
+      <button
+        className="group relative flex items-center justify-center cursor-pointer outline-none"
+        style={{
+          width: baseSize,
+          height: baseSize,
+          transform: `scale(${scale})`,
+          transformOrigin: "bottom center",
+          transition: isInteracting
+            ? "none"
+            : "transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)",
+        }}
+        onClick={onClick}
+        title={`Restore: ${win.title}`}
+      >
+        <div
+          className="grid place-items-center rounded-[20%] bg-gradient-to-br from-slate-100 to-slate-300 shadow-[0_2px_8px_rgba(10,15,40,0.25),inset_0_1px_0_rgba(255,255,255,0.6)]"
+          style={{ width: baseSize, height: baseSize }}
+        >
+          <LogoMark size={Math.round(baseSize * 0.45)} />
+        </div>
+      </button>
+      <div className="h-[6px] flex items-center justify-center mt-1">
+        <span className="h-[4px] w-[4px] rounded-full bg-black/45" />
+      </div>
+    </div>
+  );
+}
+
+function TrashIconButton({
+  baseSize,
+  scale,
+  count,
+  isInteracting,
+  onClick,
+  onContextMenu,
+}: {
+  baseSize: number;
+  scale: number;
+  count: number;
+  isInteracting: boolean;
+  onClick: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <div className="relative flex flex-col items-center justify-end select-none">
+      <button
+        className="group relative flex items-center justify-center cursor-pointer outline-none"
+        style={{
+          width: baseSize,
+          height: baseSize,
+          transform: `scale(${scale})`,
+          transformOrigin: "bottom center",
+          transition: isInteracting
+            ? "none"
+            : "transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)",
+        }}
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+        title="Trash (Right click to empty)"
+      >
+        <G1Icon name="trash" size={baseSize} count={count} />
+
+        {count > 0 && (
+          <span className="absolute -top-1 -right-1 grid h-4 w-4 place-items-center rounded-full bg-blue-500 text-[9px] font-bold text-white shadow-[0_1px_3px_rgba(0,0,0,0.3)]">
+            {count}
+          </span>
+        )}
+      </button>
+      <div className="h-[6px] mt-1" />
     </div>
   );
 }

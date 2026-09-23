@@ -26,7 +26,7 @@ static void gather(void)
     NL = 0;
     mica_cpu_info c; mica_mem_info m; mica_gpu_info g;
     mica_cpu_probe(&c); mica_mem_probe(&m); mica_gpu_probe(&g);
-    add("MacLiteOS System Information");
+    add("G1OS System Information — Giving life to older machines.");
     add("");
     add("Processor     %s", c.model);
     add("              %u cores / %u threads, %u MHz max, SSE4.2 %s, AVX %s",

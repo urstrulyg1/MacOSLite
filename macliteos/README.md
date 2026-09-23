@@ -1,23 +1,31 @@
-# MacLiteOS
+# G1OS — Giving life to older machines.
 
-An ultra-light, macOS-*inspired* desktop operating system for the iMac
+An ultra-light, classic macOS-inspired desktop operating system engineered for the iMac
 Mid-2010 (iMac11,2 / iMac11,3): native C11 compositor, shell and apps, no
 X11/GNOME/KDE/Electron, no telemetry, no indexers. Original artwork only —
 not affiliated with Apple, no Apple assets.
 
-The React site at the repository root is a **design mockup** and is not part
-of the shipping OS; the dock magnification formula in `src/os/Dock.tsx` was
-ported into the real dock.
+The React app in `src/` provides an interactive desktop simulator reproducing the full
+G1OS experience: boot sequence (JeevanOS → G1OS), login, desktop, dock, Safari browser,
+multimedia, system dialogs, and setup wizard.
 
 ## USB Boot & Installation (iMac Mid-2010)
 
 For the complete, step-by-step walkthrough on preparing a USB drive with Rufus or BalenaEtcher, booting the Apple EFI manager with the `Option` (⌥) key, and installing to an internal SSD/HDD, see the root [README.md](file:///c:/Users/jeeva/Desktop/Jeevan/MacOSLite/README.md).
 
 Quick summary:
-1. **Flash ISO**: Write `out/MacLiteOS.iso` to a USB flash drive (in **DD Image mode** if using Rufus).
+1. **Flash ISO**: Write `out/G1OS.iso` to a USB flash drive (in **DD Image mode** if using Rufus).
 2. **Boot**: Insert USB into rear port, power on iMac while holding `Option` (⌥), select **EFI Boot**.
-3. **Hardware Check**: Run `sh scripts/hardware-check.sh --quick` in live terminal.
-4. **Install**: Run `sudo maclite-install` and confirm with `YES`.
+3. **Install via G1OS GUI Wizard**: Double-click **“Install G1OS”** on the live desktop or Dock.
+   - **Welcome**: "Welcome to G1OS" · "Giving life to older machines."
+   - **Disk Detection**: Auto-detects internal SATA SSD/HDD, excludes and protects live USB media.
+   - **Interactive Confirmation**: Displays target model, size, devnode, erasure warning, and confirmation checkbox.
+   - **Installation Stages**: Preparing → Detecting Disk → Partitioning → Formatting → Installing → Configuring Boot → Finalizing.
+   - **UUID Boot Binding**: Binds GRUB and `/etc/fstab` to unique filesystem UUIDs (no live USB references).
+   - **Apple EFI 1.1 Compatibility**: Self-contained fallback loader at `/EFI/BOOT/BOOTX64.EFI` + Apple `.disk_label`.
+   - **Offline Pre-Flight Verification**: Validates internal EFI loader, UUID bindings, kernel, and initramfs.
+   - **Complete & First Boot**: Shows "MacLiteOS Installation Complete — Remove USB and Restart". Unplug USB and click **Restart**.
+4. **Fallback CLI**: For automated or headless environments, `sudo maclite-install` delegates to the same installer engine.
 5. **Fan Control**: Run `maclite-fan --quiet` to regulate fans after an SSD upgrade.
 
 ## Quick start (development sandbox, no GPU needed)

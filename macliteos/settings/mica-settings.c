@@ -137,9 +137,10 @@ static void draw(void)
     } else if (PANEL == P_ABOUT) {
         mica_cpu_info ci; mica_mem_info m; mica_gpu_info g;
         mica_cpu_probe(&ci); mica_mem_probe(&m); mica_gpu_probe(&g);
-        ml_draw_text(&c, f, 24, 96, "MacLiteOS", 22, ml_rgb(244, 247, 255));
-        char v[64]; snprintf(v, sizeof v, "version %s (built %s)", ML_VERSION, __DATE__);
-        ml_draw_text(&c, f, 24, 122, v, 13, ml_rgb(168, 174, 190));
+        ml_draw_text(&c, f, 24, 96, "G1OS", 22, ml_rgb(244, 247, 255));
+        ml_draw_text(&c, f, 24, 120, "Giving life to older machines.", 13, ml_rgb(100, 180, 255));
+        char v[64]; snprintf(v, sizeof v, "G1OS version %s (built %s)", ML_VERSION, __DATE__);
+        ml_draw_text(&c, f, 24, 138, v, 11, ml_rgb(168, 174, 190));
         row(&c, f, 160, "Processor", ci.model);
         row(&c, f, 188, "Memory", "see maclite-memory for live per-component use");
         row(&c, f, 216, "Graphics", g.present ? g.device : "software");

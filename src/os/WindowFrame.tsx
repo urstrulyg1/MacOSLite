@@ -54,22 +54,30 @@ export default function WindowFrame({ win, children, chrome = true }: { win: Win
     setDragging(false);
   };
 
+  const animClass = win.animState ?? "active";
+  const focusClass = focused ? "focused" : "unfocused";
+
   return (
     <div
       ref={ref}
-      className={`oswin ${win.min ? "minimized" : ""} ${win.full ? "full" : ""} ${dragging ? "dragging" : ""}`}
+      className={`oswin ${animClass} ${focusClass} ${win.min ? "minimized" : ""} ${win.full ? "full" : ""} ${dragging ? "dragging" : ""}`}
       style={{ left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z }}
-      onPointerDown={() => os.focusWin(win.id)}
+      onPointerDown={() => !focused && os.focusWin(win.id)}
     >
       {chrome && (
         <div
-          className="titlebar relative flex h-[38px] flex-none select-none items-center justify-center border-b border-black/10 bg-white/40"
+          className="titlebar relative flex h-[38px] flex-none select-none items-center justify-center border-b border-black/10 bg-white/40 transition-colors duration-200"
           onPointerDown={onDragStart}
           onPointerMove={onDragMove}
           onPointerUp={onDragEnd}
           onDoubleClick={() => os.toggleFull(win.id)}
         >
-          <div className="absolute left-3 flex items-center gap-2" onPointerDown={(e) => e.stopPropagation()}>
+          <div
+            className={`absolute left-3 flex items-center gap-2 transition-opacity duration-200 ${
+              focused ? "opacity-100" : "opacity-50 hover:opacity-100"
+            }`}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
             <button
               className="titlebar-btn bg-[#ff5f57]"
               onClick={() => os.closeWin(win.id)}
@@ -86,7 +94,7 @@ export default function WindowFrame({ win, children, chrome = true }: { win: Win
               title="Full Screen"
             ><Plus size={9} strokeWidth={2.6} /></button>
           </div>
-          <div className={`pointer-events-none px-16 text-center text-[13px] font-semibold ${focused ? "text-black/80" : "text-black/40"}`}>
+          <div className={`pointer-events-none px-16 text-center text-[13px] font-semibold transition-colors duration-200 ${focused ? "text-black/85" : "text-black/40"}`}>
             {win.title}
           </div>
         </div>

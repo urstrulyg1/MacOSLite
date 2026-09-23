@@ -31,6 +31,7 @@ const mica_app_def mica_apps[] = {
     { "music",      "Music",            "app-music",        "mica-music" },
     { "textedit",   "Text Editor",      "app-textedit",     "mica-textedit" },
     { "diagnostics","Diagnostics",      "app-diagnostics",  "mica-diagnostics --gui" },
+    { "installer",  "Install MacLiteOS","app-installer",    "mica-installer" },
 };
 const size_t mica_apps_n = sizeof mica_apps / sizeof mica_apps[0];
 

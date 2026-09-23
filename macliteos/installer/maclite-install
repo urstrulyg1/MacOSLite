@@ -5,16 +5,67 @@
 set -u
 die() { echo "installer: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo $0)"
-echo "MacLiteOS installer"
+echo "MacLiteOS installer (CLI Fallback)"
+echo "Note: The recommended method is the graphical installer ('Install MacLiteOS' on the Desktop)."
+echo
+
+# Detect USB boot disk to protect it
+BOOT_DISK=""
+for mp in /run/maclite-base /run/maclite-live /cdrom; do
+    if [ -d "$mp" ]; then
+        DEV=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
+        if [ -n "$DEV" ]; then
+            BOOT_DISK=$(basename "$DEV" | sed -E 's/[0-9]+$//')
+            break
+        fi
+    fi
+done
+
+# Suggest default internal disk
+DEF_DISK=""
+for d in /sys/block/sd* /sys/block/nvme*n1; do
+    [ -e "$d" ] || continue
+    BNAME=$(basename "$d")
+    [ "$BNAME" = "$BOOT_DISK" ] && continue
+    if [ "$(cat "$d/removable" 2>/dev/null || echo 0)" = 0 ]; then
+        DEF_DISK="$BNAME"
+        break
+    fi
+done
+
 echo "Disks detected:"
-lsblk -d -o NAME,SIZE,MODEL | tail -n +2 | sed 's/^/  /'
-printf "Disk to install to (e.g. sda): "; read -r DISK
+lsblk -d -o NAME,SIZE,MODEL,TRAN,RM | tail -n +2 | while read -r line; do
+    DNAME=$(echo "$line" | awk '{print $1}')
+    if [ "$DNAME" = "$BOOT_DISK" ]; then
+        echo "  $line  [LIVE USB - PROTECTED]"
+    elif [ "$DNAME" = "$DEF_DISK" ]; then
+        echo "  $line  [RECOMMENDED INTERNAL TARGET]"
+    else
+        echo "  $line"
+    fi
+done
+
+PROMPT_DISK=${DEF_DISK:-sda}
+printf "Disk to install to (default: %s): " "$PROMPT_DISK"
+read -r DISK
+DISK=${DISK:-$PROMPT_DISK}
 [ -n "$DISK" ] && [ -b "/dev/$DISK" ] || die "no such disk"
+
+if [ "$DISK" = "$BOOT_DISK" ]; then
+    die "Cannot install to /dev/$DISK: this is the active live USB boot device."
+fi
 echo
 echo "WILL DESTROY ALL DATA on /dev/$DISK:"
 lsblk -o NAME,SIZE,TYPE,MOUNTPOINT "/dev/$DISK" | sed 's/^/  /'
 printf "Type YES to continue: "; read -r CONF
 [ "$CONF" = YES ] || die "aborted by user"
+
+# Delegate to shared backend engine for UUID binding and pre-flight verification
+BACKEND="$(dirname "$0")/maclite-installer-backend"
+if [ -x "$BACKEND" ] || [ -f "$BACKEND" ]; then
+    exec sh "$BACKEND" --target="$DISK"
+fi
+
 run() { echo "+ $*"; "$@" || die "command failed: $*"; }
 run sgdisk --zap-all "/dev/$DISK"
 run sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT "/dev/$DISK"

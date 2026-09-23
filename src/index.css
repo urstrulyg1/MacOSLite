@@ -17,6 +17,11 @@
 
 :root {
   --acc: #0a84ff;
+  --ease-apple-spring: cubic-bezier(0.2, 0.9, 0.3, 1);
+  --ease-apple-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-apple-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-apple-quick: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-apple-close: cubic-bezier(0.3, 0, 0.8, 0.15);
 }
 
 html {
@@ -65,32 +70,59 @@ body {
   inset: 0;
   background-size: cover;
   background-position: center;
-  transition: opacity 0.6s ease;
+  transition: opacity 0.6s ease, transform 0.8s var(--ease-apple-out);
 }
 
-/* window chrome */
+/* window chrome with macOS physics */
 .oswin {
   position: absolute;
-  border-radius: 11px;
-  background: rgba(246, 246, 248, 0.86);
-  backdrop-filter: blur(22px) saturate(1.5);
-  -webkit-backdrop-filter: blur(22px) saturate(1.5);
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.18), 0 22px 70px rgba(15, 20, 45, 0.42), 0 4px 16px rgba(15, 20, 45, 0.2);
+  border-radius: 12px;
+  background: rgba(246, 246, 248, 0.88);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 24px 64px rgba(15, 20, 45, 0.36), 0 4px 16px rgba(15, 20, 45, 0.18);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: transform 0.45s cubic-bezier(0.32, 0.72, 0.35, 1.15), opacity 0.35s ease,
-    width 0.28s cubic-bezier(0.32, 0.72, 0, 1), height 0.28s cubic-bezier(0.32, 0.72, 0, 1),
-    left 0.28s cubic-bezier(0.32, 0.72, 0, 1), top 0.28s cubic-bezier(0.32, 0.72, 0, 1),
-    border-radius 0.28s ease;
+  transition: transform 0.28s var(--ease-apple-spring),
+    opacity 0.22s ease-out,
+    box-shadow 0.24s ease-out,
+    width 0.28s var(--ease-apple-spring),
+    height 0.28s var(--ease-apple-spring),
+    left 0.28s var(--ease-apple-spring),
+    top 0.28s var(--ease-apple-spring),
+    border-radius 0.24s ease-out;
+  will-change: transform, opacity;
+}
+.oswin.focused {
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.22), 0 30px 84px rgba(15, 20, 45, 0.44), 0 6px 20px rgba(15, 20, 45, 0.22);
+}
+.oswin.unfocused {
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 10px 30px rgba(15, 20, 45, 0.2), 0 2px 8px rgba(15, 20, 45, 0.1);
+  filter: saturate(0.92);
 }
 .oswin.dragging {
-  transition: none;
+  transition: none !important;
 }
-.oswin.minimized {
-  transform: translateY(46vh) scale(0.06);
+.oswin.opening {
+  transform: scale(0.92) translateY(8px);
+  opacity: 0;
+}
+.oswin.active {
+  transform: scale(1) translateY(0);
+  opacity: 1;
+}
+.oswin.closing {
+  transform: scale(0.92) translateY(4px);
   opacity: 0;
   pointer-events: none;
+  transition: transform 0.18s var(--ease-apple-close), opacity 0.18s ease-out !important;
+}
+.oswin.minimized {
+  transform: translateY(44vh) scale(0.08);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.32s var(--ease-apple-spring), opacity 0.25s ease-out !important;
 }
 .oswin.full {
   border-radius: 0;
@@ -102,11 +134,14 @@ body {
   display: grid;
   place-items: center;
   color: transparent;
-  transition: color 0.15s ease;
+  transition: color 0.14s ease, transform 0.1s var(--ease-apple-quick);
   box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.15);
 }
+.oswin .titlebar-btn:active {
+  transform: scale(0.92);
+}
 .oswin .titlebar:hover .titlebar-btn {
-  color: rgba(0, 0, 0, 0.55);
+  color: rgba(0, 0, 0, 0.65);
 }
 
 /* performance mode strips expensive paint */
@@ -140,38 +175,50 @@ body {
 }
 
 /* dock */
-.dock-icon {
-  transition: width 0.16s cubic-bezier(0.2, 0.8, 0.3, 1), height 0.16s cubic-bezier(0.2, 0.8, 0.3, 1), transform 0.2s ease;
-  will-change: width, height;
+.dock-shelf {
+  background: linear-gradient(180deg, rgba(220, 202, 255, 0.48) 0%, rgba(188, 158, 250, 0.32) 50%, rgba(162, 126, 238, 0.42) 100%);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow:
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -1px 1px 0 rgba(140, 100, 220, 0.25),
+    0 20px 48px -4px rgba(60, 20, 120, 0.35),
+    0 8px 20px -2px rgba(40, 10, 80, 0.2);
 }
-.os-stage.perf .dock-icon {
-  transition: none;
+.os-stage.perf .dock-shelf {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: #e8ebf2;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2), 0 6px 16px rgba(0, 0, 0, 0.18);
 }
 @keyframes dock-bounce {
   0%, 100% { transform: translateY(0); }
-  30% { transform: translateY(-26%); }
-  60% { transform: translateY(0); }
-  78% { transform: translateY(-12%); }
+  28% { transform: translateY(-22px); }
+  55% { transform: translateY(0); }
+  75% { transform: translateY(-8px); }
 }
-.dock-bounce { animation: dock-bounce 0.7s ease 2; }
+.dock-bounce {
+  animation: dock-bounce 0.9s cubic-bezier(0.25, 1, 0.5, 1);
+}
 
 /* menu panels */
 @keyframes panel-in {
-  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translateY(-5px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
-.panel-in { animation: panel-in 0.14s ease both; }
+.panel-in { animation: panel-in 0.15s var(--ease-apple-out) both; }
 
 /* notifications */
 @keyframes note-in {
-  from { opacity: 0; transform: translateX(30px) scale(0.96); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translateX(36px) scale(0.95); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
 }
-.note-in { animation: note-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.1) both; }
+.note-in { animation: note-in 0.3s var(--ease-apple-spring) both; }
 @keyframes note-out {
-  to { opacity: 0; transform: translateX(40px) scale(0.94); }
+  to { opacity: 0; transform: translateX(45px) scale(0.92); }
 }
-.note-out { animation: note-out 0.3s ease both; }
+.note-out { animation: note-out 0.22s var(--ease-apple-close) both; }
 
 /* equalizer */
 @keyframes eq {
@@ -186,19 +233,31 @@ body {
 input[type="range"].os-range {
   -webkit-appearance: none;
   appearance: none;
-  height: 4px;
+  height: 5px;
   border-radius: 999px;
   background: linear-gradient(to right, var(--acc) var(--v, 50%), rgba(0, 0, 0, 0.18) var(--v, 50%));
   outline: none;
+  transition: height 0.15s var(--ease-apple-quick);
+}
+input[type="range"].os-range:hover {
+  height: 6px;
 }
 input[type="range"].os-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
   background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.32), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
   cursor: pointer;
+  transition: transform 0.12s var(--ease-apple-quick), box-shadow 0.12s ease;
+}
+input[type="range"].os-range::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.38), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+}
+input[type="range"].os-range::-webkit-slider-thumb:active {
+  transform: scale(1.05);
 }
 
 /* site scrollbars */
@@ -232,14 +291,21 @@ input[type="range"].os-range::-webkit-slider-thumb {
 /* toggle switch */
 .os-switch {
   width: 38px; height: 22px; border-radius: 999px; position: relative;
-  background: rgba(0, 0, 0, 0.22); transition: background 0.2s ease; cursor: pointer; flex: none;
+  background: rgba(0, 0, 0, 0.24); transition: background 0.2s var(--ease-apple-quick); cursor: pointer; flex: none;
 }
 .os-switch::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 999px;
-  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: transform 0.22s var(--ease-apple-spring);
 }
 .os-switch.on { background: #34c759; }
 .os-switch.on::after { transform: translateX(16px); }
+
+/* reduced motion class */
+.os-stage.reduce-motion * {
+  animation-duration: 0.001s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.12s !important;
+}
 
 /* busy spin for terminal bench */
 @keyframes spin { to { transform: rotate(360deg); } }
