@@ -1,15 +1,58 @@
 #!/bin/sh
 # G1OS safe installer backend.
 # Destructive operations are explicit, validated and fail closed.
+# Progress is authoritative. Long operations emit activity heartbeats while
+# keeping the last measured percentage unchanged.
 set -eu
 
 DRY_RUN=0
 TARGET=""
 JSON=0
+CURRENT_PROGRESS=0
+CURRENT_MESSAGE="Preparing installation"
 
-fail() { echo "ERROR: $*" >&2; [ "$JSON" = 1 ] && printf '{"status":"error","message":"%s"}\n' "$*"; exit 1; }
-step() { echo "[STEP $1 ($2%%)]: $3"; [ "$JSON" = 1 ] && printf '{"step":%s,"progress":%s,"message":"%s"}\n' "$1" "$2" "$3"; }
-run() { echo "+ $*"; [ "$DRY_RUN" = 1 ] || "$@" || fail "command failed: $*"; }
+fail() {
+  echo "ERROR: $*" >&2
+  if [ "$JSON" = 1 ]; then
+    printf '{"status":"error","message":"%s"}\n' "$*"
+  fi
+  exit 1
+}
+
+step() {
+  CURRENT_PROGRESS=$2
+  CURRENT_MESSAGE=$3
+  echo "[STEP $1 ($2%%)]: $3"
+  if [ "$JSON" = 1 ]; then
+    printf '{"step":%s,"progress":%s,"message":"%s"}\n' "$1" "$2" "$3"
+  fi
+}
+
+# Execute one real operation asynchronously so the installer UI can distinguish
+# measurable progress from activity. Heartbeats repeat the SAME authoritative
+# percentage; they never advance progress.
+run() {
+  echo "+ $*"
+  if [ "$DRY_RUN" = 1 ]; then
+    return 0
+  fi
+
+  "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+      if [ "$JSON" = 1 ]; then
+        printf '{"type":"activity","progress":%s,"message":"%s"}\n' "$CURRENT_PROGRESS" "$CURRENT_MESSAGE"
+      else
+        echo "[ACTIVITY ${CURRENT_PROGRESS}%%]: ${CURRENT_MESSAGE}"
+      fi
+    fi
+  done
+
+  wait "$pid" || fail "command failed: $*"
+}
+
 need() { command -v "$1" >/dev/null 2>&1 || fail "required command missing: $1"; }
 
 while [ "$#" -gt 0 ]; do
@@ -50,7 +93,9 @@ done
 
 [ -z "$BOOT_DISK" ] || [ "$TARGET" != "$BOOT_DISK" ] || fail "refusing to install to active live USB: $DEV"
 if [ "$DRY_RUN" = 0 ]; then
-  lsblk -nrpo NAME,MOUNTPOINT "$DEV" | awk '$2 != "" {print $1}' | grep -q . && fail "target disk or one of its partitions is mounted: $DEV"
+  if lsblk -nrpo NAME,MOUNTPOINT "$DEV" | awk '$2 != "" {print $1}' | grep -q .; then
+    fail "target disk or one of its partitions is mounted: $DEV"
+  fi
 fi
 
 MODEL=$(cat "/sys/block/$TARGET/device/model" 2>/dev/null || echo "unknown")
@@ -87,7 +132,10 @@ for p in /boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img; do 
 step 1 10 "Validated target disk, live media, base system, kernel and initramfs"
 step 2 20 "Unmounting target partitions"
 if [ "$DRY_RUN" = 0 ]; then
-  while read -r part; do umount "$part" 2>/dev/null || true; done <<EOF
+  while read -r part; do
+    [ -n "$part" ] || continue
+    umount "$part" || fail "failed to unmount target partition: $part"
+  done <<EOF
 $(lsblk -lnpo NAME "$DEV" | tail -n +2)
 EOF
 fi
@@ -111,7 +159,11 @@ BASE_PARTUUID=$(blkid -s PARTUUID -o value "$DEV_BASE") || fail "unable to read 
 step 5 55 "Installing the verified live base onto the target root filesystem"
 BASE_MNT=$(mktemp -d /tmp/g1os-base.XXXXXX)
 BOOT_MNT=$(mktemp -d /tmp/g1os-boot.XXXXXX)
-cleanup() { umount "$BASE_MNT" 2>/dev/null || true; umount "$BOOT_MNT" 2>/dev/null || true; rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true; }
+cleanup() {
+  umount "$BASE_MNT" 2>/dev/null || true
+  umount "$BOOT_MNT" 2>/dev/null || true
+  rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true
+}
 trap cleanup EXIT HUP INT TERM
 run mount "$DEV_BASE" "$BASE_MNT"
 run cp -a "$LIVE_BASE/." "$BASE_MNT/"
