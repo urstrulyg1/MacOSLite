@@ -1,0 +1,4 @@
+# Ignore heavy binary images in releases/ to keep git history lightweight
+*.iso
+*.img
+vmlinuz*
