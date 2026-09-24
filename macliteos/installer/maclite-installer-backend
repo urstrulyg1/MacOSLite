@@ -237,7 +237,9 @@ else
     else
       printf "g\nn\n1\n\n+256M\nt\n1\nn\n2\n\n+4G\nt\n2\n20\nn\n3\n\n\nt\n3\n20\nw\n" | fdisk "$DEV" 2>/dev/null || true
     fi
-    command -v partprobe >/dev/null 2>&1 && run partprobe "$DEV" 2>/dev/null || true
+    if command -v partprobe >/dev/null 2>&1; then
+      run partprobe "$DEV" 2>/dev/null || true
+    fi
     sleep 1
   fi
 
