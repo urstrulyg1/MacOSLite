@@ -27,7 +27,6 @@ for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chro
     ln -sf /bin/busybox "$W/sbin/$applet" 2>/dev/null || true
 done
 
-# initrd.list contains only files that must be present before the live base is mounted.
 while read -r pat; do
     case "$pat" in \#*|"") continue ;; esac
     found=0
@@ -74,9 +73,6 @@ if [ -n "${G1OS_FIRMWARE_DIR:-}" ]; then
     cp -a "$G1OS_FIRMWARE_DIR/." "$W/lib/firmware/"
 fi
 
-# Copy the complete ELF dependency closure. A single ldd pass is insufficient:
-# shared libraries can themselves depend on additional libraries that are not
-# direct dependencies of the application. Missing dependencies are fatal.
 copy_lib() {
     lib="$1"
     [ -f "$lib" ] || return 0
@@ -93,45 +89,45 @@ done
 scan_deps() {
     target="$1"
     [ -f "$target" ] || return 0
-    deps=$(ldd "$target" 2>&1) || {
+    deps_file="$W/.ldd-deps"
+    if ! ldd "$target" >"$deps_file" 2>&1; then
         echo "ERROR: cannot inspect ELF dependencies: $target" >&2
-        echo "$deps" >&2
+        cat "$deps_file" >&2
         return 1
-    }
-    echo "$deps" | grep -F "not found" >/dev/null 2>&1 && {
+    fi
+    if grep -F "not found" "$deps_file" >/dev/null 2>&1; then
         echo "ERROR: unresolved ELF dependency for $target" >&2
-        echo "$deps" >&2
+        cat "$deps_file" >&2
         return 1
-    }
-    echo "$deps" | sed -n \
+    fi
+    sed -n \
       -e 's/.*=> \(\/[^ ]*\).*/\1/p' \
-      -e 's/^[[:space:]]*\(\/[^ ]*\) (0x.*/\1/p' | while read -r lib; do
+      -e 's/^[[:space:]]*\(\/[^ ]*\) (0x.*/\1/p' "$deps_file" > "$W/.ldd-paths"
+    while read -r lib; do
         [ -n "$lib" ] || continue
-        [ -f "$lib" ] || { echo "ERROR: ELF dependency path does not exist: $lib (from $target)" >&2; exit 1; }
+        [ -f "$lib" ] || { echo "ERROR: ELF dependency path does not exist: $lib (from $target)" >&2; return 1; }
         copy_lib "$lib"
-    done
+    done < "$W/.ldd-paths"
 }
 
-# Iterate until no new shared objects are added, covering transitive dependencies.
 iteration=0
 while :; do
     iteration=$((iteration + 1))
-    before=$(find "$W/lib" "$W/lib64" "$W/usr/lib" -type f 2>/dev/null | wc -l | tr -d ' ')
+    before=$(find "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64" -type f 2>/dev/null | wc -l | tr -d ' ')
     for exe in "$W"/usr/bin/*; do
         [ -f "$exe" ] || continue
         scan_deps "$exe"
     done
     for libdir in "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64"; do
         [ -d "$libdir" ] || continue
-        find "$libdir" -type f -print | while read -r lib; do scan_deps "$lib"; done
+        find "$libdir" -type f -print > "$W/.libs-to-scan"
+        while read -r lib; do scan_deps "$lib"; done < "$W/.libs-to-scan"
     done
-    after=$(find "$W/lib" "$W/lib64" "$W/usr/lib" -type f 2>/dev/null | wc -l | tr -d ' ')
+    after=$(find "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64" -type f 2>/dev/null | wc -l | tr -d ' ')
     [ "$after" -eq "$before" ] && break
     [ "$iteration" -lt 20 ] || { echo "ERROR: ELF dependency closure did not converge" >&2; exit 7; }
 done
 
-# The init program is deliberately kept in the repository so it can be audited,
-# tested and hashed independently of the generated cpio archive.
 cp boot/g1os-init "$W/init"
 chmod 0755 "$W/init"
 
