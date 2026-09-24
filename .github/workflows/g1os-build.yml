@@ -35,11 +35,14 @@ jobs:
             shellcheck -s sh "$f"
           done
 
-      - name: Build userspace and tests
+      - name: Clean userspace build and tests
         working-directory: macliteos
         run: |
+          set -eu
+          make clean
           ./configure
           make -j"$(nproc)" all
+          sh scripts/audit-production.sh
           sh scripts/run-tests.sh
 
       - name: Build G1OS kernel
@@ -49,6 +52,7 @@ jobs:
       - name: Build initramfs
         working-directory: macliteos
         run: |
+          set -eu
           sh scripts/build-busybox.sh
           G1OS_BUSYBOX="$PWD/out/busybox" \
           G1OS_KERNEL_MODULES="$PWD/out/kernel-modules" \
@@ -58,22 +62,25 @@ jobs:
       - name: Assemble and independently verify ISO
         working-directory: macliteos
         run: |
+          set -eu
           G1OS_KERNEL="$PWD/out/vmlinuz-maclite" \
           G1OS_INITRD="$PWD/out/initrd-maclite.img" \
             sh scripts/make-iso.sh --verify
           sh scripts/validate-boot-artifacts.sh "$PWD/out/initrd-maclite.img" "$PWD/out/G1OS.iso"
+          sh scripts/audit-production.sh "$PWD/out/G1OS.iso"
           test -s out/G1OS.iso
           test -s out/G1OS.iso.sha256
           test -s out/iso-manifest.txt
 
-      - name: Boot ISO under real UEFI QEMU and capture console
+      - name: Boot ISO under real UEFI QEMU and require graphical installer readiness
         working-directory: macliteos
         run: |
           set -eu
-          timeout 45s qemu-system-x86_64 \
+          timeout 60s qemu-system-x86_64 \
             -machine q35,accel=tcg \
             -m 2048 \
             -smp 2 \
+            -vga std \
             -bios /usr/share/OVMF/OVMF_CODE_4M.fd \
             -drive format=raw,file=out/G1OS.iso,if=ide,media=cdrom \
             -boot d \
@@ -82,13 +89,14 @@ jobs:
             -no-reboot \
             2>&1 | tee out/qemu-uefi-console.log || rc=$?
           rc=${rc:-0}
-          if grep -q "Initrd entrypoint /init started" out/qemu-uefi-console.log; then
-            echo "QEMU UEFI boot reached G1OS PID 1."
-          elif grep -qi "panic\|kernel BUG\|fatal" out/qemu-uefi-console.log; then
-            echo "ERROR: QEMU UEFI boot reported a kernel/init failure" >&2
+          if grep -F "Graphical installer ready: compositor responsive and installer surface present" out/qemu-uefi-console.log >/dev/null; then
+            echo "PASS: QEMU UEFI reached the real graphical installer health gate."
+          elif grep -qi "panic\|kernel BUG\|\[FAIL\]" out/qemu-uefi-console.log; then
+            echo "ERROR: QEMU UEFI boot reported a kernel/init/graphics failure." >&2
             exit 1
           else
-            echo "ERROR: QEMU UEFI test did not reach G1OS init; inspect out/qemu-uefi-console.log" >&2
+            echo "ERROR: QEMU UEFI boot did not prove graphical installer readiness." >&2
+            tail -200 out/qemu-uefi-console.log >&2 || true
             exit 1
           fi
           [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ] || exit "$rc"
