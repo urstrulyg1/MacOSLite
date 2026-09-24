@@ -6,9 +6,10 @@ set -eu
 
 LOG=/run/g1os-boot.log
 STATE=/run/g1os-boot-state
-mkdir -p /run /run/live /run/maclite-base /run/g1os
+mkdir -p /run /run/live /run/maclite-base /run/g1os /tmp/macliteos-0
 : > "$LOG"
 : > "$STATE"
+export XDG_RUNTIME_DIR=/tmp/macliteos-0
 
 emit() {
     msg="$*"
@@ -141,6 +142,7 @@ export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/run/maclite-base/lib:/run/maclite-b
 
 [ -x /usr/bin/mica-comp ] || fatal "graphical compositor /usr/bin/mica-comp is missing"
 [ -x /usr/bin/mica-installer ] || fatal "graphical installer /usr/bin/mica-installer is missing"
+[ -x /usr/bin/g1os-ui-health ] || fatal "graphical UI health probe is missing"
 [ -x /usr/bin/maclite-installer-backend ] || fatal "installer backend is missing"
 
 BACKEND=auto
@@ -149,7 +151,7 @@ if [ "$SAFE" = 1 ]; then
     export MICA_GL=off
 fi
 
-status OK "Installer runtime present"
+status OK "Graphical installer runtime present"
 status RUNNING "Starting compositor ($BACKEND)"
 MICA_LOG=/run/g1os/mica-comp.log
 export MICA_LOG
@@ -157,7 +159,7 @@ export MICA_LOG
 COMP_PID=$!
 printf '%s\n' "$COMP_PID" > /run/g1os/compositor.pid
 
-SOCK=/tmp/macliteos-0/mica-comp.sock
+SOCK="$XDG_RUNTIME_DIR/mica-comp.sock"
 READY=0
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     if [ -S "$SOCK" ]; then READY=1; break; fi
@@ -169,20 +171,31 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     sleep 1
 done
 [ "$READY" = 1 ] || fatal "compositor did not become ready within 20 seconds; see $MICA_LOG"
-status OK "Compositor started"
+status OK "Compositor IPC endpoint ready: $SOCK"
 
 status RUNNING "Starting graphical G1OS installer"
-MICA_LOG=/run/g1os/mica-installer.log /usr/bin/mica-installer >>/run/g1os/mica-installer.log 2>&1 &
+export MICA_LOG=/run/g1os/mica-installer.log
+: > "$MICA_LOG"
+/usr/bin/mica-installer >>"$MICA_LOG" 2>&1 &
 INSTALL_PID=$!
 printf '%s\n' "$INSTALL_PID" > /run/g1os/installer.pid
-sleep 1
-if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
-    RC=0
-    wait "$INSTALL_PID" || RC=$?
-    fatal "graphical installer exited during startup (exit code $RC); see /run/g1os/mica-installer.log"
-fi
-status OK "Graphical installer process started"
-status OK "Installer UI ready"
+
+UI_READY=0
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
+        RC=0
+        wait "$INSTALL_PID" || RC=$?
+        fatal "graphical installer exited during startup (exit code $RC); see $MICA_LOG"
+    fi
+    if /usr/bin/g1os-ui-health >>/run/g1os/ui-health.log 2>&1; then
+        UI_READY=1
+        break
+    fi
+    emit "[WAIT] graphical installer surface/health ${i}/10"
+    sleep 1
+done
+[ "$UI_READY" = 1 ] || fatal "graphical installer is alive but its compositor surface is not healthy; see /run/g1os/ui-health.log and $MICA_LOG"
+status OK "Graphical installer ready: compositor responsive and installer surface present"
 
 while :; do
     if ! kill -0 "$COMP_PID" 2>/dev/null; then
