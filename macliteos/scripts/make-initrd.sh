@@ -49,7 +49,7 @@ while read -r pat; do
             /usr/bin/g1os-splash|/usr/bin/maclite-hardware|/usr/bin/maclite-gpu|/usr/bin/maclite-display|\
             /usr/bin/maclite-brightness|/usr/bin/maclite-audio|/usr/bin/maclite-video-test|/usr/bin/maclite-network|\
             /usr/bin/maclite-usb|/usr/bin/maclite-storage|/usr/bin/maclite-power|/usr/bin/maclite-cpu|\
-            /usr/bin/maclite-drivers|/usr/bin/maclite-fan|/usr/bin/maclite-gpu-benchmark|/usr/bin/maclite-recovery)
+            /usr/bin/maclite-drivers|/usr/bin/maclite-fan|/usr/bin/maclite-gpu-benchmark)
                 if [ -x "out/$base" ]; then src="out/$base"; fi
                 ;;
             *)
