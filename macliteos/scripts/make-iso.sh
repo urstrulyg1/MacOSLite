@@ -86,19 +86,20 @@ insmod search
 search --no-floppy --set=root --file /live/maclite-base.sqfs
 
 menuentry "G1OS (Safe Graphics - Default for iMac Mid-2010)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
 menuentry "G1OS (Safe Graphics + Verbose Debug)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
 menuentry "G1OS (Radeon KMS - Hardware Acceleration)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 mitigations=off console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=-1
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 mitigations=off console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
 menuentry "G1OS Recovery Shell" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=recovery nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug reboot=pci panic=-1
+  search --no-floppy --set=root --file /live/maclite-base.sqfs
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=recovery nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
 GRUB
