@@ -1,8 +1,7 @@
 #!/bin/sh
 # G1OS PID 1 for the live/install environment.
-# This is intentionally explicit and fail-closed: a critical boot failure is
-# shown on the console and leaves the machine in a rescue shell instead of
-# rebooting or silently falling back to a terminal installer.
+# Fail-closed: critical failures are displayed/logged and never become an
+# automatic reboot or a silent terminal fallback.
 set -eu
 
 LOG=/run/g1os-boot.log
@@ -15,6 +14,7 @@ emit() {
     msg="$*"
     printf '%s\n' "$msg" >> "$LOG"
     if [ -e /dev/console ]; then printf '%s\n' "$msg" >/dev/console 2>/dev/null || true; fi
+    if [ -e /dev/ttyS0 ]; then printf '%s\n' "$msg" >/dev/ttyS0 2>/dev/null || true; fi
 }
 
 status() {
@@ -36,8 +36,6 @@ fatal() {
     done
 }
 
-# /dev/console may not exist until devtmpfs is mounted. Mount the kernel's
-# basic pseudo-filesystems before doing any hardware or media work.
 mount -t proc proc /proc || fatal "cannot mount /proc"
 mount -t sysfs sysfs /sys || fatal "cannot mount /sys"
 if ! mount -t devtmpfs devtmpfs /dev 2>/dev/null; then
@@ -51,7 +49,7 @@ emit "Kernel command line: $CMDLINE"
 
 SAFE=0
 case " $CMDLINE " in
-    *' nomodeset '*|*' radeon.modeset=0 '*|*' maclite.gl=off '*) SAFE=1 ;;
+    *nomodeset*|*radeon.modeset=0*|*maclite.gl=off*) SAFE=1 ;;
 esac
 if [ "$SAFE" = 1 ]; then
     status OK "Safe Graphics selected (EFI framebuffer / software compositor)"
@@ -59,27 +57,22 @@ else
     status OK "Normal Graphics selected (Radeon KMS requested)"
 fi
 
-# Hardware drivers required for the live path. USB/storage/loop are expected to
-# be built in; optional network/audio drivers are loaded with explicit warnings.
 for mod in tg3 b43 snd-hda-intel; do
     if modprobe "$mod" >/dev/null 2>&1; then
         status OK "Kernel module loaded: $mod"
     else
-        emit "[WARN] Kernel module unavailable: $mod (continuing; it is not required to reach the installer)"
+        emit "[WARN] Kernel module unavailable: $mod (not required to reach installer)"
     fi
 done
 
 case " $CMDLINE " in
-    *' rd.maclite=recovery '*)
+    *rd.maclite=recovery*)
         status OK "Recovery mode requested"
         emit "Run maclite-hardware or maclite-install from this shell."
         while :; do /bin/sh </dev/console >/dev/console 2>&1 || sleep 2; done
         ;;
 esac
 
-# Installed-root boot. The initrd remains PID 1 and hands off only after the
-# target root has been mounted and verified. This avoids any dependency on the
-# live USB after installation.
 ROOT_DEV=""
 for param in $CMDLINE; do
     case "$param" in
@@ -130,12 +123,11 @@ done
 status OK "Live installation media found: $LIVE_DEV"
 mount -o ro "$LIVE_DEV" /run/live || fatal "cannot mount live media $LIVE_DEV"
 [ -s /run/live/live/maclite-base.sqfs ] || fatal "live/maclite-base.sqfs is missing or empty"
+[ -s /run/live/.g1os-build-id ] && status OK "Booting build ID: $(cat /run/live/.g1os-build-id)"
 status OK "Live SquashFS located"
 mount -t squashfs -o ro,loop /run/live/live/maclite-base.sqfs /run/maclite-base || fatal "cannot mount live SquashFS (loop/squashfs path failed)"
 status OK "Live base filesystem mounted"
 
-# The initrd contains the graphical installer, but copy the full base /etc and
-# /usr/share so themes, fonts and runtime metadata remain available.
 if [ -d /run/maclite-base/etc ]; then
     cp -a /run/maclite-base/etc/. /etc/ || fatal "cannot import base /etc"
 fi
@@ -159,7 +151,6 @@ fi
 
 status OK "Installer runtime present"
 status RUNNING "Starting compositor ($BACKEND)"
-
 MICA_LOG=/run/g1os/mica-comp.log
 export MICA_LOG
 /usr/bin/mica-comp --session --backend "$BACKEND" >>"$MICA_LOG" 2>&1 &
@@ -180,32 +171,28 @@ done
 [ "$READY" = 1 ] || fatal "compositor did not become ready within 20 seconds; see $MICA_LOG"
 status OK "Compositor started"
 
-# Launch the graphical installer only after the compositor's IPC endpoint is
-# alive. The installer is a real window/client, not a terminal fallback.
 status RUNNING "Starting graphical G1OS installer"
 MICA_LOG=/run/g1os/mica-installer.log /usr/bin/mica-installer >>/run/g1os/mica-installer.log 2>&1 &
 INSTALL_PID=$!
 printf '%s\n' "$INSTALL_PID" > /run/g1os/installer.pid
 sleep 1
 if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
+    RC=0
     wait "$INSTALL_PID" || RC=$?
-    RC=${RC:-0}
     fatal "graphical installer exited during startup (exit code $RC); see /run/g1os/mica-installer.log"
 fi
 status OK "Graphical installer process started"
 status OK "Installer UI ready"
 
-# Keep PID 1 alive and supervise both critical processes. A compositor crash is
-# never converted into a successful CLI fallback or a reboot loop.
 while :; do
     if ! kill -0 "$COMP_PID" 2>/dev/null; then
+        RC=1
         wait "$COMP_PID" || RC=$?
-        RC=${RC:-1}
         fatal "compositor crashed/exited (exit code $RC); see $MICA_LOG"
     fi
     if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
+        RC=0
         wait "$INSTALL_PID" || RC=$?
-        RC=${RC:-0}
         if [ "$RC" -ne 0 ]; then
             fatal "graphical installer exited with error code $RC; see /run/g1os/mica-installer.log"
         fi
