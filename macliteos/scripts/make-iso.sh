@@ -141,16 +141,24 @@ if [ "$VERIFY" = 1 ]; then
   echo "VERIFY = PASS: ISO readable, boot artifacts present/non-empty, SquashFS valid, EFI boot record detected, checksum valid"
 fi
 
-mkdir -p releases ../releases
-cp out/G1OS.iso releases/ 2>/dev/null || true
-cp out/G1OS.iso.sha256 releases/ 2>/dev/null || true
-cp out/iso-manifest.txt releases/ 2>/dev/null || true
-[ -f out/iso-file-list.txt ] && cp out/iso-file-list.txt releases/ 2>/dev/null || true
-cp out/G1OS.iso ../releases/ 2>/dev/null || true
-cp out/G1OS.iso.sha256 ../releases/ 2>/dev/null || true
-cp out/iso-manifest.txt ../releases/ 2>/dev/null || true
-[ -f out/iso-file-list.txt ] && cp out/iso-file-list.txt ../releases/ 2>/dev/null || true
-[ -f "$KERNEL" ] && { cp "$KERNEL" releases/ 2>/dev/null || true; cp "$KERNEL" ../releases/ 2>/dev/null || true; }
-[ -f "$INITRD" ] && { cp "$INITRD" releases/ 2>/dev/null || true; cp "$INITRD" ../releases/ 2>/dev/null || true; }
+# Remove existing builds and store freshly verified artifacts in releases/
+for dir in releases ../releases; do
+  if [ -d "$dir" ]; then
+    rm -f "$dir"/*.iso "$dir"/*.img "$dir"/vmlinuz* "$dir"/*.sha256 "$dir"/iso-manifest.txt "$dir"/iso-file-list.txt 2>/dev/null || true
+  fi
+  mkdir -p "$dir"
+  cp out/G1OS.iso "$dir/"
+  cp out/G1OS.iso.sha256 "$dir/"
+  cp out/iso-manifest.txt "$dir/"
+  if [ -f out/iso-file-list.txt ]; then
+    cp out/iso-file-list.txt "$dir/"
+  fi
+  if [ -f "$KERNEL" ]; then
+    cp "$KERNEL" "$dir/"
+  fi
+  if [ -f "$INITRD" ]; then
+    cp "$INITRD" "$dir/"
+  fi
+done
 
 echo "SUCCESS: fresh G1OS ISO assembled and stored in releases/: out/G1OS.iso -> releases/G1OS.iso"
