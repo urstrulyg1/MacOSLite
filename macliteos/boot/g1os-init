@@ -1,7 +1,7 @@
 #!/bin/sh
 # G1OS PID 1 for the live/install environment.
-# Fail-closed: critical failures are displayed/logged and never become an
-# automatic reboot or a silent terminal fallback.
+# Critical failures are logged and shown on the framebuffer; the normal live
+# path never falls back to a terminal UI.
 set -eu
 
 LOG=/run/g1os-boot.log
@@ -11,26 +11,39 @@ mkdir -p /run /run/live /run/maclite-base /run/g1os /tmp/macliteos-0
 : > "$STATE"
 export XDG_RUNTIME_DIR=/tmp/macliteos-0
 
+now_ms() {
+    awk '{print int($1 * 1000)}' /proc/uptime 2>/dev/null || echo 0
+}
 emit() {
     msg="$*"
-    printf '%s\n' "$msg" >> "$LOG"
+    printf '%s | %s\n' "$(now_ms)" "$msg" >> "$LOG"
     if [ -e /dev/console ]; then printf '%s\n' "$msg" >/dev/console 2>/dev/null || true; fi
     if [ -e /dev/ttyS0 ]; then printf '%s\n' "$msg" >/dev/ttyS0 2>/dev/null || true; fi
 }
 status() {
     state="$1"; shift
-    printf '%s|%s\n' "$state" "$*" >> "$STATE"
+    printf '%s|%s|%s\n' "$(now_ms)" "$state" "$*" >> "$STATE"
     emit "[$state] $*"
 }
+failure_screen() {
+    message="$*"
+    emit "[FAILURE SCREEN] $message"
+    if [ -x /usr/bin/g1os-failure-ui ]; then
+        /usr/bin/g1os-failure-ui --message "$message" >/run/g1os/failure-ui.log 2>&1 || emit "[WARN] failure UI could not access framebuffer"
+    fi
+}
 fatal() {
+    message="$*"
     emit ""
     emit "============================================================"
-    emit "[FAIL] $*"
-    emit "[FAIL] G1OS will NOT reboot automatically."
+    emit "[FAIL] $message"
+    emit "[FAIL] G1OS will remain on the diagnostic screen."
     emit "[FAIL] Boot log: /run/g1os-boot.log"
-    emit "[FAIL] Inspect with: dmesg | tail -200"
+    emit "[FAIL] Compositor log: /run/g1os/mica-comp.log"
+    emit "[FAIL] Installer log: /run/g1os/mica-installer.log"
     emit "============================================================"
-    while :; do /bin/sh </dev/console >/dev/console 2>&1 || /bin/sh || sleep 2; done
+    failure_screen "$message"
+    while :; do sleep 5; done
 }
 
 mount -t proc proc /proc || fatal "cannot mount /proc"
@@ -59,7 +72,7 @@ done
 case " $CMDLINE " in
     *rd.maclite=recovery*)
         status OK "Recovery mode requested"
-        emit "Run maclite-hardware or maclite-install from this shell."
+        emit "Recovery shell is available only because recovery mode was explicitly requested."
         while :; do /bin/sh </dev/console >/dev/console 2>&1 || sleep 2; done
         ;;
 esac
@@ -117,10 +130,11 @@ status OK "Live base filesystem mounted"
 if [ -d /run/maclite-base/etc ]; then cp -a /run/maclite-base/etc/. /etc/ || fatal "cannot import base /etc"; fi
 if [ -d /run/maclite-base/usr/share ]; then mkdir -p /usr/share; cp -a /run/maclite-base/usr/share/. /usr/share/ || fatal "cannot import base /usr/share"; fi
 export PATH=/usr/bin:/bin:/sbin:/usr/sbin
-export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/run/maclite-base/lib:/run/maclite-base/lib64:/run/maclite-base/usr/lib
+export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64:/run/maclite-base/lib:/run/maclite-base/lib64:/run/maclite-base/usr/lib:/run/maclite-base/usr/lib64
 [ -x /usr/bin/mica-comp ] || fatal "graphical compositor /usr/bin/mica-comp is missing"
 [ -x /usr/bin/mica-installer ] || fatal "graphical installer /usr/bin/mica-installer is missing"
 [ -x /usr/bin/g1os-ui-health ] || fatal "graphical UI health probe is missing"
+[ -x /usr/bin/g1os-failure-ui ] || fatal "graphical failure UI is missing"
 [ -x /usr/bin/maclite-installer-backend ] || fatal "installer backend is missing"
 BACKEND=auto
 if [ "$SAFE" = 1 ]; then BACKEND=fbdev; export MICA_GL=off; fi
@@ -128,8 +142,9 @@ status OK "Graphical installer runtime present"
 status RUNNING "Starting compositor ($BACKEND)"
 MICA_LOG=/run/g1os/mica-comp.log
 export MICA_LOG
+: > "$MICA_LOG"
 # Installer boot intentionally does NOT use --session: the desktop/panel/dock
-# are not the installer UI. The installer must be the first application window.
+# are not the installer UI. The installer is the first application window.
 /usr/bin/mica-comp --backend "$BACKEND" >>"$MICA_LOG" 2>&1 &
 COMP_PID=$!
 printf '%s\n' "$COMP_PID" > /run/g1os/compositor.pid
@@ -138,8 +153,8 @@ READY=0
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     if [ -S "$SOCK" ]; then READY=1; break; fi
     if ! kill -0 "$COMP_PID" 2>/dev/null; then
-        wait "$COMP_PID" || true
-        fatal "compositor exited before creating IPC socket; see $MICA_LOG"
+        RC=0; wait "$COMP_PID" || RC=$?
+        fatal "compositor exited before creating IPC socket; exit code $RC; see $MICA_LOG"
     fi
     emit "[WAIT] compositor initialization ${i}/20"
     sleep 1
@@ -155,8 +170,7 @@ printf '%s\n' "$INSTALL_PID" > /run/g1os/installer.pid
 UI_READY=0
 for i in 1 2 3 4 5 6 7 8 9 10; do
     if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
-        RC=0
-        wait "$INSTALL_PID" || RC=$?
+        RC=0; wait "$INSTALL_PID" || RC=$?
         fatal "graphical installer exited during startup (exit code $RC); see $MICA_LOG"
     fi
     if /usr/bin/g1os-ui-health >>/run/g1os/ui-health.log 2>&1; then UI_READY=1; break; fi
@@ -173,9 +187,7 @@ while :; do
     if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
         RC=0; wait "$INSTALL_PID" || RC=$?
         if [ "$RC" -ne 0 ]; then fatal "graphical installer exited with error code $RC; see /run/g1os/mica-installer.log"; fi
-        status OK "Graphical installer exited normally"
-        emit "[INFO] Returning to rescue shell; no automatic reboot will occur."
-        while :; do /bin/sh </dev/console >/dev/console 2>&1 || sleep 2; done
+        fatal "graphical installer exited before installation completion; no automatic reboot will occur"
     fi
     sleep 1
 done

@@ -17,7 +17,7 @@ HWLIB    := $(OUT)/libhw.a
 CLIENT_SRC := compositor/client/mica_client.c compositor/client/shellkit.c
 CLIENT_OBJ := $(OUT)/client/mica_client.o $(OUT)/client/shellkit.o
 
-BINS := $(OUT)/mica-comp $(OUT)/mica-shell $(OUT)/g1os-splash $(OUT)/g1os-ui-health
+BINS := $(OUT)/mica-comp $(OUT)/mica-shell $(OUT)/g1os-splash $(OUT)/g1os-ui-health $(OUT)/g1os-failure-ui
 APPS := $(OUT)/mica-finder $(OUT)/mica-terminal $(OUT)/mica-viewer \
         $(OUT)/mica-settings $(OUT)/mica-sysinfo $(OUT)/mica-textedit \
         $(OUT)/mica-player $(OUT)/mica-music $(OUT)/mica-pdf \
@@ -56,6 +56,8 @@ $(OUT)/g1os-splash: boot/g1os-splash.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 $(OUT)/g1os-ui-health: boot/g1os-ui-health.c $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+$(OUT)/g1os-failure-ui: boot/g1os-failure-ui.c
+	$(CC) $(CFLAGS) $< -o $@ $(LDLIBS)
 $(OUT)/mica-shell: desktop/mica-shell.c $(CLIENT_OBJ) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 $(OUT)/mica-finder: finder/mica-finder.c $(CLIENT_OBJ) $(LIB)

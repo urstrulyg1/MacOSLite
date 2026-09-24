@@ -4,6 +4,7 @@
 /usr/bin/mica-shell
 /usr/bin/mica-installer
 /usr/bin/g1os-ui-health
+/usr/bin/g1os-failure-ui
 /usr/bin/maclite-install
 /usr/bin/maclite-installer-backend
 /usr/bin/g1os-splash
@@ -25,5 +26,4 @@
 /usr/bin/maclite-browser
 /usr/bin/maclite-video
 /usr/bin/maclite-gpu-benchmark
-/usr/share/maca-lite/catalog/maclite-offline.cat
 /usr/bin/maclite-recovery
