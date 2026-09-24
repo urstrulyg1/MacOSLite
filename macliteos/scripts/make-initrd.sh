@@ -16,6 +16,13 @@ mkdir -p "$W/bin" "$W/sbin" "$W/usr/bin" "$W/usr/share/maca-lite" \
 [ -d "$MODULES/lib/modules" ] || { echo "ERROR: kernel module staging missing: $MODULES/lib/modules" >&2; exit 3; }
 command -v file >/dev/null 2>&1 || { echo "ERROR: file is required to validate ELF runtime dependencies" >&2; exit 3; }
 
+for req in out/mica-comp out/mica-installer out/mica-shell out/g1os-ui-health out/g1os-failure-ui; do
+    if [ ! -x "$req" ]; then
+        echo "ERROR: required build output missing: $req" >&2
+        exit 2
+    fi
+done
+
 cp "$BUSYBOX" "$W/bin/busybox"
 chmod 0755 "$W/bin/busybox"
 "$W/bin/busybox" --install -s "$W/bin" 2>/dev/null || true

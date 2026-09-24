@@ -46,7 +46,11 @@ for b in mica-comp mica-installer mica-shell g1os-ui-health g1os-failure-ui; do
   need_exec "out/$b"
 done
 for b in mica-comp mica-installer mica-shell g1os-ui-health; do
-  grep -F "out/$b" scripts/make-initrd.sh >/dev/null || fail "initrd does not require current build output for $b"
+  if grep -F "out/$b" scripts/make-initrd.sh >/dev/null; then
+    pass "initrd requires current build output for $b"
+  else
+    fail "initrd does not require current build output for $b"
+  fi
 done
 
 if grep -F 'Re-apply the current build outputs after rootfs/usr was copied.' scripts/make-iso.sh >/dev/null; then
