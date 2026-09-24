@@ -97,7 +97,8 @@ done
 scan_deps() {
     target="$1"
     [ -f "$target" ] || return 0
-    if ! file "$target" | grep -Eiq 'ELF'; then
+    case "$target" in *.ko|*.ko.*|*/lib/modules/*) return 0 ;; esac
+    if ! file "$target" | grep -Eiq 'dynamically linked|shared object'; then
         return 0
     fi
     deps_file="$W/.ldd-deps"
@@ -124,17 +125,17 @@ scan_deps() {
 iteration=0
 while :; do
     iteration=$((iteration + 1))
-    before=$(find "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64" -type f 2>/dev/null | wc -l | tr -d ' ')
+    before=$(find "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64" -path "*/lib/modules" -prune -o -type f -print 2>/dev/null | wc -l | tr -d ' ')
     for exe in "$W"/usr/bin/*; do
         [ -f "$exe" ] || continue
         scan_deps "$exe"
     done
     for libdir in "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64"; do
         [ -d "$libdir" ] || continue
-        find "$libdir" -type f -print > "$W/.libs-to-scan"
+        find "$libdir" -path "*/lib/modules" -prune -o -type f -print > "$W/.libs-to-scan"
         while read -r lib; do scan_deps "$lib"; done < "$W/.libs-to-scan"
     done
-    after=$(find "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64" -type f 2>/dev/null | wc -l | tr -d ' ')
+    after=$(find "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64" -path "*/lib/modules" -prune -o -type f -print 2>/dev/null | wc -l | tr -d ' ')
     [ "$after" -eq "$before" ] && break
     [ "$iteration" -lt 20 ] || { echo "ERROR: ELF dependency closure did not converge" >&2; exit 7; }
 done
