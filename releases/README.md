@@ -13,7 +13,7 @@ This directory contains verified release builds and bootable images for G1OS (Ma
 
 ### Checksum Verification
 ```text
-31102da5cd0b190d024f792ab5e6fd99b399bda3f40ea6c81a752020049f0262  G1OS.iso
+1415abf4b480c21dfebe052093a99bda293034935663f9a65f295229e85ddec9  G1OS.iso
 ```
 
 To verify the image integrity locally:

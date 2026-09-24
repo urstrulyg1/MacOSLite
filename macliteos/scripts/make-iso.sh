@@ -91,23 +91,23 @@ insmod search
 
 search --no-floppy --set=root --file /live/maclite-base.sqfs
 
-menuentry "G1OS (Default - Radeon KMS)" {
-  linux /boot/vmlinuz-maclite rd.maclite=1 mitigations=off console=tty0 earlycon acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
-  initrd /boot/initrd-maclite.img
-}
-
-menuentry "G1OS (Safe Graphics - EFI Framebuffer / Software Compositing)" {
-  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 console=tty0 earlycon acpi_backlight=native reboot=pci panic=0
+menuentry "G1OS (Safe Graphics - Default for iMac Mid-2010)" {
+  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb:novesa fbcon=map:0 console=tty0 efi=noruntime acpi_backlight=native reboot=pci panic=0
   initrd /boot/initrd-maclite.img
 }
 
 menuentry "G1OS (Safe Graphics + Verbose Debug)" {
-  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 console=tty0 earlycon debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
+  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb:novesa fbcon=map:0 console=tty0 efi=noruntime debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
+  initrd /boot/initrd-maclite.img
+}
+
+menuentry "G1OS (Radeon KMS - Hardware Acceleration)" {
+  linux /boot/vmlinuz-maclite rd.maclite=1 mitigations=off console=tty0 acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
   initrd /boot/initrd-maclite.img
 }
 
 menuentry "G1OS Recovery Shell" {
-  linux /boot/vmlinuz-maclite rd.maclite=recovery nomodeset radeon.modeset=0 console=tty0 earlycon reboot=pci panic=0
+  linux /boot/vmlinuz-maclite rd.maclite=recovery nomodeset radeon.modeset=0 video=efifb:novesa console=tty0 reboot=pci panic=0
   initrd /boot/initrd-maclite.img
 }
 GRUB
