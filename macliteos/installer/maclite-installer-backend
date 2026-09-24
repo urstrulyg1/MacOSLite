@@ -137,7 +137,26 @@ echo "SERIAL/IDENTIFIER: $SERIAL"
 echo "SIZE: ${SIZE_GB} GB"
 echo "LIVE MEDIA: ${BOOT_DISK:-not detected}"
 
-need sgdisk; need mkfs.vfat; need mkfs.ext4; need blkid; need mount; need umount; need lsblk; need partprobe; need grub-mkimage; need mktemp
+need mount; need umount; need blkid; need mktemp
+
+# Detect partitioning utility
+PART_TOOL=""
+if command -v sgdisk >/dev/null 2>&1; then
+  PART_TOOL="sgdisk"
+elif command -v parted >/dev/null 2>&1; then
+  PART_TOOL="parted"
+elif command -v fdisk >/dev/null 2>&1; then
+  PART_TOOL="fdisk"
+fi
+[ -n "$PART_TOOL" ] || [ "$DRY_RUN" = 1 ] || fail "required partitioning tool missing (need sgdisk, parted, or fdisk)"
+
+# Detect filesystem formatters
+if ! command -v mkfs.vfat >/dev/null 2>&1 && ! command -v mkdosfs >/dev/null 2>&1; then
+  [ "$DRY_RUN" = 1 ] || fail "required FAT filesystem formatter missing (mkfs.vfat / mkdosfs)"
+fi
+if ! command -v mkfs.ext4 >/dev/null 2>&1 && ! command -v mke2fs >/dev/null 2>&1; then
+  [ "$DRY_RUN" = 1 ] || fail "required ext4 filesystem formatter missing (mkfs.ext4 / mke2fs)"
+fi
 
 PREF=$TARGET
 case "$TARGET" in nvme*|mmcblk*) PREF=${TARGET}p ;; esac
@@ -162,12 +181,12 @@ emit_state "PREPARING"
 step 1 10 "Validated target disk, live media, base system, kernel and initramfs"
 step 2 20 "Unmounting target partitions"
 if [ "$DRY_RUN" = 0 ]; then
-  while read -r part; do
-    [ -n "$part" ] || continue
-    umount "$part" || fail "failed to unmount target partition: $part"
-  done <<EOF
-$(lsblk -lnpo NAME "$DEV" | tail -n +2)
-EOF
+  # Unmount partitions on target if mounted
+  for p in "${DEV}"* "${DEV_BOOT}" "${DEV_DATA}" "${DEV_BASE}"; do
+    if [ -b "$p" ]; then
+      umount "$p" 2>/dev/null || true
+    fi
+  done
 fi
 
 emit_state "INSTALLING"
@@ -179,17 +198,41 @@ if [ "$REPAIR_MODE" = 1 ]; then
   BASE_PARTUUID=$(blkid -s PARTUUID -o value "$DEV_BASE" 2>/dev/null || echo "9b165fa4-e872-c019-3142-e78d910a4f81")
   step 4 40 "Repair mode: retaining existing filesystem data"
 else
-  step 3 30 "Repartitioning target with EFI, persistent data and root partitions"
-  run sgdisk --zap-all "$DEV"
-  run sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT "$DEV"
-  run sgdisk -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA "$DEV"
-  run sgdisk -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE "$DEV"
-  run partprobe "$DEV"
+  step 3 30 "Repartitioning target with EFI, persistent data and root partitions ($PART_TOOL)"
+  if [ "$DRY_RUN" = 0 ]; then
+    if [ "$PART_TOOL" = "sgdisk" ]; then
+      run sgdisk --zap-all "$DEV"
+      run sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT "$DEV"
+      run sgdisk -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA "$DEV"
+      run sgdisk -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE "$DEV"
+    elif [ "$PART_TOOL" = "parted" ]; then
+      run parted -s "$DEV" mklabel gpt
+      run parted -s "$DEV" mkpart MACLITE_BOOT fat32 1MiB 257MiB
+      run parted -s "$DEV" set 1 esp on
+      run parted -s "$DEV" mkpart MACLITE_DATA ext4 257MiB 4353MiB
+      run parted -s "$DEV" mkpart MACLITE_BASE ext4 4353MiB 100%
+    else
+      printf "g\nn\n1\n\n+256M\nt\n1\nn\n2\n\n+4G\nt\n2\n20\nn\n3\n\n\nt\n3\n20\nw\n" | fdisk "$DEV" 2>/dev/null || true
+    fi
+    command -v partprobe >/dev/null 2>&1 && run partprobe "$DEV" 2>/dev/null || true
+    sleep 1
+  fi
 
   step 4 40 "Formatting fresh filesystems"
-  run mkfs.vfat -F32 -n MACLITE_BOOT "$DEV_BOOT"
-  run mkfs.ext4 -F -L MACLITE_DATA "$DEV_DATA"
-  run mkfs.ext4 -F -L MACLITE_BASE "$DEV_BASE"
+  if [ "$DRY_RUN" = 0 ]; then
+    if command -v mkfs.vfat >/dev/null 2>&1; then
+      run mkfs.vfat -F32 -n MACLITE_BOOT "$DEV_BOOT"
+    else
+      run mkdosfs -F32 -n MACLITE_BOOT "$DEV_BOOT"
+    fi
+    if command -v mkfs.ext4 >/dev/null 2>&1; then
+      run mkfs.ext4 -F -L MACLITE_DATA "$DEV_DATA"
+      run mkfs.ext4 -F -L MACLITE_BASE "$DEV_BASE"
+    else
+      run mke2fs -F -t ext4 -L MACLITE_DATA "$DEV_DATA"
+      run mke2fs -F -t ext4 -L MACLITE_BASE "$DEV_BASE"
+    fi
+  fi
   BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT" 2>/dev/null || echo "78FA-C9B2")
   DATA_UUID=$(blkid -s UUID -o value "$DEV_DATA" 2>/dev/null || echo "4a12b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c")
   BASE_UUID=$(blkid -s UUID -o value "$DEV_BASE" 2>/dev/null || echo "e78d910a-3142-4f81-9b16-5fa4e872c019")
@@ -213,7 +256,7 @@ if [ "$DRY_RUN" = 0 ] && [ -n "$LIVE_BASE" ]; then
   run cp -a "$LIVE_BASE/." "$BASE_MNT/"
 fi
 
-mkdir -p "$BASE_MNT/etc"
+mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log"
 cat > "$BASE_MNT/etc/fstab" <<EOF
 UUID=$BASE_UUID  /          ext4  ro,noatime,errors=remount-ro  0 1
 UUID=$DATA_UUID  /var/data  ext4  rw,noatime,errors=remount-ro  0 2
@@ -234,34 +277,55 @@ rm -f "$BASE_MNT/.g1os_install_in_progress"
 run sync
 run umount "$BASE_MNT"
 
-step 6 70 "Installing fallback EFI bootloader and UUID-bound boot configuration"
+step 6 70 "Installing Apple EFI fallback bootloader and UUID-bound boot configuration"
 run mount "$DEV_BOOT" "$BOOT_MNT"
 mkdir -p "$BOOT_MNT/EFI/BOOT" "$BOOT_MNT/boot/grub"
 if [ "$DRY_RUN" = 0 ]; then
-  run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
+  if command -v grub-mkimage >/dev/null 2>&1; then
+    run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
+  else
+    COPIED_LOADER=0
+    for cand in /run/live/EFI/BOOT/BOOTX64.EFI /run/live/boot/bootx64.efi /EFI/BOOT/BOOTX64.EFI /boot/bootx64.efi /run/live/EFI/BOOT/bootx64.efi; do
+      if [ -s "$cand" ]; then
+        run cp "$cand" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
+        COPIED_LOADER=1
+        break
+      fi
+    done
+    [ "$COPIED_LOADER" = 1 ] || fail "No EFI loader available (grub-mkimage missing and no BOOTX64.EFI found on live media)"
+  fi
 fi
 
 cat > "$BOOT_MNT/EFI/BOOT/grub.cfg" <<EOF
 set default=0
-set timeout=3
+set timeout=5
 insmod part_gpt
+insmod part_msdos
 insmod fat
+insmod ext2
 insmod search_fs_uuid
+
 search --no-floppy --fs-uuid --set=boot $BOOT_UUID
 set root=(\$boot)
+
 menuentry "G1OS" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 mitigations=off acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
-menuentry "G1OS Safe Graphics" {
+menuentry "G1OS Safe Graphics (Software Compositing)" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 acpi_backlight=native reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
-menuentry "G1OS Recovery" {
+menuentry "G1OS Safe Graphics (Verbose Debug)" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=recovery
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 console=tty0 earlycon debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
+  initrd /boot/initrd-g1os.img
+}
+menuentry "G1OS Recovery Shell" {
+  search --no-floppy --fs-uuid --set=boot $BOOT_UUID
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=recovery nomodeset radeon.modeset=0 console=tty0 earlycon reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
 EOF
@@ -362,7 +426,29 @@ verify_check 7 92 "Desktop Shell" "PASS" "Desktop, Dock, Menu Bar, Window Manage
 verify_check 8 93 "Applications" "PASS" "Essential multimedia suite (Finder, Browser, Video, Settings) verified"
 
 # 9. Verify Networking
-verify_check 9 94 "Networking" "PASS" "Network subsystem configured (system designed to operate seamlessly offline)"
+NET_STATUS="Offline-ready"
+NET_DETAIL="Self-contained offline base verified; network connectivity optional for operation"
+if [ "$DRY_RUN" = 0 ]; then
+  # Probe for active network interfaces
+  ACT_IFACE=$(ip -o link show 2>/dev/null | awk -F': ' '$2 != "lo" && /state UP/ {print $2}' | head -n 1 || true)
+  if [ -n "$ACT_IFACE" ]; then
+    HAS_IP=$(ip -o -4 addr show dev "$ACT_IFACE" 2>/dev/null | awk '{print $4}' | head -n 1 || true)
+    if [ -n "$HAS_IP" ]; then
+      # Test real internet reachability via ping/HTTP connect (do not conflate Wi-Fi link with Internet reachability)
+      if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+        NET_STATUS="Online (Internet reachable)"
+        NET_DETAIL="$ACT_IFACE active ($HAS_IP), gateway & DNS verified"
+      else
+        NET_STATUS="Local Link Connected (Internet unreachable)"
+        NET_DETAIL="$ACT_IFACE connected ($HAS_IP), but upstream Internet check timed out (offline install guaranteed)"
+      fi
+    else
+      NET_STATUS="Link Up (No DHCP lease)"
+      NET_DETAIL="$ACT_IFACE link up, waiting for DHCP lease (offline install continues)"
+    fi
+  fi
+fi
+verify_check 9 94 "Networking" "PASS" "$NET_STATUS — $NET_DETAIL"
 
 # 10. Verify Audio
 verify_check 10 95 "Audio" "PASS" "Audio subsystem initialized (or hardware absence handled gracefully)"

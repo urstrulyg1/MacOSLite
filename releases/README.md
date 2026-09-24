@@ -13,7 +13,7 @@ This directory contains the release builds and bootable images for G1OS (MacLite
 
 ### Checksum Verification
 ```text
-3E0DB5D32F36945B7323F52A796A914DEFC04101E7FE93493F8D403D64732319  G1OS.iso
+7FC04B15F7FCC9B6C646ADD99D4D9EC36D811705A91DFF3C6FE505BE930EDE4A  G1OS.iso
 ```
 
 ### Flashing Instructions

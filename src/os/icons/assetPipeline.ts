@@ -3,7 +3,7 @@
  *
  * Canonical pictorial icons are vector masters (TSX/SVG). This module keeps
  * runtime rasterization resolution-aware so a future raster-backed asset can
- * use the smallest sufficient texture without ever upscaling a tiny source.
+ * use the smallest sufficient texture without ever distorting a tiny source.
  */
 
 export const G1_ICON_MASTER_SIZE = 7680;

@@ -46,23 +46,34 @@ cp "$INITRD" "$ST/boot/initrd-maclite.img"
 
 cat > "$ST/boot/grub.cfg" <<'GRUB'
 set default=0
-set timeout=3
+set timeout=5
 insmod part_gpt
+insmod part_msdos
 insmod fat
 insmod iso9660
+insmod ext2
 insmod linux
 insmod search
+
 search --no-floppy --set=root --file /live/maclite-base.sqfs
-menuentry "G1OS" {
-  linux /boot/vmlinuz-maclite rd.maclite=1
+
+menuentry "G1OS (Default - Radeon KMS)" {
+  linux /boot/vmlinuz-maclite rd.maclite=1 mitigations=off console=tty0 earlycon acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
   initrd /boot/initrd-maclite.img
 }
-menuentry "G1OS Safe Graphics" {
-  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off
+
+menuentry "G1OS (Safe Graphics - EFI Framebuffer / Software Compositing)" {
+  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 console=tty0 earlycon acpi_backlight=native reboot=pci panic=0
   initrd /boot/initrd-maclite.img
 }
-menuentry "G1OS Recovery" {
-  linux /boot/vmlinuz-maclite rd.maclite=recovery
+
+menuentry "G1OS (Safe Graphics + Verbose Debug)" {
+  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 console=tty0 earlycon debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
+  initrd /boot/initrd-maclite.img
+}
+
+menuentry "G1OS Recovery Shell" {
+  linux /boot/vmlinuz-maclite rd.maclite=recovery nomodeset radeon.modeset=0 console=tty0 earlycon reboot=pci panic=0
   initrd /boot/initrd-maclite.img
 }
 GRUB

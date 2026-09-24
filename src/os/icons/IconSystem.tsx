@@ -9,7 +9,7 @@
  * Visual master policy: pictorial artwork is vector-first and resolution
  * independent. The browser/compositor rasterizes it at the actual display
  * scale, while assetPipeline.ts defines the same resolution policy for any
- * future raster-backed assets. No low-resolution image is ever upscaled.
+ * future raster-backed assets. No low-resolution image is ever stretched.
  */
 
 import { Symbol, GLYPHS } from "./symbols";

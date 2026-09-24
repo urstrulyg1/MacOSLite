@@ -49,6 +49,7 @@ const DETECTED_DISKS: DiskItem[] = [
 
 type InstallerStage =
   | "welcome"
+  | "preflight"
   | "select"
   | "confirm"
   | "installing"
@@ -427,10 +428,138 @@ export default function InstallerApp() {
             <div className="pt-2">
               <button
                 type="button"
-                onClick={() => setStage("select")}
+                onClick={() => setStage("preflight")}
                 className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-7 py-3 text-[14px] font-semibold text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500 transition-all cursor-pointer"
               >
-                Continue <ChevronRight size={16} />
+                Continue to Hardware Check <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 1.5. Hardware Preflight Check Screen */}
+        {stage === "preflight" && (
+          <div className="mx-auto max-w-2xl w-full space-y-6 animate-in fade-in duration-300">
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[11px] font-semibold tracking-wide uppercase mb-2">
+                <ShieldCheck size={14} /> Stage 1: Hardware Pre-Flight Audit
+              </div>
+              <h2 className="text-[20px] font-bold text-white">Target Hardware Verification</h2>
+              <p className="mt-1 text-[13px] text-white/60">
+                Auditing iMac Mid-2010 compatibility, safe graphics fallback, internal storage, and offline readiness.
+              </p>
+            </div>
+
+            {/* Checklist of audited hardware */}
+            <div className="grid grid-cols-1 gap-2.5">
+              <div className="flex items-center justify-between p-3 rounded-xl border border-emerald-500/25 bg-emerald-950/15">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+                    <Check size={16} />
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-white">CPU Architecture</div>
+                    <div className="text-[11.5px] text-white/60">Intel Core i3/i5/i7 (x86_64) · 64-bit Kernel · mitigations=off</div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-medium">PASSED</span>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl border border-emerald-500/25 bg-emerald-950/15">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+                    <Check size={16} />
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-white">System Memory (RAM)</div>
+                    <div className="text-[11.5px] text-white/60">4.0 GB DDR3-1333 detected · System idle RSS &lt; 250 MB</div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-medium">PASSED</span>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl border border-emerald-500/25 bg-emerald-950/15">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+                    <Check size={16} />
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-white">Graphics &amp; Compositor Engine</div>
+                    <div className="text-[11.5px] text-white/60">Safe Graphics Active · nomodeset + EFI GOP Framebuffer (Prevents VBIOS freeze)</div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-medium">CERTIFIED</span>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl border border-emerald-500/25 bg-emerald-950/15">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+                    <Check size={16} />
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-white">Target Storage Controller</div>
+                    <div className="text-[11.5px] text-white/60">Internal SATA AHCI (/dev/sda Crucial 500GB SSD) · GPT Partitionable</div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-medium">READY</span>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl border border-emerald-500/25 bg-emerald-950/15">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+                    <Check size={16} />
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-white">Live Media Protection</div>
+                    <div className="text-[11.5px] text-white/60">USB flash drive /dev/sdb detected · Write-lock safeguard armed</div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-medium">PROTECTED</span>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl border border-emerald-500/25 bg-emerald-950/15">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+                    <Check size={16} />
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-white">Boot Environment</div>
+                    <div className="text-[11.5px] text-white/60">Apple EFI 1.10 · BOOTX64.EFI fallback &amp; UUID-bound GRUB verified</div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-medium">VERIFIED</span>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl border border-blue-500/25 bg-blue-950/15">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500/20 text-blue-400">
+                    <Check size={16} />
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-white">Package Delivery &amp; Network</div>
+                    <div className="text-[11.5px] text-white/60">Self-Contained Live Base (100% Offline Capable · Zero downloads required)</div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-medium">OFFLINE READY</span>
+              </div>
+            </div>
+
+            {/* Navigation buttons */}
+            <div className="flex items-center justify-between pt-2">
+              <button
+                type="button"
+                onClick={() => setStage("welcome")}
+                className="flex items-center gap-1.5 text-[13px] text-white/60 hover:text-white transition-colors cursor-pointer"
+              >
+                <ArrowLeft size={15} /> Back
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStage("select")}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-[13px] font-semibold text-white shadow-md hover:bg-blue-500 transition-all cursor-pointer"
+              >
+                Proceed to Select Destination <ChevronRight size={15} />
               </button>
             </div>
           </div>

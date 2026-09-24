@@ -13,8 +13,9 @@ mkdir -p "$W/bin" "$W/sbin" "$W/usr/bin" "$W/lib/firmware" "$W/lib/modules" "$W/
 [ -s "$BUSYBOX" ] || { echo "ERROR: static BusyBox missing: $BUSYBOX" >&2; exit 2; }
 cp "$BUSYBOX" "$W/bin/busybox"
 chmod 0755 "$W/bin/busybox"
-for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root; do
+for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chroot fdisk losetup dd partprobe sync awk sleep dmesg ls cp mv rm touch; do
     ln -sf /bin/busybox "$W/bin/$applet"
+    ln -sf /bin/busybox "$W/sbin/$applet" 2>/dev/null || true
 done
 
 while read -r pat; do
@@ -71,30 +72,71 @@ for exe in "$W/usr/bin/mica-comp" "$W/usr/bin/mica-shell" "$W/usr/bin/g1os-splas
 
 cat > "$W/init" <<'INIT'
 #!/bin/sh
-set -eu
+set +e
 
-fatal() { echo "ERROR: $*" >&2; exec /bin/sh; }
+# Redirect early standard I/O to console if available
+if [ -e /dev/console ]; then
+    exec </dev/console >/dev/console 2>&1
+fi
+
+echo "=========================================================="
+echo "    G1OS — macOS-Lite Native Boot Loader (x86_64)         "
+echo "=========================================================="
+
+fatal() {
+    echo "" >&2
+    echo "==========================================================" >&2
+    echo "ERROR: $*" >&2
+    echo "==========================================================" >&2
+    echo "Dropping to interactive rescue shell on console." >&2
+    echo "System will NOT reboot automatically. Inspect with dmesg/blkid." >&2
+    while true; do
+        /bin/sh </dev/console >/dev/console 2>&1 || /bin/sh || sleep 2
+    done
+}
 
 mount -t proc proc /proc || fatal "cannot mount /proc"
 mount -t sysfs sysfs /sys || fatal "cannot mount /sys"
-mount -t devtmpfs devtmpfs /dev || fatal "cannot mount /dev"
-mkdir -p /run /run/live /run/maclite-base /mnt
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || mount -t tmpfs tmpfs /dev || fatal "cannot mount /dev"
+mkdir -p /run /run/live /run/maclite-base /mnt /tmp /var /var/log
 
-for m in radeon tg3 b43 snd-hda-intel; do modprobe "$m" 2>/dev/null || true; done
+CMDLINE="$(cat /proc/cmdline 2>/dev/null || echo '')"
+echo "Kernel command line: $CMDLINE"
 
-# Live boot: locate an ISO9660 medium and mount its bundled G1OS base.
-LIVE_IMAGE=""
-for dev in /dev/sd[a-z] /dev/sd[a-z][0-9] /dev/nvme*n1 /dev/nvme*n1p* /dev/mmcblk* /dev/mmcblk*p* /dev/sr*; do
-    [ -b "$dev" ] || continue
-    if blkid "$dev" 2>/dev/null | grep -q 'TYPE="iso9660"'; then LIVE_IMAGE="$dev"; break; fi
-done
-if [ -n "$LIVE_IMAGE" ]; then
-    mount -o ro "$LIVE_IMAGE" /run/live || fatal "cannot mount live media $LIVE_IMAGE"
-    [ -s /run/live/live/maclite-base.sqfs ] || fatal "live ISO is missing live/maclite-base.sqfs"
-    mount -t squashfs -o ro,loop /run/live/live/maclite-base.sqfs /run/maclite-base || fatal "cannot mount G1OS base filesystem"
+# Detect graphics mode request
+SAFE_GRAPHICS=0
+case "$CMDLINE" in
+    *nomodeset*|*radeon.modeset=0*|*maclite.gl=off*)
+        SAFE_GRAPHICS=1
+        echo "G1OS Boot: Safe Graphics requested (nomodeset active, radeon KMS disabled)."
+        ;;
+    *)
+        echo "G1OS Boot: Standard Graphics mode (Radeon KMS)."
+        ;;
+esac
+
+# Load hardware drivers
+if [ "$SAFE_GRAPHICS" = 0 ]; then
+    modprobe radeon 2>/dev/null || true
+else
+    echo "Skipping radeon module load in Safe Graphics mode."
 fi
+for m in tg3 b43 snd-hda-intel; do
+    modprobe "$m" 2>/dev/null || true
+done
 
-CMDLINE="$(cat /proc/cmdline)"
+# Check if recovery shell explicitly requested
+case "$CMDLINE" in
+*"rd.maclite=recovery"*)
+    echo "G1OS recovery shell requested by boot parameters."
+    echo "Run 'maclite-hardware' for diagnostics or 'maclite-install' to install."
+    while true; do
+        /bin/sh </dev/console >/dev/console 2>&1 || sleep 2
+    done
+    ;;
+esac
+
+# Check for installed root target first
 ROOT_TARGET=""
 for param in $CMDLINE; do
     case "$param" in
@@ -106,30 +148,93 @@ for param in $CMDLINE; do
             PARTUUID="${param#root=PARTUUID=}"
             ROOT_TARGET="$(blkid -t PARTUUID="$PARTUUID" -o device 2>/dev/null || true)"
             ;;
-        root=/dev/*) ROOT_TARGET="${param#root=}" ;;
+        root=/dev/*)
+            ROOT_TARGET="${param#root=}"
+            ;;
     esac
 done
 
-case "$CMDLINE" in
-*"rd.maclite=recovery"*)
-    echo "G1OS recovery shell — run maclite-hardware first"
-    exec /bin/sh
-    ;;
-esac
-
-if [ -n "$ROOT_TARGET" ]; then
-    [ -b "$ROOT_TARGET" ] || fatal "resolved root target is not a block device: $ROOT_TARGET"
-    mount -o ro "$ROOT_TARGET" /mnt || fatal "cannot mount installed G1OS root"
-    # The installed root is the authoritative runtime root. chroot preserves the
-    # lightweight initramfs design while ensuring /lib, /etc and /usr resolve from
-    # the installed filesystem rather than from transient boot media.
-    [ -x /mnt/usr/bin/mica-comp ] || fatal "installed root is missing mica-comp"
-    exec /bin/busybox chroot /mnt /usr/bin/mica-comp --session --backend auto
-elif [ -x /run/maclite-base/usr/bin/mica-comp ]; then
-    exec /run/maclite-base/usr/bin/mica-comp --session --backend auto
-else
-    fatal "G1OS runtime base could not be mounted"
+if [ -n "$ROOT_TARGET" ] && [ -b "$ROOT_TARGET" ]; then
+    echo "Booting installed G1OS root: $ROOT_TARGET"
+    mount -o ro "$ROOT_TARGET" /mnt || fatal "cannot mount installed G1OS root: $ROOT_TARGET"
+    [ -x /mnt/usr/bin/mica-comp ] || fatal "installed root is missing /usr/bin/mica-comp"
+    BACKEND_ARG="auto"
+    [ "$SAFE_GRAPHICS" = 1 ] && BACKEND_ARG="fbdev"
+    exec /bin/busybox chroot /mnt /usr/bin/mica-comp --session --backend "$BACKEND_ARG"
 fi
+
+# Live boot: locate installation medium containing /live/maclite-base.sqfs
+echo "Locating G1OS live installation media..."
+LIVE_IMAGE=""
+for attempt in $(seq 1 15); do
+    for dev in /dev/sd[a-z] /dev/sd[a-z][0-9]* /dev/nvme*n1* /dev/mmcblk* /dev/sr*; do
+        [ -b "$dev" ] || continue
+        # Probe candidate device
+        mkdir -p /run/mnt_probe
+        if mount -o ro "$dev" /run/mnt_probe 2>/dev/null; then
+            if [ -s /run/mnt_probe/live/maclite-base.sqfs ]; then
+                umount /run/mnt_probe 2>/dev/null || true
+                LIVE_IMAGE="$dev"
+                echo "Found G1OS live medium on: $dev"
+                break 2
+            fi
+            umount /run/mnt_probe 2>/dev/null || true
+        fi
+    done
+    echo "Waiting for USB/storage device initialization... ($attempt/15s)"
+    sleep 1
+done
+
+if [ -z "$LIVE_IMAGE" ]; then
+    fatal "G1OS live installation media could not be found after 15s. Check USB connection."
+fi
+
+mount -o ro "$LIVE_IMAGE" /run/live || fatal "cannot mount live media $LIVE_IMAGE"
+[ -s /run/live/live/maclite-base.sqfs ] || fatal "live media missing live/maclite-base.sqfs"
+mount -t squashfs -o ro,loop /run/live/live/maclite-base.sqfs /run/maclite-base || fatal "cannot mount base filesystem"
+
+# Populate/bind live filesystem components into userspace
+if [ -d /run/maclite-base/usr ]; then
+    for sub in bin share; do
+        if [ -d "/run/maclite-base/usr/$sub" ]; then
+            mkdir -p "/usr/$sub"
+            cp -rP "/run/maclite-base/usr/$sub/." "/usr/$sub/" 2>/dev/null || true
+        fi
+    done
+fi
+if [ -d /run/maclite-base/etc ]; then
+    cp -rP /run/maclite-base/etc/. /etc/ 2>/dev/null || true
+fi
+
+export PATH="/usr/bin:/bin:/sbin:/usr/sbin:/run/maclite-base/usr/bin"
+export LD_LIBRARY_PATH="/lib:/usr/lib:/run/maclite-base/lib:/run/maclite-base/usr/lib"
+
+BACKEND_ARG="auto"
+if [ "$SAFE_GRAPHICS" = 1 ]; then
+    BACKEND_ARG="fbdev"
+    export MICA_GL=off
+fi
+
+if [ -x /usr/bin/mica-comp ]; then
+    echo "Launching G1OS desktop session (backend: $BACKEND_ARG)..."
+    /usr/bin/mica-comp --session --backend "$BACKEND_ARG" || true
+    echo "Compositor exited. Launching G1OS installer on console..."
+elif [ -x /run/maclite-base/usr/bin/mica-comp ]; then
+    echo "Launching G1OS desktop session from base (backend: $BACKEND_ARG)..."
+    /run/maclite-base/usr/bin/mica-comp --session --backend "$BACKEND_ARG" || true
+    echo "Compositor exited. Launching G1OS installer on console..."
+fi
+
+# Fallback: if GUI is not available or terminates, launch CLI installer on console
+if [ -x /usr/bin/maclite-install ]; then
+    echo "Starting interactive G1OS CLI installer..."
+    /usr/bin/maclite-install || true
+fi
+
+echo "Dropping to G1OS shell. Run 'maclite-install' to install."
+while true; do
+    /bin/sh </dev/console >/dev/console 2>&1 || sleep 2
+done
 INIT
 chmod +x "$W/init"
 
