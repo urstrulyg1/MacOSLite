@@ -52,6 +52,7 @@ insmod fat
 insmod iso9660
 insmod linux
 insmod search
+search --no-floppy --set=root --file /live/maclite-base.sqfs
 menuentry "G1OS" {
   linux /boot/vmlinuz-maclite rd.maclite=1
   initrd /boot/initrd-maclite.img
@@ -66,9 +67,33 @@ menuentry "G1OS Recovery" {
 }
 GRUB
 
+mkdir -p "$ST/EFI/BOOT" "$ST/boot/grub"
 grub-mkimage -O x86_64-efi -o "$ST/boot/bootx64.efi" -p /boot part_gpt part_msdos fat iso9660 linux search normal
+cp "$ST/boot/bootx64.efi" "$ST/EFI/BOOT/BOOTX64.EFI"
+cp "$ST/boot/bootx64.efi" "$ST/EFI/BOOT/bootx64.efi"
+cp "$ST/boot/grub.cfg" "$ST/EFI/BOOT/grub.cfg"
+cp "$ST/boot/grub.cfg" "$ST/boot/grub/grub.cfg"
 
-xorriso -as mkisofs -o out/G1OS.iso -e boot/bootx64.efi -no-emul-boot -isohybrid-gpt-basdat "$ST"
+EFI_CATALOG="boot/bootx64.efi"
+EFI_IMG="$ST/boot/efi.img"
+if command -v mkfs.vfat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1; then
+  dd if=/dev/zero of="$EFI_IMG" bs=1k count=4096 status=none 2>/dev/null || dd if=/dev/zero of="$EFI_IMG" bs=1k count=4096
+  mkfs.vfat -F 12 -n "ESP" "$EFI_IMG" >/dev/null 2>&1
+  mmd -i "$EFI_IMG" ::EFI ::EFI/BOOT
+  mcopy -i "$EFI_IMG" "$ST/boot/bootx64.efi" ::EFI/BOOT/BOOTX64.EFI
+  mcopy -i "$EFI_IMG" "$ST/boot/grub.cfg" ::EFI/BOOT/grub.cfg
+  EFI_CATALOG="boot/efi.img"
+fi
+
+xorriso -as mkisofs \
+  -r -V "G1OS" \
+  -J -joliet-long \
+  -e "$EFI_CATALOG" \
+  -no-emul-boot \
+  -isohybrid-gpt-basdat \
+  -o out/G1OS.iso \
+  "$ST"
+
 [ -s out/G1OS.iso ] || { echo "ERROR: ISO missing or empty" >&2; exit 5; }
 sha256sum out/G1OS.iso > out/G1OS.iso.sha256
 {
@@ -90,15 +115,14 @@ sha256sum out/G1OS.iso > out/G1OS.iso.sha256
 if [ "$VERIFY" = 1 ]; then
   echo "== independent ISO verification"
   sha256sum -c out/G1OS.iso.sha256 >/dev/null || { echo "VERIFY = FAIL: ISO checksum mismatch" >&2; exit 7; }
-  isoinfo -i out/G1OS.iso -f > out/iso-file-list.txt
-  for required in /boot/vmlinuz-maclite /boot/initrd-maclite.img /boot/bootx64.efi /boot/grub.cfg /live/maclite-base.sqfs; do
-    grep -F "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 8; }
+  isoinfo -R -i out/G1OS.iso -f > out/iso-file-list.txt
+  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs; do
+    grep -Fi "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 8; }
   done
 
   EXTRACT=$(mktemp -d)
   trap 'rm -rf "$EXTRACT"' EXIT
-  xorriso -osirrox on -indev out/G1OS.iso -extract /boot "$EXTRACT/boot" >/dev/null 2>&1 || { echo "VERIFY = FAIL: ISO boot tree cannot be extracted" >&2; exit 9; }
-  xorriso -osirrox on -indev out/G1OS.iso -extract /live "$EXTRACT/live" >/dev/null 2>&1 || { echo "VERIFY = FAIL: ISO live tree cannot be extracted" >&2; exit 9; }
+  xorriso -osirrox on -indev out/G1OS.iso -extract / "$EXTRACT" >/dev/null 2>&1 || { echo "VERIFY = FAIL: ISO cannot be extracted" >&2; exit 9; }
   [ -s "$EXTRACT/boot/vmlinuz-maclite" ] || { echo "VERIFY = FAIL: extracted kernel empty" >&2; exit 10; }
   [ -s "$EXTRACT/boot/initrd-maclite.img" ] || { echo "VERIFY = FAIL: extracted initramfs empty" >&2; exit 10; }
   [ -s "$EXTRACT/boot/bootx64.efi" ] || { echo "VERIFY = FAIL: extracted EFI loader empty" >&2; exit 10; }
