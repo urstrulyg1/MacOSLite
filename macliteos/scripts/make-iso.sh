@@ -201,23 +201,22 @@ if [ "$VERIFY" = 1 ]; then
 fi
 
 # Remove existing builds and store freshly verified artifacts in releases/
-for dir in ../releases; do
-  if [ -d "$dir" ]; then
-    rm -f "$dir"/*.iso "$dir"/*.img "$dir"/vmlinuz* "$dir"/*.sha256 "$dir"/iso-manifest.txt "$dir"/iso-file-list.txt 2>/dev/null || true
-  fi
-  mkdir -p "$dir"
-  cp out/G1OS.iso "$dir/"
-  cp out/G1OS.iso.sha256 "$dir/"
-  cp out/iso-manifest.txt "$dir/"
-  if [ -f out/iso-file-list.txt ]; then
-    cp out/iso-file-list.txt "$dir/"
-  fi
-  if [ -f "$KERNEL" ]; then
-    cp "$KERNEL" "$dir/"
-  fi
-  if [ -f "$INITRD" ]; then
-    cp "$INITRD" "$dir/"
-  fi
-done
+REL_DIR="../releases"
+if [ -d "$REL_DIR" ]; then
+  rm -f "$REL_DIR"/*.iso "$REL_DIR"/*.img "$REL_DIR"/vmlinuz* "$REL_DIR"/*.sha256 "$REL_DIR"/iso-manifest.txt "$REL_DIR"/iso-file-list.txt 2>/dev/null || true
+fi
+mkdir -p "$REL_DIR"
+cp out/G1OS.iso "$REL_DIR/"
+cp out/G1OS.iso.sha256 "$REL_DIR/"
+cp out/iso-manifest.txt "$REL_DIR/"
+if [ -f out/iso-file-list.txt ]; then
+  cp out/iso-file-list.txt "$REL_DIR/"
+fi
+if [ -f "$KERNEL" ]; then
+  cp "$KERNEL" "$REL_DIR/"
+fi
+if [ -f "$INITRD" ]; then
+  cp "$INITRD" "$REL_DIR/"
+fi
 
 echo "SUCCESS: fresh G1OS ISO assembled and stored in releases/: out/G1OS.iso -> releases/G1OS.iso"
