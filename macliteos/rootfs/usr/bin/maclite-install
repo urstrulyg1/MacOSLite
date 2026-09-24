@@ -1,0 +1,58 @@
+#!/bin/sh
+# G1OS CLI installer fallback. The operator must explicitly select the disk;
+# this wrapper never guesses a default target.
+set -eu
+fail() { echo "ERROR: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || fail "run as root (sudo $0)"
+echo "G1OS installer (CLI fallback)"
+echo "The target disk must be explicitly selected. No /dev/sda fallback is used."
+echo
+
+BOOT_DISK=""
+for mp in /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
+  [ -d "$mp" ] || continue
+  DEV=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
+  [ -n "$DEV" ] || continue
+  case "$DEV" in
+    /dev/*)
+      BOOT_DISK=${DEV#/dev/}
+      BOOT_DISK=$(printf '%s' "$BOOT_DISK" | sed -E 's/p?[0-9]+$//')
+      break
+      ;;
+  esac
+done
+
+lsblk -d -o NAME,SIZE,MODEL,TRAN,RM
+[ -n "$BOOT_DISK" ] && echo "LIVE USB PROTECTED: /dev/$BOOT_DISK"
+
+echo
+printf "Enter the EXACT whole-disk name to erase (example: sda): "
+read -r DISK
+[ -n "$DISK" ] || fail "no target disk selected"
+case "$DISK" in *[!A-Za-z0-9._-]*) fail "invalid disk identifier" ;; esac
+[ -e "/sys/block/$DISK" ] || fail "not a whole block disk: /dev/$DISK"
+[ "$DISK" != "$BOOT_DISK" ] || fail "refusing active live USB: /dev/$DISK"
+[ -b "/dev/$DISK" ] || fail "block device does not exist: /dev/$DISK"
+
+MODEL=$(cat "/sys/block/$DISK/device/model" 2>/dev/null || echo unknown)
+SERIAL=$(cat "/sys/block/$DISK/device/serial" 2>/dev/null || echo unknown)
+SECTORS=$(cat "/sys/block/$DISK/size" 2>/dev/null || echo 0)
+SIZE_GB=$((SECTORS * 512 / 1000 / 1000 / 1000))
+
+echo
+echo "SELECTED DISK"
+echo "  Device: /dev/$DISK"
+echo "  Model:  $MODEL"
+echo "  Serial: $SERIAL"
+echo "  Size:   ${SIZE_GB} GB"
+echo "  Partitions:"
+lsblk -o NAME,SIZE,TYPE,FSTYPE,PARTLABEL,MOUNTPOINT "/dev/$DISK"
+echo
+echo "WARNING: ALL DATA ON /dev/$DISK WILL BE DESTROYED."
+printf "Type EXACTLY 'YES' to continue: "
+read -r CONF
+[ "$CONF" = YES ] || fail "installation aborted"
+
+BACKEND="$(dirname "$0")/maclite-installer-backend"
+[ -f "$BACKEND" ] || fail "shared installer backend missing: $BACKEND"
+exec sh "$BACKEND" --target="$DISK"

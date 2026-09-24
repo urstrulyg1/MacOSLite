@@ -1,6 +1,6 @@
 Report layout: xt , Startlba ,   Blocks , Filesize , ISO image path
 File data lba:  0 ,    24026 ,      300 ,   614400 , '/EFI/BOOT/BOOTX64.EFI'
-File data lba:  0 ,    24326 ,        1 ,     1163 , '/EFI/BOOT/grub.cfg'
+File data lba:  0 ,    24326 ,        1 ,     1151 , '/EFI/BOOT/grub.cfg'
 File data lba:  0 ,     1160 ,     1204 ,  2464864 , '/base/bin/busybox'
 File data lba:  0 ,     2364 ,        1 ,      569 , '/base/etc/maca-lite/autostart'
 File data lba:  0 ,     2365 ,        1 ,      699 , '/base/etc/maca-lite/defaults'
@@ -81,8 +81,8 @@ File data lba:  0 ,    13233 ,        5 ,     8587 , '/base/usr/share/maca-lite/
 File data lba:  0 ,    13238 ,       13 ,    25232 , '/base/usr/share/maca-lite/scripts/hardware-check.sh'
 File data lba:  0 ,    13251 ,      300 ,   614400 , '/boot/bootx64.efi'
 File data lba:  0 ,      136 ,     1024 ,  2097152 , '/boot/efi.img'
-File data lba:  0 ,    13551 ,        1 ,     1163 , '/boot/grub/grub.cfg'
-File data lba:  0 ,    13552 ,        1 ,     1163 , '/boot/grub.cfg'
+File data lba:  0 ,    13551 ,        1 ,     1151 , '/boot/grub/grub.cfg'
+File data lba:  0 ,    13552 ,        1 ,     1151 , '/boot/grub.cfg'
 File data lba:  0 ,    13553 ,     4264 ,  8731647 , '/boot/initrd-maclite.img'
 File data lba:  0 ,    17817 ,     6209 , 12715008 , '/boot/vmlinuz-maclite'
 File data lba:  0 ,    24327 ,     4138 ,  8474624 , '/live/maclite-base.sqfs'

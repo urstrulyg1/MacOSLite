@@ -37,7 +37,7 @@ rm -rf "$ST"
 mkdir -p "$ST/boot" "$ST/live" "$ST/base/usr/bin" "$ST/base/usr/share/maca-lite/scripts" "$ST/base/usr/share/maca-lite/catalog"
 for b in $REQUIRED_BINS; do
   src=""
-  for cand in "out/$b" "/Volumes/G1OS/base/usr/bin/$b" "/tmp/initrd_inspect/usr/bin/$b"; do
+  for cand in "out/$b" "rootfs/usr/bin/$b" "/Volumes/G1OS/base/usr/bin/$b" "/tmp/initrd_inspect/usr/bin/$b"; do
     if [ -x "$cand" ]; then src="$cand"; break; fi
   done
   [ -n "$src" ] || { echo "ERROR: required binary missing: $b" >&2; exit 4; }
@@ -49,8 +49,9 @@ chmod +x "$ST/base/usr/bin/maclite-install" "$ST/base/usr/bin/maclite-installer-
 cp scripts/hardware-check.sh "$ST/base/usr/share/maca-lite/scripts/"
 chmod +x "$ST/base/usr/share/maca-lite/scripts/hardware-check.sh"
 [ -f drivers/catalog/maclite-offline.cat ] && cp drivers/catalog/maclite-offline.cat "$ST/base/usr/share/maca-lite/catalog/"
-[ -d rootfs/etc ] && cp -r rootfs/etc "$ST/base/"
-[ -d rootfs/usr ] && cp -r rootfs/usr/. "$ST/base/usr/"
+chmod -R u+w "$ST/base" 2>/dev/null || true
+[ -d rootfs/etc ] && cp -rf rootfs/etc "$ST/base/"
+[ -d rootfs/usr ] && cp -rf rootfs/usr/. "$ST/base/usr/"
 
 # Copy runtime libraries and BusyBox into base SquashFS to guarantee self-contained execution
 if [ -d "/tmp/initrd_inspect/lib" ]; then
@@ -85,7 +86,6 @@ insmod part_gpt
 insmod part_msdos
 insmod fat
 insmod iso9660
-insmod ext2
 insmod linux
 insmod search
 
@@ -201,7 +201,7 @@ if [ "$VERIFY" = 1 ]; then
 fi
 
 # Remove existing builds and store freshly verified artifacts in releases/
-for dir in releases ../releases; do
+for dir in ../releases; do
   if [ -d "$dir" ]; then
     rm -f "$dir"/*.iso "$dir"/*.img "$dir"/vmlinuz* "$dir"/*.sha256 "$dir"/iso-manifest.txt "$dir"/iso-file-list.txt 2>/dev/null || true
   fi
