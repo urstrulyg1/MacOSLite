@@ -33,6 +33,7 @@ for required in mica-comp mica-installer g1os-ui-health g1os-failure-ui maclite-
 done
 [ -d "$TMP/initrd/lib/modules" ] || fail "kernel module tree missing from initramfs"
 
+# shellcheck disable=SC2016
 grep -F '/usr/bin/mica-comp --backend "$BACKEND"' "$TMP/initrd/init" >/dev/null || fail "initrd does not launch dedicated graphical compositor path"
 grep -F '/usr/bin/mica-installer' "$TMP/initrd/init" >/dev/null || fail "initrd does not launch graphical installer"
 grep -F 'g1os-ui-health' "$TMP/initrd/init" >/dev/null || fail "graphical installer health gate is missing"
