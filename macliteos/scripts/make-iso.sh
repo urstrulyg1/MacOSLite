@@ -30,27 +30,30 @@ INITRD="${G1OS_INITRD:-}"
 [ -n "$KERNEL" ] || { echo "ERROR: no real G1OS kernel image supplied (set G1OS_KERNEL)" >&2; exit 3; }
 [ -n "$INITRD" ] || { echo "ERROR: no real G1OS initramfs supplied (set G1OS_INITRD)" >&2; exit 3; }
 
+# Required runtime binaries MUST come from the current build output. Never
+# silently replace a fresh binary with a tracked/rootfs copy later in staging.
 REQUIRED_BINS="mica-comp mica-shell mica-finder mica-terminal mica-viewer mica-settings mica-sysinfo mica-textedit mica-player mica-music mica-pdf maclite-browser maclite-video mica-installer"
 ST=out/iso-stage
 rm -rf "$ST"
 mkdir -p "$ST/boot" "$ST/live" "$ST/base/usr/bin" "$ST/base/usr/share/maca-lite/scripts" "$ST/base/usr/share/maca-lite/catalog"
 for b in $REQUIRED_BINS; do
-  src=""
-  for cand in "out/$b" "rootfs/usr/bin/$b" "/Volumes/G1OS/base/usr/bin/$b" "/tmp/initrd_inspect/usr/bin/$b"; do
-    if [ -x "$cand" ]; then src="$cand"; break; fi
-  done
-  [ -n "$src" ] || { echo "ERROR: required binary missing: $b" >&2; exit 4; }
+  src="out/$b"
+  [ -x "$src" ] || { echo "ERROR: current build output missing required binary: $src" >&2; exit 4; }
   cp "$src" "$ST/base/usr/bin/"
 done
+
+# Static installer helpers/resources are sourced from version-controlled files.
 cp installer/maclite-install "$ST/base/usr/bin/"
 cp installer/maclite-installer-backend "$ST/base/usr/bin/"
 chmod +x "$ST/base/usr/bin/maclite-install" "$ST/base/usr/bin/maclite-installer-backend"
 cp scripts/hardware-check.sh "$ST/base/usr/share/maca-lite/scripts/"
 chmod +x "$ST/base/usr/share/maca-lite/scripts/hardware-check.sh"
 [ -f drivers/catalog/maclite-offline.cat ] && cp drivers/catalog/maclite-offline.cat "$ST/base/usr/share/maca-lite/catalog/"
-chmod -R u+w "$ST/base" 2>/dev/null || true
+
+# Copy static rootfs configuration/data first. Binary paths are restored from
+# the current out/ build afterwards so rootfs cannot overwrite fresh binaries.
 [ -d rootfs/etc ] && cp -rf rootfs/etc "$ST/base/"
-[ -d rootfs/usr ] && cp -rf rootfs/usr/. "$ST/base/usr/"
+[ -d rootfs/usr/share ] && cp -rf rootfs/usr/share "$ST/base/usr/"
 if [ -d "/tmp/initrd_inspect/lib" ]; then
   mkdir -p "$ST/base/lib" "$ST/base/lib64"
   cp -a "/tmp/initrd_inspect/lib/." "$ST/base/lib/"
@@ -68,8 +71,23 @@ if [ -s "/tmp/initrd_inspect/bin/busybox" ]; then
   done
 fi
 
-BUILD_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$(sha256sum "$KERNEL" "$INITRD" | sha256sum | cut -d' ' -f1 | cut -c1-16)"
+# Re-apply the current build outputs after rootfs/usr was copied.
+for b in $REQUIRED_BINS; do
+  cp "out/$b" "$ST/base/usr/bin/$b"
+done
+
+BUILD_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$(sha256sum "$KERNEL" "$INITRD" $(for b in $REQUIRED_BINS; do printf 'out/%s ' "$b"; done) | sha256sum | cut -d' ' -f1 | cut -c1-16)"
 printf '%s\n' "$BUILD_ID" > "$ST/.g1os-build-id"
+
+# Record the exact binaries used to assemble this image. This makes stale ISO
+# provenance detectable from the extracted filesystem rather than by filename.
+{
+  echo "G1OS runtime binary provenance"
+  for b in $REQUIRED_BINS; do
+    printf '%s  %s\n' "$(sha256sum "out/$b" | cut -d' ' -f1)" "$b"
+  done
+} > "$ST/base/usr/share/maca-lite/runtime-provenance.sha256"
+
 mksquashfs "$ST/base" "$ST/live/maclite-base.sqfs" -comp zstd -Xcompression-level 12 -no-progress
 cp "$KERNEL" "$ST/boot/vmlinuz-maclite"
 cp "$INITRD" "$ST/boot/initrd-maclite.img"
@@ -120,7 +138,6 @@ cp "$ST/boot/bootx64.efi" "$ST/EFI/BOOT/bootx64.efi"
 cp "$ST/boot/grub.cfg" "$ST/EFI/BOOT/grub.cfg"
 cp "$ST/boot/grub.cfg" "$ST/boot/grub/grub.cfg"
 
-# EFI El Torito requires a filesystem image, not the PE/COFF loader itself.
 need mcopy
 need mkfs.vfat
 EFI_CATALOG="boot/efi.img"
@@ -155,7 +172,7 @@ if [ "$VERIFY" = 1 ]; then
   echo "== independent ISO verification"
   sha256sum -c out/G1OS.iso.sha256 >/dev/null || { echo "VERIFY = FAIL: ISO checksum mismatch" >&2; exit 8; }
   xorriso -indev out/G1OS.iso -find / -exec report_lba > out/iso-file-list.txt 2>/dev/null || { echo "VERIFY = FAIL: cannot inspect ISO file list" >&2; exit 9; }
-  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI; do
+  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI .g1os-build-id base/usr/bin/mica-installer base/usr/bin/mica-comp base/usr/share/maca-lite/runtime-provenance.sha256; do
     grep -Fi "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 10; }
   done
   EXTRACT=$(mktemp -d)
@@ -170,9 +187,17 @@ if [ "$VERIFY" = 1 ]; then
   unsquashfs -s "$EXTRACT/live/maclite-base.sqfs" >/dev/null || { echo "VERIFY = FAIL: base SquashFS is invalid" >&2; exit 14; }
   xorriso -indev out/G1OS.iso -report_el_torito as_mkisofs 2>/dev/null | grep -Eiq 'boot|efi|iso' || { echo "VERIFY = FAIL: EFI El Torito boot record not detected" >&2; exit 15; }
   grep -F "Build ID: $BUILD_ID" out/iso-manifest.txt >/dev/null || { echo "VERIFY = FAIL: build ID missing from manifest" >&2; exit 16; }
+  # Confirm the extracted live filesystem contains the exact current-build
+  # hashes, preventing a stale tracked rootfs binary from being shipped.
+  for b in $REQUIRED_BINS; do
+    expected=$(sha256sum "out/$b" | cut -d' ' -f1)
+    actual=$(grep "  $b$" "$EXTRACT/live/maclite-base.sqfs" 2>/dev/null || true)
+    # The provenance file is inside SquashFS; inspect it with unsquashfs below.
+    unsquashfs -cat "$EXTRACT/live/maclite-base.sqfs" "usr/share/maca-lite/runtime-provenance.sha256" 2>/dev/null | grep -F "$expected  $b" >/dev/null || { echo "VERIFY = FAIL: stale/mismatched runtime binary provenance for $b" >&2; exit 17; }
+  done
   clean_extract
   trap - EXIT
-  echo "VERIFY = PASS: ISO checksum, EFI boot record, kernel, initramfs, SquashFS and required paths verified"
+  echo "VERIFY = PASS: ISO checksum, EFI boot record, kernel, initramfs, SquashFS, runtime provenance and required paths verified"
 fi
 
 REL_DIR="../releases"
