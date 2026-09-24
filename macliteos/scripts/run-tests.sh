@@ -79,7 +79,9 @@ for t in test_render test_units test_idle test_leak; do
     row "$t" SANDBOX "out/$t"
 done
 
-# ------------------------------------------------------- hardware fixture run --
+if command -v python3 >/dev/null 2>&1 && [ -f scripts/test_installer_logic.py ]; then
+    row installer-logic HOST python3 scripts/test_installer_logic.py
+fi
 # The fixture trees are the regression harness for the detection code: they
 # reproduce a known machine (iMac11,2 / iMac11,3), a VM, and a bare host, and
 # tests/test_hardware.c pins what must be detected, what must fall back, and

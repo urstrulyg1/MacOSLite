@@ -14,4 +14,6 @@ acpi_backlight=native           # REQUIRED on iMac11,x: without it the kernel
 b43.fwok=1                      # BCM43224 wireless (NOT brcmfmac; see docs/hardware.md)
 maclite.gl=auto                 # auto|on|off: compositor GL backend selection;
                                 # 'off' forces the software raster (tested path)
-# Recovery: rd.maclite=recovery  -> initrd starts recovery/maclite-recovery shell
+# Safe Graphics Mode (EFI Framebuffer / Software Compositing for Apple EFI 1.10):
+# nomodeset radeon.modeset=0 fbcon=map:0 console=tty0 earlycon acpi_backlight=native reboot=pci panic=0
+# Recovery: rd.maclite=recovery nomodeset radeon.modeset=0 console=tty0 earlycon reboot=pci panic=0 -> initrd starts emergency rescue shell

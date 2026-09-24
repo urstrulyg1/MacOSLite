@@ -117,8 +117,9 @@ The ISO output will be generated at:
 6. You will see icons for your internal drive and an orange/yellow external drive icon labelled **`EFI Boot`** or **`MacLiteOS`**.
 7. Use the arrow keys to highlight the **`EFI Boot`** icon, then press **Enter** (Return).
 8. The GRUB boot menu will load:
-   - Select **`MacLiteOS`** (Default).
-   - If troubleshooting graphics, select **`MacLiteOS (safe graphics: software compositing)`**.
+   - Select **`G1OS (Safe Graphics - EFI Framebuffer / Software Compositing)`** (Recommended for Mid-2010 iMacs to bypass Apple EFI VBIOS initialization).
+   - Or select **`G1OS (Default - Radeon KMS)`** for hardware-accelerated modesetting.
+   - For diagnostics, select **`G1OS (Safe Graphics + Verbose Debug)`** or **`G1OS Recovery Shell`**.
 9. The native G1OS boot splash will display, followed directly by the **Mica Desktop Session**.
 
 ---
@@ -157,8 +158,11 @@ The primary and recommended method to install MacLiteOS is directly through the 
 2. **Stage 1 — Welcome Screen**:
    - Displays: **“Welcome to MacLiteOS”** · **“Give life to older machines.”**
    - Highlights MacLiteOS features for vintage iMacs, including Apple EFI 1.1 fallback support and automatic USB protection.
-   - Click **Continue**.
-3. **Stage 2 — Select Installation Destination**:
+   - Click **Continue to Hardware Check**.
+3. **Stage 1.5 — Hardware Pre-Flight Audit**:
+   - Verifies CPU architecture (x86_64), RAM (>= 2GB), GPU mode (Safe Graphics / EFI GOP Framebuffer), internal SATA controller, USB write-protection, and 100% offline self-contained package readiness.
+   - Click **Proceed to Select Destination**.
+4. **Stage 2 — Select Installation Destination**:
    - The installer scans storage hardware and controller buses.
    - **Internal Storage Preferred**: Automatically selects internal SATA SSD/HDD (e.g. `Crucial CT500MX500SSD1` `/dev/sda`).
    - **Live USB Safeguard**: Automatically identifies the live boot device (e.g. `/dev/sdb`) and locks it with a *“LOCKED / LIVE USB”* badge to prevent accidental overwrites.
