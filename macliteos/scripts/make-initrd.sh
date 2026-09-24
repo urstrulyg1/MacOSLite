@@ -14,6 +14,7 @@ mkdir -p "$W/bin" "$W/sbin" "$W/usr/bin" "$W/usr/share/maca-lite" \
 
 [ -s "$BUSYBOX" ] || { echo "ERROR: static BusyBox missing: $BUSYBOX" >&2; exit 2; }
 [ -d "$MODULES/lib/modules" ] || { echo "ERROR: kernel module staging missing: $MODULES/lib/modules" >&2; exit 3; }
+command -v file >/dev/null 2>&1 || { echo "ERROR: file is required to validate ELF runtime dependencies" >&2; exit 3; }
 
 cp "$BUSYBOX" "$W/bin/busybox"
 chmod 0755 "$W/bin/busybox"
@@ -37,11 +38,11 @@ while read -r pat; do
             /usr/bin/mica-comp|/usr/bin/mica-shell|/usr/bin/mica-finder|/usr/bin/mica-terminal|\
             /usr/bin/mica-viewer|/usr/bin/mica-settings|/usr/bin/mica-sysinfo|/usr/bin/mica-textedit|\
             /usr/bin/mica-player|/usr/bin/mica-music|/usr/bin/mica-pdf|/usr/bin/maclite-browser|\
-            /usr/bin/maclite-video|/usr/bin/mica-installer|/usr/bin/g1os-ui-health|/usr/bin/g1os-splash|\
-            /usr/bin/maclite-hardware|/usr/bin/maclite-gpu|/usr/bin/maclite-display|/usr/bin/maclite-brightness|\
-            /usr/bin/maclite-audio|/usr/bin/maclite-video-test|/usr/bin/maclite-network|/usr/bin/maclite-usb|\
-            /usr/bin/maclite-storage|/usr/bin/maclite-power|/usr/bin/maclite-cpu|/usr/bin/maclite-drivers|\
-            /usr/bin/maclite-fan|/usr/bin/maclite-gpu-benchmark|/usr/bin/maclite-recovery)
+            /usr/bin/maclite-video|/usr/bin/mica-installer|/usr/bin/g1os-ui-health|/usr/bin/g1os-failure-ui|\
+            /usr/bin/g1os-splash|/usr/bin/maclite-hardware|/usr/bin/maclite-gpu|/usr/bin/maclite-display|\
+            /usr/bin/maclite-brightness|/usr/bin/maclite-audio|/usr/bin/maclite-video-test|/usr/bin/maclite-network|\
+            /usr/bin/maclite-usb|/usr/bin/maclite-storage|/usr/bin/maclite-power|/usr/bin/maclite-cpu|\
+            /usr/bin/maclite-drivers|/usr/bin/maclite-fan|/usr/bin/maclite-gpu-benchmark|/usr/bin/maclite-recovery)
                 if [ -x "out/$base" ]; then src="out/$base"; fi
                 ;;
             *)
@@ -89,6 +90,9 @@ done
 scan_deps() {
     target="$1"
     [ -f "$target" ] || return 0
+    if ! file "$target" | grep -Eiq 'ELF'; then
+        return 0
+    fi
     deps_file="$W/.ldd-deps"
     if ! ldd "$target" >"$deps_file" 2>&1; then
         echo "ERROR: cannot inspect ELF dependencies: $target" >&2
