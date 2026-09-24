@@ -24,7 +24,7 @@ jobs:
             libfreetype6-dev libudev-dev libx11-dev libasound2-dev \
             xorriso grub-efi-amd64-bin squashfs-tools cpio xz-utils \
             bzip2 file genisoimage shellcheck qemu-system-x86 \
-            dosfstools mtools
+            dosfstools mtools ovmf
 
       - name: Shell syntax and ShellCheck
         working-directory: macliteos
@@ -66,14 +66,15 @@ jobs:
           test -s out/G1OS.iso.sha256
           test -s out/iso-manifest.txt
 
-      - name: Boot ISO under UEFI QEMU and capture console
+      - name: Boot ISO under real UEFI QEMU and capture console
         working-directory: macliteos
         run: |
           set -eu
-          timeout 30s qemu-system-x86_64 \
+          timeout 45s qemu-system-x86_64 \
             -machine q35,accel=tcg \
             -m 2048 \
             -smp 2 \
+            -bios /usr/share/OVMF/OVMF_CODE_4M.fd \
             -drive format=raw,file=out/G1OS.iso,if=ide,media=cdrom \
             -boot d \
             -serial stdio \
@@ -81,13 +82,14 @@ jobs:
             -no-reboot \
             2>&1 | tee out/qemu-uefi-console.log || rc=$?
           rc=${rc:-0}
-          if grep -q "G1OS Boot: Safe Graphics" out/qemu-uefi-console.log || grep -q "Initrd entrypoint /init started" out/qemu-uefi-console.log; then
-            echo "QEMU boot reached G1OS userspace diagnostics."
+          if grep -q "Initrd entrypoint /init started" out/qemu-uefi-console.log; then
+            echo "QEMU UEFI boot reached G1OS PID 1."
           elif grep -qi "panic\|kernel BUG\|fatal" out/qemu-uefi-console.log; then
-            echo "ERROR: QEMU boot reported a kernel/init failure" >&2
+            echo "ERROR: QEMU UEFI boot reported a kernel/init failure" >&2
             exit 1
           else
-            echo "QEMU did not expose the framebuffer console; inspect out/qemu-uefi-console.log"
+            echo "ERROR: QEMU UEFI test did not reach G1OS init; inspect out/qemu-uefi-console.log" >&2
+            exit 1
           fi
           [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ] || exit "$rc"
 
