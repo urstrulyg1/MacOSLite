@@ -30,7 +30,7 @@ sh scripts/run-tests.sh
 
 echo
 echo "== production ISO"
-for tool in xorriso grub-mkimage mksquashfs cpio isoinfo unsquashfs sha256sum; do
+for tool in xorriso mksquashfs cpio unsquashfs sha256sum; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "ERROR: required release tool missing: $tool" >&2
         exit 4
