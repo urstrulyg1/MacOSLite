@@ -141,4 +141,16 @@ if [ "$VERIFY" = 1 ]; then
   echo "VERIFY = PASS: ISO readable, boot artifacts present/non-empty, SquashFS valid, EFI boot record detected, checksum valid"
 fi
 
-echo "SUCCESS: fresh G1OS ISO assembled and artifact checks passed: out/G1OS.iso"
+mkdir -p releases ../releases
+cp out/G1OS.iso releases/ 2>/dev/null || true
+cp out/G1OS.iso.sha256 releases/ 2>/dev/null || true
+cp out/iso-manifest.txt releases/ 2>/dev/null || true
+[ -f out/iso-file-list.txt ] && cp out/iso-file-list.txt releases/ 2>/dev/null || true
+cp out/G1OS.iso ../releases/ 2>/dev/null || true
+cp out/G1OS.iso.sha256 ../releases/ 2>/dev/null || true
+cp out/iso-manifest.txt ../releases/ 2>/dev/null || true
+[ -f out/iso-file-list.txt ] && cp out/iso-file-list.txt ../releases/ 2>/dev/null || true
+[ -f "$KERNEL" ] && { cp "$KERNEL" releases/ 2>/dev/null || true; cp "$KERNEL" ../releases/ 2>/dev/null || true; }
+[ -f "$INITRD" ] && { cp "$INITRD" releases/ 2>/dev/null || true; cp "$INITRD" ../releases/ 2>/dev/null || true; }
+
+echo "SUCCESS: fresh G1OS ISO assembled and stored in releases/: out/G1OS.iso -> releases/G1OS.iso"

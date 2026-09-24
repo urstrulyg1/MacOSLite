@@ -21,7 +21,7 @@ export default defineConfig({
     port: 5173,
     allowedHosts: true,
     watch: {
-      ignored: ["**/scratch*/**", "**/macliteos/**"],
+      ignored: ["**/scratch*/**", "**/macliteos/**", "**/releases/**", "**/*.iso"],
     },
   },
 });
