@@ -33,21 +33,37 @@ while read -r pat; do
     found=0
     for f in $pat; do
         src=""
-        for candidate in \
-            "out/$(basename "$f")" \
-            "rootfs$f" \
-            "rootfs/${f#/}" \
-            "${f#/}" \
-            "recovery/$(basename "$f")" \
-            "drivers/catalog/$(basename "$f")" \
-            "$f"; do
-            if [ -e "$candidate" ]; then src="$candidate"; break; fi
-        done
+        base=$(basename "$f")
+        case "$f" in
+            /usr/bin/mica-comp|/usr/bin/mica-shell|/usr/bin/mica-finder|/usr/bin/mica-terminal|\
+            /usr/bin/mica-viewer|/usr/bin/mica-settings|/usr/bin/mica-sysinfo|/usr/bin/mica-textedit|\
+            /usr/bin/mica-player|/usr/bin/mica-music|/usr/bin/mica-pdf|/usr/bin/maclite-browser|\
+            /usr/bin/maclite-video|/usr/bin/mica-installer|/usr/bin/g1os-ui-health|/usr/bin/g1os-splash|\
+            /usr/bin/maclite-hardware|/usr/bin/maclite-gpu|/usr/bin/maclite-display|/usr/bin/maclite-brightness|\
+            /usr/bin/maclite-audio|/usr/bin/maclite-video-test|/usr/bin/maclite-network|/usr/bin/maclite-usb|\
+            /usr/bin/maclite-storage|/usr/bin/maclite-power|/usr/bin/maclite-cpu|/usr/bin/maclite-drivers|\
+            /usr/bin/maclite-fan|/usr/bin/maclite-gpu-benchmark|/usr/bin/maclite-recovery)
+                if [ -x "out/$base" ]; then src="out/$base"; fi
+                ;;
+            *)
+                for candidate in \
+                    "out/$base" \
+                    "rootfs$f" \
+                    "rootfs/${f#/}" \
+                    "${f#/}" \
+                    "recovery/$base" \
+                    "drivers/catalog/$base" \
+                    "$f"; do
+                    if [ -e "$candidate" ]; then src="$candidate"; break; fi
+                done
+                ;;
+        esac
         [ -n "$src" ] || continue
         found=1
         d="$W/$(dirname "$f")"
         mkdir -p "$d"
         cp -a "$src" "$d/"
+        [ -x "$W$f" ] || chmod +x "$W$f" 2>/dev/null || true
     done
     [ "$found" = 1 ] || { echo "ERROR: initrd.list entry has no matching source: $pat" >&2; exit 4; }
 done < boot/initrd.list
@@ -58,26 +74,61 @@ if [ -n "${G1OS_FIRMWARE_DIR:-}" ]; then
     cp -a "$G1OS_FIRMWARE_DIR/." "$W/lib/firmware/"
 fi
 
-copy_runtime_deps() {
-    exe="$1"
-    [ -x "$exe" ] || return 0
-    ldd "$exe" 2>/dev/null | sed -n \
+# Copy the complete ELF dependency closure. A single ldd pass is insufficient:
+# shared libraries can themselves depend on additional libraries that are not
+# direct dependencies of the application. Missing dependencies are fatal.
+copy_lib() {
+    lib="$1"
+    [ -f "$lib" ] || return 0
+    dest="$W$lib"
+    if [ -f "$dest" ]; then return 0; fi
+    mkdir -p "$(dirname "$dest")"
+    cp -L "$lib" "$dest"
+}
+
+for ld in /lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /usr/lib64/ld-linux-x86-64.so.2; do
+    [ -f "$ld" ] && copy_lib "$ld"
+done
+
+scan_deps() {
+    target="$1"
+    [ -f "$target" ] || return 0
+    deps=$(ldd "$target" 2>&1) || {
+        echo "ERROR: cannot inspect ELF dependencies: $target" >&2
+        echo "$deps" >&2
+        return 1
+    }
+    echo "$deps" | grep -F "not found" >/dev/null 2>&1 && {
+        echo "ERROR: unresolved ELF dependency for $target" >&2
+        echo "$deps" >&2
+        return 1
+    }
+    echo "$deps" | sed -n \
       -e 's/.*=> \(\/[^ ]*\).*/\1/p' \
       -e 's/^[[:space:]]*\(\/[^ ]*\) (0x.*/\1/p' | while read -r lib; do
-        [ -f "$lib" ] || continue
-        dest="$W$lib"
-        mkdir -p "$(dirname "$dest")"
-        cp -L "$lib" "$dest"
-    done
-    for ld in /lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /usr/lib64/ld-linux-x86-64.so.2; do
-        if [ -f "$ld" ]; then
-            dest="$W$ld"
-            mkdir -p "$(dirname "$dest")"
-            cp -L "$ld" "$dest"
-        fi
+        [ -n "$lib" ] || continue
+        [ -f "$lib" ] || { echo "ERROR: ELF dependency path does not exist: $lib (from $target)" >&2; exit 1; }
+        copy_lib "$lib"
     done
 }
-for exe in "$W"/usr/bin/*; do copy_runtime_deps "$exe"; done
+
+# Iterate until no new shared objects are added, covering transitive dependencies.
+iteration=0
+while :; do
+    iteration=$((iteration + 1))
+    before=$(find "$W/lib" "$W/lib64" "$W/usr/lib" -type f 2>/dev/null | wc -l | tr -d ' ')
+    for exe in "$W"/usr/bin/*; do
+        [ -f "$exe" ] || continue
+        scan_deps "$exe"
+    done
+    for libdir in "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64"; do
+        [ -d "$libdir" ] || continue
+        find "$libdir" -type f -print | while read -r lib; do scan_deps "$lib"; done
+    done
+    after=$(find "$W/lib" "$W/lib64" "$W/usr/lib" -type f 2>/dev/null | wc -l | tr -d ' ')
+    [ "$after" -eq "$before" ] && break
+    [ "$iteration" -lt 20 ] || { echo "ERROR: ELF dependency closure did not converge" >&2; exit 7; }
+done
 
 # The init program is deliberately kept in the repository so it can be audited,
 # tested and hashed independently of the generated cpio archive.
