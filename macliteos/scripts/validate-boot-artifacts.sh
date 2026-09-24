@@ -3,7 +3,7 @@
 # This script never writes to disks or USB devices.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH=cd cd -- "$(dirname "$0")/.." && pwd)
 OUT=${G1OS_VALIDATE_OUT:-$ROOT/out}
 INITRD=${1:-$OUT/initrd-maclite.img}
 ISO=${2:-$OUT/G1OS.iso}
@@ -18,7 +18,6 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/initrd"
 
-# Decompress/extract exactly what the firmware/kernel will receive.
 gzip -t "$INITRD" || fail "initramfs gzip stream is corrupt"
 ( cd "$TMP/initrd" && gzip -dc "$INITRD" | cpio -it >/dev/null ) || fail "initramfs cpio archive cannot be listed"
 ( cd "$TMP/initrd" && gzip -dc "$INITRD" | cpio -idm --no-absolute-filenames >/dev/null 2>&1 ) || fail "initramfs cannot be extracted"
@@ -33,8 +32,6 @@ case "$HEAD" in '#!/bin/sh'|'#!/bin/ash') : ;; *) fail "/init has unsupported in
 [ -x "$TMP/initrd/usr/bin/maclite-installer-backend" ] || fail "installer backend missing from initramfs"
 [ -d "$TMP/initrd/lib/modules" ] || fail "kernel module tree missing from initramfs"
 
-# Check ELF interpreters and every directly linked shared library available in
-# the extracted initramfs. Missing host-side libraries are not silently ignored.
 check_elf() {
     exe="$1"
     [ -x "$exe" ] || return 0
@@ -47,7 +44,6 @@ check_elf() {
 }
 for exe in "$TMP/initrd"/usr/bin/*; do check_elf "$exe"; done
 
-# Kernel artifact validation if supplied by the build.
 KERNEL=${G1OS_KERNEL:-$OUT/vmlinuz-maclite}
 if [ -s "$KERNEL" ]; then
     file "$KERNEL" | grep -Eiq 'Linux kernel|boot executable|PE32' || fail "kernel is not a recognized x86 boot executable"
