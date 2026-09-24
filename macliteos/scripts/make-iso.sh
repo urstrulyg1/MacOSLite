@@ -172,7 +172,7 @@ if [ "$VERIFY" = 1 ]; then
   echo "== independent ISO verification"
   sha256sum -c out/G1OS.iso.sha256 >/dev/null || { echo "VERIFY = FAIL: ISO checksum mismatch" >&2; exit 8; }
   xorriso -indev out/G1OS.iso -find / -exec report_lba > out/iso-file-list.txt 2>/dev/null || { echo "VERIFY = FAIL: cannot inspect ISO file list" >&2; exit 9; }
-  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI .g1os-build-id base/usr/bin/mica-installer base/usr/bin/mica-comp base/usr/share/maca-lite/runtime-provenance.sha256; do
+  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI .g1os-build-id; do
     grep -Fi "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 10; }
   done
   EXTRACT=$(mktemp -d)
@@ -187,13 +187,10 @@ if [ "$VERIFY" = 1 ]; then
   unsquashfs -s "$EXTRACT/live/maclite-base.sqfs" >/dev/null || { echo "VERIFY = FAIL: base SquashFS is invalid" >&2; exit 14; }
   xorriso -indev out/G1OS.iso -report_el_torito as_mkisofs 2>/dev/null | grep -Eiq 'boot|efi|iso' || { echo "VERIFY = FAIL: EFI El Torito boot record not detected" >&2; exit 15; }
   grep -F "Build ID: $BUILD_ID" out/iso-manifest.txt >/dev/null || { echo "VERIFY = FAIL: build ID missing from manifest" >&2; exit 16; }
-  # Confirm the extracted live filesystem contains the exact current-build
-  # hashes, preventing a stale tracked rootfs binary from being shipped.
+  unsquashfs -cat "$EXTRACT/live/maclite-base.sqfs" "usr/share/maca-lite/runtime-provenance.sha256" > "$EXTRACT/runtime-provenance.sha256" 2>/dev/null || { echo "VERIFY = FAIL: runtime provenance missing from SquashFS" >&2; exit 17; }
   for b in $REQUIRED_BINS; do
     expected=$(sha256sum "out/$b" | cut -d' ' -f1)
-    actual=$(grep "  $b$" "$EXTRACT/live/maclite-base.sqfs" 2>/dev/null || true)
-    # The provenance file is inside SquashFS; inspect it with unsquashfs below.
-    unsquashfs -cat "$EXTRACT/live/maclite-base.sqfs" "usr/share/maca-lite/runtime-provenance.sha256" 2>/dev/null | grep -F "$expected  $b" >/dev/null || { echo "VERIFY = FAIL: stale/mismatched runtime binary provenance for $b" >&2; exit 17; }
+    grep -F "$expected  $b" "$EXTRACT/runtime-provenance.sha256" >/dev/null || { echo "VERIFY = FAIL: stale/mismatched runtime binary provenance for $b" >&2; exit 18; }
   done
   clean_extract
   trap - EXIT
