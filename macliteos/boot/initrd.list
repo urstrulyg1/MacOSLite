@@ -3,6 +3,7 @@
 /usr/bin/mica-comp
 /usr/bin/mica-shell
 /usr/bin/mica-installer
+/usr/bin/g1os-ui-health
 /usr/bin/maclite-install
 /usr/bin/maclite-installer-backend
 /usr/bin/g1os-splash
