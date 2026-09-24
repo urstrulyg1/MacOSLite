@@ -3,7 +3,7 @@
 # This script never writes to disks or USB devices.
 set -eu
 
-ROOT=$(CDPATH=cd cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(cd -- "$(dirname "$0")/.." && pwd)
 OUT=${G1OS_VALIDATE_OUT:-$ROOT/out}
 INITRD=${1:-$OUT/initrd-maclite.img}
 ISO=${2:-$OUT/G1OS.iso}
