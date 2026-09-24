@@ -43,7 +43,9 @@ check_elf() {
         [ -e "$TMP/initrd/$rel" ] || fail "ELF interpreter missing for $exe: /$rel"
     fi
     ldd_out=$(ldd "$exe" 2>&1) || fail "ldd could not inspect $exe: $ldd_out"
-    echo "$ldd_out" | grep -q 'not found' && fail "shared-library dependency missing for $exe: $ldd_out" || true
+    if echo "$ldd_out" | grep -q 'not found'; then
+        fail "shared-library dependency missing for $exe: $ldd_out"
+    fi
     echo "$ldd_out" | sed -n -E 's/.*=>[[:space:]]*(\/[^[:space:]]+).*/\1/p; s/^[[:space:]]*(\/[^[:space:]]+)[[:space:]]+\(.*/\1/p' | while read -r lib; do
         [ -f "$TMP/initrd$lib" ] || fail "ELF dependency missing from initramfs: $lib (required by $exe)"
     done
