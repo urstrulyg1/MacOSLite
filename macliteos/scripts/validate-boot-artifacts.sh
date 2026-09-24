@@ -15,7 +15,11 @@ for t in file sha256sum cpio gzip awk sed grep find ldd; do need "$t"; done
 [ -s "$INITRD" ] || fail "initramfs missing/empty: $INITRD"
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+cleanup() {
+    chmod -R u+rwx "$TMP" 2>/dev/null || true
+    rm -rf "$TMP" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
 mkdir -p "$TMP/initrd"
 
 gzip -t "$INITRD" || fail "initramfs gzip stream is corrupt"
@@ -75,6 +79,7 @@ if [ -s "$ISO" ]; then
         grep -F "$required" "$TMP/iso-files" >/dev/null || fail "ISO missing required path: $required"
     done
     xorriso -osirrox on -indev "$ISO" -extract / "$TMP/iso" >/dev/null 2>&1 || fail "ISO extraction failed"
+    chmod -R u+rwx "$TMP/iso" 2>/dev/null || true
     [ -s "$TMP/iso/boot/initrd-maclite.img" ] || fail "extracted ISO initramfs missing"
     [ -s "$TMP/iso/boot/vmlinuz-maclite" ] || fail "extracted ISO kernel missing"
     [ -s "$TMP/iso/live/maclite-base.sqfs" ] || fail "extracted ISO SquashFS missing"

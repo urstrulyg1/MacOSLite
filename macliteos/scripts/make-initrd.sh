@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 BUSYBOX=${G1OS_BUSYBOX:-out/busybox}
 MODULES=${G1OS_KERNEL_MODULES:-out/kernel-modules}
 W=$(mktemp -d)
-trap 'rm -rf "$W"' EXIT
+trap 'chmod -R u+rwx "$W" 2>/dev/null || true; rm -rf "$W" 2>/dev/null || true' EXIT
 
 mkdir -p "$W/bin" "$W/sbin" "$W/usr/bin" "$W/usr/share/maca-lite" \
   "$W/lib/firmware" "$W/lib/modules" "$W/etc/maca-lite" "$W/etc/modprobe.d" \
