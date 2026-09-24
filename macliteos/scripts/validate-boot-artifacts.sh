@@ -89,4 +89,6 @@ echo "VALIDATION: PASS"
 echo "INITRD: $INITRD"
 echo "INITRD_SHA256: $(sha256sum "$INITRD" | awk '{print $1}')"
 echo "KERNEL: $KERNEL"
-[ -s "$ISO" ] && echo "ISO: $ISO"
+if [ -s "$ISO" ]; then
+    echo "ISO: $ISO"
+fi
