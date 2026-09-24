@@ -11,7 +11,7 @@ ISO=${2:-$OUT/G1OS.iso}
 fail() { echo "VALIDATION: FAIL: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "required validation tool missing: $1"; }
 
-for t in file sha256sum cpio gzip awk sed grep find; do need "$t"; done
+for t in file sha256sum cpio gzip awk sed grep find ldd; do need "$t"; done
 [ -s "$INITRD" ] || fail "initramfs missing/empty: $INITRD"
 
 TMP=$(mktemp -d)
@@ -26,6 +26,7 @@ gzip -t "$INITRD" || fail "initramfs gzip stream is corrupt"
 [ -x "$TMP/initrd/init" ] || fail "/init is not executable"
 HEAD=$(sed -n '1p' "$TMP/initrd/init")
 case "$HEAD" in '#!/bin/sh'|'#!/bin/ash') : ;; *) fail "/init has unsupported interpreter: $HEAD" ;; esac
+sh -n "$TMP/initrd/init" || fail "/init has shell syntax errors"
 [ -x "$TMP/initrd/bin/busybox" ] || fail "static BusyBox missing"
 [ -x "$TMP/initrd/usr/bin/mica-comp" ] || fail "mica-comp missing from initramfs"
 [ -x "$TMP/initrd/usr/bin/mica-installer" ] || fail "mica-installer missing from initramfs"
@@ -41,13 +42,17 @@ check_elf() {
         rel=${interp#/}
         [ -e "$TMP/initrd/$rel" ] || fail "ELF interpreter missing for $exe: /$rel"
     fi
+    ldd_out=$(ldd "$exe" 2>&1) || fail "ldd could not inspect $exe: $ldd_out"
+    echo "$ldd_out" | grep -q 'not found' && fail "shared-library dependency missing for $exe: $ldd_out" || true
+    echo "$ldd_out" | sed -n -E 's/.*=>[[:space:]]*(\/[^[:space:]]+).*/\1/p; s/^[[:space:]]*(\/[^[:space:]]+)[[:space:]]+\(.*/\1/p' | while read -r lib; do
+        [ -f "$TMP/initrd$lib" ] || fail "ELF dependency missing from initramfs: $lib (required by $exe)"
+    done
 }
 for exe in "$TMP/initrd"/usr/bin/*; do check_elf "$exe"; done
 
 KERNEL=${G1OS_KERNEL:-$OUT/vmlinuz-maclite}
-if [ -s "$KERNEL" ]; then
-    file "$KERNEL" | grep -Eiq 'Linux kernel|boot executable|PE32' || fail "kernel is not a recognized x86 boot executable"
-fi
+[ -s "$KERNEL" ] || fail "kernel artifact missing: $KERNEL"
+file "$KERNEL" | grep -Eiq 'Linux kernel|boot executable|PE32' || fail "kernel is not a recognized x86 boot executable"
 
 if [ -s "$ISO" ]; then
     need xorriso
@@ -68,5 +73,5 @@ fi
 echo "VALIDATION: PASS"
 echo "INITRD: $INITRD"
 echo "INITRD_SHA256: $(sha256sum "$INITRD" | awk '{print $1}')"
-[ -s "$KERNEL" ] && echo "KERNEL: $KERNEL"
+echo "KERNEL: $KERNEL"
 [ -s "$ISO" ] && echo "ISO: $ISO"
