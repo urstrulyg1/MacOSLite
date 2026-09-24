@@ -76,7 +76,11 @@ for b in $REQUIRED_BINS; do
   cp "out/$b" "$ST/base/usr/bin/$b"
 done
 
-BUILD_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$(sha256sum "$KERNEL" "$INITRD" $(for b in $REQUIRED_BINS; do printf 'out/%s ' "$b"; done) | sha256sum | cut -d' ' -f1 | cut -c1-16)"
+BUILD_INPUTS="$KERNEL $INITRD"
+for b in $REQUIRED_BINS; do
+  BUILD_INPUTS="$BUILD_INPUTS out/$b"
+done
+BUILD_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$(sha256sum $BUILD_INPUTS | sha256sum | cut -d' ' -f1 | cut -c1-16)"
 printf '%s\n' "$BUILD_ID" > "$ST/.g1os-build-id"
 
 # Record the exact binaries used to assemble this image. This makes stale ISO
