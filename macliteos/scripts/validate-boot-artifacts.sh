@@ -28,10 +28,18 @@ HEAD=$(sed -n '1p' "$TMP/initrd/init")
 case "$HEAD" in '#!/bin/sh'|'#!/bin/ash') : ;; *) fail "/init has unsupported interpreter: $HEAD" ;; esac
 sh -n "$TMP/initrd/init" || fail "/init has shell syntax errors"
 [ -x "$TMP/initrd/bin/busybox" ] || fail "static BusyBox missing"
-[ -x "$TMP/initrd/usr/bin/mica-comp" ] || fail "mica-comp missing from initramfs"
-[ -x "$TMP/initrd/usr/bin/mica-installer" ] || fail "mica-installer missing from initramfs"
-[ -x "$TMP/initrd/usr/bin/maclite-installer-backend" ] || fail "installer backend missing from initramfs"
+for required in mica-comp mica-installer g1os-ui-health g1os-failure-ui maclite-installer-backend; do
+    [ -x "$TMP/initrd/usr/bin/$required" ] || fail "$required missing from initramfs"
+done
 [ -d "$TMP/initrd/lib/modules" ] || fail "kernel module tree missing from initramfs"
+
+grep -F '/usr/bin/mica-comp --backend "$BACKEND"' "$TMP/initrd/init" >/dev/null || fail "initrd does not launch dedicated graphical compositor path"
+grep -F '/usr/bin/mica-installer' "$TMP/initrd/init" >/dev/null || fail "initrd does not launch graphical installer"
+grep -F 'g1os-ui-health' "$TMP/initrd/init" >/dev/null || fail "graphical installer health gate is missing"
+grep -F 'g1os-failure-ui' "$TMP/initrd/init" >/dev/null || fail "graphical failure UI path is missing"
+
+grep -F 'export XDG_RUNTIME_DIR=' "$TMP/initrd/init" >/dev/null || fail "XDG_RUNTIME_DIR is not initialized"
+grep -F 'MICA_GL=off' "$TMP/initrd/init" >/dev/null || fail "Safe Graphics software-rendering mode is not configured"
 
 check_elf() {
     exe="$1"
@@ -43,9 +51,7 @@ check_elf() {
         [ -e "$TMP/initrd/$rel" ] || fail "ELF interpreter missing for $exe: /$rel"
     fi
     ldd_out=$(ldd "$exe" 2>&1) || fail "ldd could not inspect $exe: $ldd_out"
-    if echo "$ldd_out" | grep -q 'not found'; then
-        fail "shared-library dependency missing for $exe: $ldd_out"
-    fi
+    echo "$ldd_out" | grep -q 'not found' && fail "shared-library dependency missing for $exe: $ldd_out" || true
     libs=$(echo "$ldd_out" | sed -n -E 's/.*=>[[:space:]]*(\/[^[:space:]]+).*/\1/p; s/^[[:space:]]*(\/[^[:space:]]+)[[:space:]]+\(.*/\1/p')
     for lib in $libs; do
         [ -f "$TMP/initrd$lib" ] || fail "ELF dependency missing from initramfs: $lib (required by $exe)"
@@ -70,6 +76,9 @@ if [ -s "$ISO" ]; then
     [ -s "$TMP/iso/boot/vmlinuz-maclite" ] || fail "extracted ISO kernel missing"
     [ -s "$TMP/iso/live/maclite-base.sqfs" ] || fail "extracted ISO SquashFS missing"
     unsquashfs -s "$TMP/iso/live/maclite-base.sqfs" >/dev/null || fail "SquashFS is invalid"
+    for required in usr/bin/mica-comp usr/bin/mica-installer usr/share/maca-lite/runtime-provenance.sha256; do
+        unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" "$required" >/dev/null 2>&1 || fail "SquashFS missing graphical runtime artifact: $required"
+    done
     sha256sum -c "$ISO.sha256" >/dev/null 2>&1 || fail "ISO checksum does not match $ISO.sha256"
 fi
 
