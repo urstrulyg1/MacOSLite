@@ -13,10 +13,17 @@ mkdir -p "$W/bin" "$W/sbin" "$W/usr/bin" "$W/lib/firmware" "$W/lib/modules" "$W/
 [ -s "$BUSYBOX" ] || { echo "ERROR: static BusyBox missing: $BUSYBOX" >&2; exit 2; }
 cp "$BUSYBOX" "$W/bin/busybox"
 chmod 0755 "$W/bin/busybox"
-for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chroot fdisk losetup dd partprobe sync awk sleep dmesg ls cp mv rm touch; do
-    ln -sf /bin/busybox "$W/bin/$applet"
+"$W/bin/busybox" --install -s "$W/bin" 2>/dev/null || true
+for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chroot \
+              fdisk losetup dd partprobe sync awk sleep dmesg ls cp mv rm touch \
+              mktemp mkfs.vfat mkdosfs mkfs.ext2 mke2fs find which head tail wc tr cut \
+              sort uniq uname ip ifconfig ping udhcpc wget reboot poweroff halt env expr dirname basename; do
+    ln -sf /bin/busybox "$W/bin/$applet" 2>/dev/null || true
     ln -sf /bin/busybox "$W/sbin/$applet" 2>/dev/null || true
+    ln -sf /bin/busybox "$W/usr/bin/$applet" 2>/dev/null || true
 done
+ln -sf /bin/busybox "$W/bin/mkfs.ext4" 2>/dev/null || true
+ln -sf /bin/busybox "$W/sbin/mkfs.ext4" 2>/dev/null || true
 
 while read -r pat; do
     case "$pat" in \#*|"") continue ;; esac
@@ -61,14 +68,26 @@ fi
 copy_runtime_deps() {
     exe="$1"
     [ -x "$exe" ] || return 0
-    ldd "$exe" 2>/dev/null | sed -n 's/.*=> \(\/[^ ]*\).*/\1/p; s/^\(\/[^ ]*\) (0x.*/\1/p' | while read -r lib; do
+    ldd "$exe" 2>/dev/null | sed -n -e 's/.*=> \(\/[^ ]*\).*/\1/p' -e 's/^[[:space:]]*\(\/[^ ]*\) (0x.*/\1/p' | while read -r lib; do
         [ -f "$lib" ] || continue
         dest="$W$lib"
         mkdir -p "$(dirname "$dest")"
         cp -L "$lib" "$dest"
     done
+    # Guarantee ld-linux dynamic linker exists
+    for ld in /lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /usr/lib64/ld-linux-x86-64.so.2; do
+        if [ -f "$ld" ]; then
+            dest="$W$ld"
+            mkdir -p "$(dirname "$dest")"
+            cp -L "$ld" "$dest"
+        fi
+    done
+    if [ -f "$W/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] && [ ! -e "$W/lib64/ld-linux-x86-64.so.2" ]; then
+        mkdir -p "$W/lib64"
+        ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$W/lib64/ld-linux-x86-64.so.2"
+    fi
 }
-for exe in "$W/usr/bin/mica-comp" "$W/usr/bin/mica-shell" "$W/usr/bin/g1os-splash"; do copy_runtime_deps "$exe"; done
+for exe in "$W"/usr/bin/*; do copy_runtime_deps "$exe"; done
 
 cat > "$W/init" <<'INIT'
 #!/bin/sh
@@ -231,9 +250,14 @@ if [ -x /usr/bin/maclite-install ]; then
     /usr/bin/maclite-install || true
 fi
 
-echo "Dropping to G1OS shell. Run 'maclite-install' to install."
+echo "Dropping to G1OS rescue console. Run 'maclite-install' to install."
+for tty in /dev/tty0 /dev/tty1 /dev/console; do
+    [ -c "$tty" ] || continue
+    setsid cttyhack /bin/sh <"$tty" >"$tty" 2>&1 || true
+done
 while true; do
-    /bin/sh </dev/console >/dev/console 2>&1 || sleep 2
+    echo "G1OS Live Shell active. Press Enter for prompt."
+    /bin/sh </dev/console >/dev/console 2>&1 || /bin/sh || sleep 5
 done
 INIT
 chmod +x "$W/init"

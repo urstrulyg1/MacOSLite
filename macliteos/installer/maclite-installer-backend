@@ -127,6 +127,27 @@ if [ "$DRY_RUN" = 0 ]; then
   fi
 fi
 
+STATE_FILE="/tmp/.g1os_install_state.json"
+save_state() {
+  p_st="$1"
+  p_ph="$2"
+  p_prog="$3"
+  p_msg="$4"
+  printf '{"state":"%s","phase":"%s","target":"%s","progress":%d,"message":"%s","timestamp":%s}\n' \
+    "$p_st" "$p_ph" "$TARGET" "$p_prog" "$p_msg" "$(date +%s 2>/dev/null || echo 0)" > "$STATE_FILE" 2>/dev/null || true
+}
+
+safe_mktemp_dir() {
+  prefix="${1:-/tmp/g1os-tmp.XXXXXX}"
+  if command -v mktemp >/dev/null 2>&1; then
+    mktemp -d "$prefix"
+  else
+    d="/tmp/g1os-$(date +%s%N 2>/dev/null || date +%s)-$$"
+    mkdir -p "$d"
+    echo "$d"
+  fi
+}
+
 MODEL=$(cat "/sys/block/$TARGET/device/model" 2>/dev/null || echo "unknown")
 SERIAL=$(cat "/sys/block/$TARGET/device/serial" 2>/dev/null || echo "unknown")
 SECTORS=$(cat "/sys/block/$TARGET/size" 2>/dev/null || echo 0)
@@ -137,7 +158,7 @@ echo "SERIAL/IDENTIFIER: $SERIAL"
 echo "SIZE: ${SIZE_GB} GB"
 echo "LIVE MEDIA: ${BOOT_DISK:-not detected}"
 
-need mount; need umount; need blkid; need mktemp
+need mount; need umount; need blkid
 
 # Detect partitioning utility
 PART_TOOL=""
@@ -178,6 +199,7 @@ for p in /boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img /boo
 [ -n "$INITRD" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS initramfs not found"
 
 emit_state "PREPARING"
+save_state "RUNNING" "PREPARING" 10 "Validated target disk, live media, base system, kernel and initramfs"
 step 1 10 "Validated target disk, live media, base system, kernel and initramfs"
 step 2 20 "Unmounting target partitions"
 if [ "$DRY_RUN" = 0 ]; then
@@ -190,6 +212,7 @@ if [ "$DRY_RUN" = 0 ]; then
 fi
 
 emit_state "INSTALLING"
+save_state "RUNNING" "INSTALLING" 30 "Partitioning target disk"
 if [ "$REPAIR_MODE" = 1 ]; then
   step 3 30 "Repair mode: preserving existing partitions on target"
   BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT" 2>/dev/null || echo "78FA-C9B2")
@@ -219,18 +242,19 @@ else
   fi
 
   step 4 40 "Formatting fresh filesystems"
+  save_state "RUNNING" "INSTALLING" 40 "Formatting fresh filesystems"
   if [ "$DRY_RUN" = 0 ]; then
     if command -v mkfs.vfat >/dev/null 2>&1; then
-      run mkfs.vfat -F32 -n MACLITE_BOOT "$DEV_BOOT"
+      run mkfs.vfat -F 32 -n MACLITE_BOOT "$DEV_BOOT" 2>/dev/null || run mkfs.vfat -n MACLITE_BOOT "$DEV_BOOT"
     else
-      run mkdosfs -F32 -n MACLITE_BOOT "$DEV_BOOT"
+      run mkdosfs -F 32 -n MACLITE_BOOT "$DEV_BOOT" 2>/dev/null || run mkdosfs -n MACLITE_BOOT "$DEV_BOOT"
     fi
     if command -v mkfs.ext4 >/dev/null 2>&1; then
-      run mkfs.ext4 -F -L MACLITE_DATA "$DEV_DATA"
-      run mkfs.ext4 -F -L MACLITE_BASE "$DEV_BASE"
+      run mkfs.ext4 -F -L MACLITE_DATA "$DEV_DATA" 2>/dev/null || run mke2fs -t ext4 -F -L MACLITE_DATA "$DEV_DATA"
+      run mkfs.ext4 -F -L MACLITE_BASE "$DEV_BASE" 2>/dev/null || run mke2fs -t ext4 -F -L MACLITE_BASE "$DEV_BASE"
     else
-      run mke2fs -F -t ext4 -L MACLITE_DATA "$DEV_DATA"
-      run mke2fs -F -t ext4 -L MACLITE_BASE "$DEV_BASE"
+      run mke2fs -t ext4 -F -L MACLITE_DATA "$DEV_DATA" 2>/dev/null || run mke2fs -F -L MACLITE_DATA "$DEV_DATA"
+      run mke2fs -t ext4 -F -L MACLITE_BASE "$DEV_BASE" 2>/dev/null || run mke2fs -F -L MACLITE_BASE "$DEV_BASE"
     fi
   fi
   BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT" 2>/dev/null || echo "78FA-C9B2")
@@ -240,8 +264,9 @@ else
 fi
 
 step 5 55 "Installing the verified live base onto the target root filesystem"
-BASE_MNT=$(mktemp -d /tmp/g1os-base.XXXXXX)
-BOOT_MNT=$(mktemp -d /tmp/g1os-boot.XXXXXX)
+save_state "RUNNING" "INSTALLING" 55 "Copying system base to root partition"
+BASE_MNT=$(safe_mktemp_dir /tmp/g1os-base.XXXXXX)
+BOOT_MNT=$(safe_mktemp_dir /tmp/g1os-boot.XXXXXX)
 cleanup() {
   umount "$BASE_MNT" 2>/dev/null || true
   umount "$BOOT_MNT" 2>/dev/null || true
@@ -254,6 +279,28 @@ if [ "$DRY_RUN" = 0 ] && [ -n "$LIVE_BASE" ]; then
   # Create installation in-progress marker to detect partial installation
   touch "$BASE_MNT/.g1os_install_in_progress"
   run cp -a "$LIVE_BASE/." "$BASE_MNT/"
+  
+  # Ensure /bin/busybox and core tools exist on installed root
+  if [ -s /bin/busybox ] && [ ! -s "$BASE_MNT/bin/busybox" ]; then
+    mkdir -p "$BASE_MNT/bin" "$BASE_MNT/sbin"
+    cp -a /bin/busybox "$BASE_MNT/bin/busybox"
+    chmod 0755 "$BASE_MNT/bin/busybox"
+    for applet in sh bash mount umount ls cat cp mv rm mkdir grep sed awk sleep; do
+      ln -sf /bin/busybox "$BASE_MNT/bin/$applet" 2>/dev/null || true
+    done
+  fi
+  
+  # Ensure dynamic linker and shared libraries exist on installed root
+  for libpath in /lib/x86_64-linux-gnu /lib64 /lib /usr/lib; do
+    if [ -d "$libpath" ]; then
+      mkdir -p "$BASE_MNT$libpath"
+      cp -a "$libpath/." "$BASE_MNT$libpath/" 2>/dev/null || true
+    fi
+  done
+  if [ -f "$BASE_MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] && [ ! -e "$BASE_MNT/lib64/ld-linux-x86-64.so.2" ]; then
+    mkdir -p "$BASE_MNT/lib64"
+    ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$BASE_MNT/lib64/ld-linux-x86-64.so.2" 2>/dev/null || true
+  fi
 fi
 
 mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log"
@@ -346,9 +393,10 @@ run umount "$BOOT_MNT"
 # Direct transition from INSTALLING -> COMPLETED is impossible.
 # ==============================================================================
 emit_state "VERIFYING"
+save_state "RUNNING" "VERIFYING" 80 "Executing 14-domain authoritative verification"
 
-VERIFY_ROOT=$(mktemp -d /tmp/g1os-vroot.XXXXXX)
-VERIFY_BOOT=$(mktemp -d /tmp/g1os-vboot.XXXXXX)
+VERIFY_ROOT=$(safe_mktemp_dir /tmp/g1os-vroot.XXXXXX)
+VERIFY_BOOT=$(safe_mktemp_dir /tmp/g1os-vboot.XXXXXX)
 vcleanup() {
   umount "$VERIFY_ROOT" 2>/dev/null || true
   umount "$VERIFY_BOOT" 2>/dev/null || true
@@ -503,5 +551,6 @@ fi
 
 # ONLY after all mandatory checks pass: transition to COMPLETED and report 100%
 emit_state "COMPLETED"
+save_state "SUCCESS" "COMPLETED" 100 "All required verification checks passed. Installation Complete."
 step 15 100 "All required verification checks passed. Installation Complete."
 echo "SUCCESS: G1OS installation verified healthy and bootable on /dev/$TARGET."

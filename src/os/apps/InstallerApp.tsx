@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import {
   AlertTriangle, CheckCircle2, XCircle, RotateCw, ShieldCheck, ChevronRight,
   ChevronDown, Terminal, Lock, ArrowLeft, Check, Info, Sliders,
+  Wifi, Globe, DownloadCloud, HardDrive, Cpu, Clock, Network, RefreshCw,
 } from "../icons/glyphs";
 import { useOS } from "../os";
 import { G1Icon } from "../icons/IconSystem";
@@ -47,9 +48,28 @@ const DETECTED_DISKS: DiskItem[] = [
   },
 ];
 
-type InstallerStage =
+interface WifiNetwork {
+  ssid: string;
+  security: "WPA2" | "WPA3" | "Open" | "Offline";
+  signal: number; // 0-100
+  freq: string;
+  isOffline?: boolean;
+}
+
+const AVAILABLE_NETWORKS: WifiNetwork[] = [
+  { ssid: "Starlight 5G", security: "WPA2", signal: 96, freq: "5 GHz" },
+  { ssid: "iMac-Studio-5G", security: "WPA2", signal: 82, freq: "5 GHz" },
+  { ssid: "CoffeeHouse Guest", security: "Open", signal: 54, freq: "2.4 GHz" },
+  { ssid: "Offline Mode (Self-Contained)", security: "Offline", signal: 100, freq: "Local USB", isOffline: true },
+];
+
+export type InstallerStage =
   | "welcome"
   | "preflight"
+  | "wifi_select"
+  | "wifi_auth"
+  | "network_validating"
+  | "downloading"
   | "select"
   | "confirm"
   | "installing"
@@ -58,14 +78,37 @@ type InstallerStage =
   | "complete"
   | "error";
 
-type TestScenario =
+export type TestScenario =
   | "normal"
+  | "wifi-auth-fail"
+  | "dhcp-lease-fail"
+  | "dns-resolution-fail"
+  | "cdn-tls-fail"
+  | "download-sha256-corrupt"
+  | "target-disk-readonly"
+  | "partition-table-error"
+  | "mkfs-format-fail"
   | "failed-copy"
   | "failed-bootloader"
   | "missing-driver"
   | "corrupt-config"
   | "low-disk-space"
-  | "interrupted-install";
+  | "interrupted-install"
+  | "permission-bits-broken";
+
+export interface DiagnosticCardData {
+  phase: string;
+  subPhase: string;
+  action: string;
+  command: string;
+  status: "FAILED" | "WARNING" | "FATAL";
+  elapsed: string;
+  exitCode: number | string;
+  error: string;
+  recovery: string;
+  canAutoRepair?: boolean;
+  canFallbackOffline?: boolean;
+}
 
 interface VerificationCheckItem {
   id: string;
@@ -108,6 +151,18 @@ const SUMMARY_ITEMS = [
   "Installation integrity",
 ];
 
+const STORAGE_STATE_KEY = "g1os_installer_state_v1";
+
+interface PersistedState {
+  status: "PENDING" | "RUNNING" | "SUCCESS" | "FAILED" | "INCOMPLETE";
+  stage: InstallerStage;
+  selectedDiskId: string;
+  wifiSsid: string;
+  progress: number;
+  scenario: TestScenario;
+  timestamp: number;
+}
+
 export default function InstallerApp() {
   const os = useOS();
   const [stage, setStage] = useState<InstallerStage>("welcome");
@@ -118,59 +173,444 @@ export default function InstallerApp() {
   const [logs, setLogs] = useState<string[]>([]);
   const [showLogs, setShowLogs] = useState(false);
 
+  // Wi-Fi and Networking State
+  const [selectedNetwork, setSelectedNetwork] = useState<WifiNetwork>(AVAILABLE_NETWORKS[0]);
+  const [wifiPassword, setWifiPassword] = useState("AppleAirport2010!");
+  const [showPassword, setShowPassword] = useState(false);
+  const [networkValidationStep, setNetworkValidationStep] = useState(0);
+  const [networkValidationSteps, setNetworkValidationSteps] = useState([
+    { label: "Wi-Fi link state (wlan0)", status: "pending", detail: "Broadcom BCM43224 802.11a/b/g/n" },
+    { label: "DHCP IP configuration", status: "pending", detail: "Requesting lease via udhcpc" },
+    { label: "Default gateway reachable", status: "pending", detail: "ICMP echo ping test" },
+    { label: "DNS host resolution", status: "pending", detail: "Resolving dist.g1os.org" },
+    { label: "HTTPS package CDN link", status: "pending", detail: "TLS 1.3 certificate check" },
+  ]);
+
+  // Package Download State
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadSpeed, setDownloadSpeed] = useState("24.8 MB/s");
+  const [downloadEta, setDownloadEta] = useState("12s");
+  const [downloadTransferred, setDownloadTransferred] = useState("0 MB / 420 MB");
+  const [downloadPhase, setDownloadPhase] = useState("Fetching base-system-v1.0.squashfs...");
+
   // Scenario testing state (§25 Final Acceptance Test)
   const [scenario, setScenario] = useState<TestScenario>("normal");
   const [repaired, setRepaired] = useState(false);
+
+  // Diagnostic Card for deliberate failure testing
+  const [diagnosticCard, setDiagnosticCard] = useState<DiagnosticCardData | null>(null);
+
+  // Resume dialog state
+  const [interruptedState, setInterruptedState] = useState<PersistedState | null>(null);
 
   // Verification checks state
   const [checks, setChecks] = useState<VerificationCheckItem[]>(
     VERIFICATION_DOMAINS.map((d) => ({ ...d, status: "pending" }))
   );
-  const [failureInfo, setFailureInfo] = useState<{ title: string; message: string; canRepair: boolean } | null>(null);
 
   const targetDisk = DETECTED_DISKS.find((d) => d.id === selectedDiskId) || DETECTED_DISKS[0];
+
+  // Load and check persisted state on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_STATE_KEY);
+      if (raw) {
+        const parsed: PersistedState = JSON.parse(raw);
+        if (parsed.status === "RUNNING" || parsed.status === "INCOMPLETE" || parsed.status === "FAILED") {
+          setInterruptedState(parsed);
+        }
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, []);
+
+  // Helper to persist state
+  const persistState = (status: PersistedState["status"], curStage: InstallerStage, pct: number) => {
+    try {
+      const stateObj: PersistedState = {
+        status,
+        stage: curStage,
+        selectedDiskId,
+        wifiSsid: selectedNetwork.ssid,
+        progress: pct,
+        scenario,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem(STORAGE_STATE_KEY, JSON.stringify(stateObj));
+    } catch {
+      // Ignore localStorage write errors
+    }
+  };
 
   // Reset checks
   const resetChecks = () => {
     setChecks(VERIFICATION_DOMAINS.map((d) => ({ ...d, status: "pending" })));
-    setFailureInfo(null);
+    setDiagnosticCard(null);
   };
 
-  // Execution flow
+  // Resume interrupted session
+  const handleResumeSession = () => {
+    if (!interruptedState) return;
+    setStage(interruptedState.stage);
+    setSelectedDiskId(interruptedState.selectedDiskId || "sda");
+    setProgress(interruptedState.progress || 0);
+    setScenario(interruptedState.scenario || "normal");
+    setInterruptedState(null);
+    setLogs((prev) => [
+      ...prev,
+      `=== RESUMED FROM CHECKPOINT ===`,
+      `Restored state: stage=${interruptedState.stage}, progress=${interruptedState.progress}%, disk=${interruptedState.selectedDiskId}`,
+    ]);
+  };
+
+  const handleDiscardResume = () => {
+    localStorage.removeItem(STORAGE_STATE_KEY);
+    setInterruptedState(null);
+  };
+
+  // ----------------------------------------------------
+  // Network Validation Flow
+  // ----------------------------------------------------
+  useEffect(() => {
+    if (stage !== "network_validating") return;
+
+    persistState("RUNNING", "network_validating", 15);
+    setLogs([
+      "=== STATE: NETWORK_VALIDATING ===",
+      `+ Selected interface: wlan0 (Broadcom BCM43224 PCI-ID 14e4:4353)`,
+      `+ Target SSID: ${selectedNetwork.ssid} (${selectedNetwork.security})`,
+    ]);
+
+    // Step 0: Wi-Fi Auth check
+    if (scenario === "wifi-auth-fail") {
+      setTimeout(() => {
+        setDiagnosticCard({
+          phase: "Network Configuration",
+          subPhase: "Wi-Fi Authentication",
+          action: "Authenticating with 802.11i WPA2-PSK access point",
+          command: `wpa_supplicant -i wlan0 -c /tmp/wpa_supplicant.conf -B`,
+          status: "FAILED",
+          elapsed: "4.2s",
+          exitCode: 2,
+          error: "WPA: 4-Way Handshake failed: MIC verification failure (Invalid Pre-Shared Key).",
+          recovery: "Re-enter the correct network passphrase or choose Offline Installation Mode.",
+          canFallbackOffline: true,
+        });
+        setStage("error");
+        persistState("FAILED", "error", 15);
+      }, 1000);
+      return;
+    }
+
+    // Sequentially step through validation
+    const timers: NodeJS.Timeout[] = [];
+
+    // Step 1: Link up
+    timers.push(
+      setTimeout(() => {
+        setNetworkValidationSteps((prev) =>
+          prev.map((s, i) =>
+            i === 0 ? { ...s, status: "pass", detail: "wlan0 connected (-45 dBm, 300 Mbps)" } : s
+          )
+        );
+        setLogs((prev) => [...prev, "[NET 1/5] wlan0: Link state UP, signal -45 dBm"]);
+      }, 400)
+    );
+
+    // Step 2: DHCP Lease
+    timers.push(
+      setTimeout(() => {
+        if (scenario === "dhcp-lease-fail") {
+          setNetworkValidationSteps((prev) =>
+            prev.map((s, i) => (i === 1 ? { ...s, status: "fail", detail: "udhcpc timed out (no lease offered)" } : s))
+          );
+          setDiagnosticCard({
+            phase: "Network Configuration",
+            subPhase: "DHCP Lease Acquisition",
+            action: "Obtaining IPv4 lease from gateway",
+            command: "udhcpc -i wlan0 -q -n -T 5",
+            status: "FAILED",
+            elapsed: "5.1s",
+            exitCode: 1,
+            error: "No DHCP offer received from router. IP address allocation failed.",
+            recovery: "Check router DHCP pool exhaustion, or continue using self-contained Offline Mode.",
+            canFallbackOffline: true,
+          });
+          setStage("error");
+          persistState("FAILED", "error", 15);
+          return;
+        }
+
+        setNetworkValidationSteps((prev) =>
+          prev.map((s, i) =>
+            i === 1 ? { ...s, status: "pass", detail: "Bound 192.168.1.105 (mask 255.255.255.0)" } : s
+          )
+        );
+        setLogs((prev) => [...prev, "[NET 2/5] udhcpc: Bound to 192.168.1.105, gateway 192.168.1.1"]);
+      }, 900)
+    );
+
+    // Step 3: Gateway ping
+    timers.push(
+      setTimeout(() => {
+        if (scenario === "dhcp-lease-fail") return;
+
+        setNetworkValidationSteps((prev) =>
+          prev.map((s, i) =>
+            i === 2 ? { ...s, status: "pass", detail: "192.168.1.1 ping RTT: 1.4 ms (0% loss)" } : s
+          )
+        );
+        setLogs((prev) => [...prev, "[NET 3/5] ICMP ping 192.168.1.1: 0% packet loss, RTT 1.4ms"]);
+      }, 1400)
+    );
+
+    // Step 4: DNS
+    timers.push(
+      setTimeout(() => {
+        if (scenario === "dhcp-lease-fail") return;
+
+        if (scenario === "dns-resolution-fail") {
+          setNetworkValidationSteps((prev) =>
+            prev.map((s, i) => (i === 3 ? { ...s, status: "fail", detail: "SERVFAIL resolving dist.g1os.org" } : s))
+          );
+          setDiagnosticCard({
+            phase: "Network Configuration",
+            subPhase: "DNS Host Resolution",
+            action: "Resolving official distribution server domain",
+            command: "nslookup dist.g1os.org 192.168.1.1",
+            status: "FAILED",
+            elapsed: "3.8s",
+            exitCode: 1,
+            error: "Nameserver returned SERVFAIL for dist.g1os.org. Remote package repository unreachable.",
+            recovery: "Verify upstream DNS servers or proceed using the self-contained Offline Installer.",
+            canFallbackOffline: true,
+          });
+          setStage("error");
+          persistState("FAILED", "error", 15);
+          return;
+        }
+
+        setNetworkValidationSteps((prev) =>
+          prev.map((s, i) =>
+            i === 3 ? { ...s, status: "pass", detail: "dist.g1os.org -> 142.250.190.46" } : s
+          )
+        );
+        setLogs((prev) => [...prev, "[NET 4/5] DNS gethostbyname: dist.g1os.org -> 142.250.190.46"]);
+      }, 1900)
+    );
+
+    // Step 5: CDN TLS Handshake
+    timers.push(
+      setTimeout(() => {
+        if (scenario === "dhcp-lease-fail" || scenario === "dns-resolution-fail") return;
+
+        if (scenario === "cdn-tls-fail") {
+          setNetworkValidationSteps((prev) =>
+            prev.map((s, i) => (i === 4 ? { ...s, status: "fail", detail: "TLS 1.3 handshake reset by peer" } : s))
+          );
+          setDiagnosticCard({
+            phase: "Network Pre-Flight",
+            subPhase: "HTTPS Package CDN Connection",
+            action: "Establishing secure TLS 1.3 channel to package CDN",
+            command: "curl -I https://cdn.g1os.org/v1/health",
+            status: "FAILED",
+            elapsed: "2.5s",
+            exitCode: 35,
+            error: "curl: (35) error:0A000410:SSL routines::sslv3 alert handshake failure.",
+            recovery: "Check system real-time clock (RTC) battery or switch to Offline Installation.",
+            canFallbackOffline: true,
+          });
+          setStage("error");
+          persistState("FAILED", "error", 15);
+          return;
+        }
+
+        setNetworkValidationSteps((prev) =>
+          prev.map((s, i) =>
+            i === 4 ? { ...s, status: "pass", detail: "TLS 1.3 Handshake OK · HTTP/2 200" } : s
+          )
+        );
+        setLogs((prev) => [
+          ...prev,
+          "[NET 5/5] TLS 1.3 Handshake OK. CDN connection verified.",
+          "✓ All network validation stages passed. Proceeding to package download.",
+        ]);
+
+        setTimeout(() => {
+          setStage("downloading");
+        }, 600);
+      }, 2500)
+    );
+
+    return () => timers.forEach(clearTimeout);
+  }, [stage, scenario, selectedNetwork]);
+
+  // ----------------------------------------------------
+  // Package Downloading Flow
+  // ----------------------------------------------------
+  useEffect(() => {
+    if (stage !== "downloading") return;
+
+    persistState("RUNNING", "downloading", 20);
+    setDownloadProgress(0);
+    setLogs((prev) => [
+      ...prev,
+      "=== STATE: DOWNLOADING ===",
+      "+ Package repository: https://cdn.g1os.org/v1/packages",
+      "+ Fetching maclite-base-rootfs.sqfs (SHA-256 verified)...",
+    ]);
+
+    let step = 0;
+    const interval = setInterval(() => {
+      step++;
+      const pct = Math.min(step * 15, 100);
+      setDownloadProgress(pct);
+      setDownloadTransferred(`${Math.round((pct / 100) * 420)} MB / 420 MB`);
+
+      if (pct === 30) {
+        setDownloadPhase("Downloading live system base image (maclite-base.sqfs)...");
+      } else if (pct === 60) {
+        setDownloadPhase("Downloading kernel modules & firmware (kernel-modules-6.6.21.tar.zst)...");
+      } else if (pct === 90) {
+        setDownloadPhase("Verifying package SHA-256 signatures against official release manifest...");
+      }
+
+      if (pct >= 100) {
+        clearInterval(interval);
+
+        // Check for download corruption scenario
+        if (scenario === "download-sha256-corrupt") {
+          setDiagnosticCard({
+            phase: "Package Download",
+            subPhase: "SHA-256 Integrity Verification",
+            action: "Validating checksum of maclite-base-rootfs.sqfs",
+            command: "sha256sum -c /tmp/packages/manifest.sha256",
+            status: "FATAL",
+            elapsed: "8.4s",
+            exitCode: 1,
+            error: "CHECKSUM MISMATCH: Expected 8f4c2e5b61... but computed e3b0c44298... Package payload is corrupted.",
+            recovery: "Re-download the base packages, or switch to the bundled Offline Live Media packages.",
+            canFallbackOffline: true,
+          });
+          setStage("error");
+          persistState("FAILED", "error", 20);
+          return;
+        }
+
+        setLogs((prev) => [
+          ...prev,
+          "✓ SHA-256 package verification: 8f4c2e5b61a38094... [OK]",
+          "✓ Base system and kernel modules successfully cached to RAM.",
+        ]);
+
+        setTimeout(() => {
+          setStage("select");
+        }, 500);
+      }
+    }, 280);
+
+    return () => clearInterval(interval);
+  }, [stage, scenario]);
+
+  // ----------------------------------------------------
+  // Execution & Verification Flow
+  // ----------------------------------------------------
   useEffect(() => {
     if (stage !== "installing" && stage !== "verifying") return;
 
     if (stage === "installing") {
       resetChecks();
+      persistState("RUNNING", "installing", 30);
       setLogs([
         "=== STATE: PREPARING ===",
         "[STEP 1 (10%)]: Validated target disk, live media, base system, kernel and initramfs",
         `+ Target device: ${targetDisk.node} (${targetDisk.model})`,
         "+ Live USB media /dev/sdb excluded and write-protected",
         "[STEP 2 (20%)]: Unmounting target partitions cleanly",
-        "=== STATE: INSTALLING ===",
-        `[STEP 3 (30%)]: Repartitioning target disk ${targetDisk.node} (GPT, EFI, Data, Base)`,
-        "+ sgdisk --zap-all " + targetDisk.node,
-        "+ sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT " + targetDisk.node,
-        "+ sgdisk -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA " + targetDisk.node,
-        "+ sgdisk -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE " + targetDisk.node,
       ]);
       setProgress(30);
 
+      // Check for immediate disk errors
+      if (scenario === "target-disk-readonly") {
+        setTimeout(() => {
+          setDiagnosticCard({
+            phase: "Partitioning & Storage",
+            subPhase: "Device Open",
+            action: "Opening target drive for exclusive partition table rewrite",
+            command: `blockdev --setrw ${targetDisk.node}`,
+            status: "FATAL",
+            elapsed: "0.8s",
+            exitCode: 30, // EROFS
+            error: `EROFS: Read-only file system on ${targetDisk.node}. Hardware controller write-protect active.`,
+            recovery: "Check internal SATA connection cable or drive health via SMART diagnostic utility.",
+          });
+          setStage("error");
+          persistState("FAILED", "error", 30);
+        }, 800);
+        return;
+      }
+
+      if (scenario === "partition-table-error") {
+        setTimeout(() => {
+          setDiagnosticCard({
+            phase: "Partitioning",
+            subPhase: "GPT Partition Table Creation",
+            action: "Writing fresh GUID Partition Table via sgdisk",
+            command: `sgdisk -n 1:0:+256M -t 1:ef00 ${targetDisk.node}`,
+            status: "FATAL",
+            elapsed: "1.2s",
+            exitCode: 2,
+            error: "sgdisk returned exit code 2: Error allocating partition overlapping secondary GPT header.",
+            recovery: "Execute 'sgdisk --zap-all' to clean invalid leftover partition tables.",
+          });
+          setStage("error");
+          persistState("FAILED", "error", 30);
+        }, 1100);
+        return;
+      }
+
       const t1 = setTimeout(() => {
+        if (scenario === "mkfs-format-fail") {
+          setDiagnosticCard({
+            phase: "Filesystem Creation",
+            subPhase: "Format ext4 Base Partition",
+            action: "Creating ext4 filesystem with 4K block size",
+            command: "mkfs.ext4 -F -L MACLITE_BASE /dev/sda3",
+            status: "FATAL",
+            elapsed: "1.9s",
+            exitCode: 1,
+            error: "mke2fs: Could not allocate inode table: I/O error while writing block 32768.",
+            recovery: "Run badblocks check on internal SSD or re-run installer after re-powering.",
+          });
+          setStage("error");
+          persistState("FAILED", "error", 45);
+          return;
+        }
+
         setProgress(45);
+        persistState("RUNNING", "installing", 45);
         setCurrentStepText("Formatting fresh filesystems (FAT32 & ext4)...");
         setLogs((prev) => [
           ...prev,
+          "=== STATE: INSTALLING ===",
+          `[STEP 3 (30%)]: Repartitioning target disk ${targetDisk.node} (GPT, EFI, Data, Base)`,
+          "+ sgdisk --zap-all " + targetDisk.node,
+          "+ sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT " + targetDisk.node,
+          "+ sgdisk -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA " + targetDisk.node,
+          "+ sgdisk -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE " + targetDisk.node,
           "[STEP 4 (45%)]: Formatting fresh filesystems",
           "+ mkfs.vfat -F32 -n MACLITE_BOOT /dev/sda1 (UUID=78FA-C9B2)",
-          "+ mkfs.ext4 -F -L MACLITE_DATA /dev/sda2 (UUID=4a12b3c4-...)",
-          "+ mkfs.ext4 -F -L MACLITE_BASE /dev/sda3 (UUID=e78d910a-...)",
+          "+ mkfs.ext4 -F -L MACLITE_DATA /dev/sda2 (UUID=4a12b3c4-7d8e-4f01-9a23-11bb22cc33dd)",
+          "+ mkfs.ext4 -F -L MACLITE_BASE /dev/sda3 (UUID=e78d910a-3142-4f81-9b16-5fa4e872c019)",
         ]);
       }, 700);
 
       const t2 = setTimeout(() => {
+        if (scenario === "mkfs-format-fail") return;
+
         setProgress(60);
+        persistState("RUNNING", "installing", 60);
         setCurrentStepText("Installing immutable base system & configuring fstab...");
         setLogs((prev) => [
           ...prev,
@@ -182,19 +622,26 @@ export default function InstallerApp() {
       }, 1500);
 
       const t3 = setTimeout(() => {
+        if (scenario === "mkfs-format-fail") return;
+
         setProgress(72);
+        persistState("RUNNING", "installing", 72);
         setCurrentStepText("Installing Apple EFI fallback bootloader & grub.cfg...");
         setLogs((prev) => [
           ...prev,
           "[STEP 6 (72%)]: Installing Apple EFI bootloader and UUID-bound boot configuration",
-          "+ grub-mkimage -O x86_64-efi -o /EFI/BOOT/BOOTX64.EFI",
+          "+ Installing /EFI/BOOT/BOOTX64.EFI into ESP (/dev/sda1)",
           "+ Generating grub.cfg with root=UUID=e78d910a-3142-4f81-9b16-5fa4e872c019",
+          "+ Setting Apple Safe Graphics: nomodeset radeon.modeset=0 fbcon=map:0 reboot=pci panic=0",
           "+ Creating Apple Option Boot .disk_label ('G1OS')",
         ]);
       }, 2300);
 
       const t4 = setTimeout(() => {
+        if (scenario === "mkfs-format-fail") return;
+
         setProgress(78);
+        persistState("RUNNING", "verifying", 78);
         setCurrentStepText("Finalizing disk sync & preparing mandatory verification...");
         setLogs((prev) => [
           ...prev,
@@ -222,6 +669,7 @@ export default function InstallerApp() {
           clearInterval(runCheckInterval);
           // All checks passed!
           setProgress(100);
+          persistState("SUCCESS", "summary", 100);
           setCurrentStepText("All required checks passed. Installation Complete.");
           setLogs((prev) => [
             ...prev,
@@ -237,50 +685,121 @@ export default function InstallerApp() {
         const domain = VERIFICATION_DOMAINS[checkIdx];
         const pct = Math.min(80 + Math.round((checkIdx / VERIFICATION_DOMAINS.length) * 20), 99);
         setProgress(pct);
+        persistState("RUNNING", "verifying", pct);
         setCurrentStepText(`Verifying ${domain.domain}...`);
 
         // Check for injected scenario failures
         let willFail = false;
-        let failMessage = "";
-        let canAutoRepair = false;
+        let failDiagnostic: DiagnosticCardData | null = null;
 
         if (scenario === "failed-copy" && domain.id === "files") {
           willFail = true;
-          failMessage = "Required system binaries are missing or corrupted (/usr/bin/mica-shell not found).";
+          failDiagnostic = {
+            phase: "Final Verification",
+            subPhase: "System Files Domain",
+            action: "Verifying presence of desktop shell binary /usr/bin/mica-shell",
+            command: "test -x /mnt/target/usr/bin/mica-shell",
+            status: "FATAL",
+            elapsed: "0.2s",
+            exitCode: 1,
+            error: "Required system binary /usr/bin/mica-shell is missing or has zero length.",
+            recovery: "Retry the installation to re-synchronize system binaries.",
+          };
         } else if (scenario === "failed-bootloader" && domain.id === "bootloader") {
           willFail = true;
-          failMessage = "The boot configuration could not be verified. Fallback BOOTX64.EFI missing or corrupted.";
+          failDiagnostic = {
+            phase: "Final Verification",
+            subPhase: "Bootloader Integrity Domain",
+            action: "Verifying Apple EFI fallback bootloader executable",
+            command: "test -f /mnt/target/boot/efi/EFI/BOOT/BOOTX64.EFI",
+            status: "FATAL",
+            elapsed: "0.1s",
+            exitCode: 1,
+            error: "Apple EFI fallback bootloader /EFI/BOOT/BOOTX64.EFI is missing or corrupt.",
+            recovery: "Re-run installer to reinstall bootloader and recreate EFI partition structure.",
+          };
         } else if (scenario === "missing-driver" && domain.id === "drivers") {
           willFail = true;
-          failMessage = "Required GPU driver (radeon/amdgpu) is missing or initialization failed.";
+          failDiagnostic = {
+            phase: "Final Verification",
+            subPhase: "Kernel Driver Modules Domain",
+            action: "Checking GPU driver module radeon.ko / amdgpu.ko in initramfs",
+            command: "modinfo -b /mnt/target/lib/modules/6.6.21-g1os radeon",
+            status: "FATAL",
+            elapsed: "0.4s",
+            exitCode: 1,
+            error: "Required hardware driver module 'radeon' is missing from rootfs.",
+            recovery: "Ensure Safe Graphics fallback mode is selected.",
+          };
         } else if (scenario === "corrupt-config" && domain.id === "config" && !repaired) {
           willFail = true;
-          canAutoRepair = true;
-          failMessage = "Invalid configuration syntax: /etc/fstab missing root UUID binding.";
+          failDiagnostic = {
+            phase: "Final Verification",
+            subPhase: "Configuration Domain",
+            action: "Verifying /etc/fstab UUID syntax and root partition binding",
+            command: "grep -E '^UUID=[0-9a-f-]{36} +/ +' /mnt/target/etc/fstab",
+            status: "FAILED",
+            elapsed: "0.1s",
+            exitCode: 1,
+            error: "Invalid /etc/fstab syntax: Root filesystem is missing UUID binding.",
+            recovery: "Click Automatic Repair to regenerate UUID-bound /etc/fstab automatically.",
+            canAutoRepair: true,
+          };
+        } else if (scenario === "permission-bits-broken" && domain.id === "permissions" && !repaired) {
+          willFail = true;
+          failDiagnostic = {
+            phase: "Final Verification",
+            subPhase: "Permissions Domain",
+            action: "Auditing executable bits on /bin/sh and /usr/bin/mica-comp",
+            command: "test -x /mnt/target/bin/sh && test -x /mnt/target/usr/bin/mica-comp",
+            status: "FAILED",
+            elapsed: "0.2s",
+            exitCode: 1,
+            error: "Security Audit Failure: /bin/sh has permission mode 0644 (missing +x execute bit).",
+            recovery: "Click Automatic Repair to restore standard 0755 root permissions.",
+            canAutoRepair: true,
+          };
         } else if (scenario === "low-disk-space" && domain.id === "diskspace") {
           willFail = true;
-          failMessage = "Critically low disk space: EFI partition has only 4.1 MB remaining (minimum 10 MB required).";
+          failDiagnostic = {
+            phase: "Final Verification",
+            subPhase: "Disk Space Allocation Domain",
+            action: "Querying free space on EFI System Partition (/dev/sda1)",
+            command: "df -m /mnt/target/boot/efi",
+            status: "FATAL",
+            elapsed: "0.1s",
+            exitCode: 1,
+            error: "Critically low disk space: EFI partition has only 4.1 MB remaining (minimum 10 MB required).",
+            recovery: "Re-partition internal drive with larger EFI partition allocation.",
+          };
         } else if (scenario === "interrupted-install" && domain.id === "nopartial") {
           willFail = true;
-          failMessage = "Incomplete installation marker detected; file copy was interrupted unexpectedly.";
+          failDiagnostic = {
+            phase: "Final Verification",
+            subPhase: "Installation State Domain",
+            action: "Scanning for temporary partial markers (/etc/.g1os_installing)",
+            command: "test ! -f /mnt/target/etc/.g1os_installing",
+            status: "FATAL",
+            elapsed: "0.1s",
+            exitCode: 1,
+            error: "Incomplete installation marker detected: Previous copy was aborted unexpectedly.",
+            recovery: "Perform a clean re-installation to ensure no partial libraries exist.",
+          };
         }
 
-        if (willFail) {
+        if (willFail && failDiagnostic) {
           clearInterval(runCheckInterval);
           setChecks((prev) =>
-            prev.map((c, i) => (i === checkIdx ? { ...c, status: "fail", details: failMessage } : c))
+            prev.map((c, i) => (i === checkIdx ? { ...c, status: "fail", details: failDiagnostic?.error } : c))
           );
-          setFailureInfo({
-            title: `${domain.domain} verification`,
-            message: failMessage,
-            canRepair: canAutoRepair,
-          });
+          setDiagnosticCard(failDiagnostic);
           setLogs((prev) => [
             ...prev,
-            `Verification FAIL: ${domain.domain} — ${failMessage}`,
+            `Verification FAIL: ${domain.domain} — ${failDiagnostic?.error}`,
             "ERROR: Installation halted by No-Break Guarantee. System reboot is disabled.",
           ]);
           setStage("error");
+          persistState("FAILED", "error", pct);
           return;
         }
 
@@ -290,10 +809,7 @@ export default function InstallerApp() {
             i === checkIdx
               ? {
                   ...c,
-                  status:
-                    domain.id === "network" && scenario === "missing-driver"
-                      ? "warn"
-                      : "pass",
+                  status: "pass",
                   details: "Verified healthy and consistent",
                 }
               : c
@@ -306,7 +822,7 @@ export default function InstallerApp() {
         ]);
 
         checkIdx++;
-      }, 240);
+      }, 200);
 
       return () => clearInterval(runCheckInterval);
     }
@@ -320,32 +836,94 @@ export default function InstallerApp() {
 
   const handleRetry = () => {
     setRepaired(false);
-    setStage("installing");
+    setDiagnosticCard(null);
+    if (stage === "error") {
+      // Determine appropriate stage to retry
+      if (scenario.includes("wifi") || scenario.includes("dhcp") || scenario.includes("dns") || scenario.includes("cdn")) {
+        setStage("network_validating");
+      } else if (scenario.includes("download")) {
+        setStage("downloading");
+      } else {
+        setStage("installing");
+      }
+    } else {
+      setStage("installing");
+    }
   };
 
   const handleRepair = () => {
-    // Section 21 & 22: Automatic Repair and Re-Verification
     setLogs((prev) => [
       ...prev,
       "=== INITIATING AUTOMATIC SAFE REPAIR ===",
       "+ Regenerating missing /etc/fstab configuration with verified UUIDs...",
-      "+ Repairing permissions on system mount points...",
+      "+ Repairing permissions on system mount points (chmod 0755 /bin /usr/bin)...",
       "+ Re-triggering Final Verification...",
     ]);
     setRepaired(true);
+    setDiagnosticCard(null);
     setStage("verifying");
   };
 
+  const handleFallbackOffline = () => {
+    setLogs((prev) => [
+      ...prev,
+      "=== FALLBACK TO OFFLINE INSTALLATION ===",
+      "+ Remote package download skipped.",
+      "+ Switching to verified bundled packages from live USB media /dev/sdb.",
+    ]);
+    setDiagnosticCard(null);
+    setStage("select");
+  };
+
   const handleRestart = () => {
-    // Section 24: Reboot Safety Gate
     if (stage !== "complete" || progress < 100) return;
+    localStorage.removeItem(STORAGE_STATE_KEY);
     os.notify("G1OS", "Restarting", "System restart confirmed. Unplug USB media to boot into internal G1OS.", "restart");
     os.setPowerState("restarting");
     window.setTimeout(() => os.setPowerState("running"), 1600);
   };
 
   return (
-    <div className="flex h-full w-full flex-col bg-[#1c1e26] text-white select-none">
+    <div className="flex h-full w-full flex-col bg-[#1c1e26] text-white select-none relative">
+      {/* Interrupted Session Resume Modal Banner */}
+      {interruptedState && (
+        <div className="absolute top-16 left-6 right-6 z-50 rounded-xl border border-amber-500/40 bg-[#1c140a]/95 p-4 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-top-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-lg bg-amber-500/20 p-2 text-amber-400">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h4 className="text-[13.5px] font-bold text-amber-200">Interrupted Installation Session Detected</h4>
+                <p className="mt-0.5 text-[12px] text-amber-300/80 leading-relaxed">
+                  An unfinished installation run was detected at stage{" "}
+                  <span className="font-mono font-semibold text-white">{interruptedState.stage}</span> (progress:{" "}
+                  <span className="font-semibold text-white">{interruptedState.progress}%</span>) on{" "}
+                  <span className="font-mono text-white">{interruptedState.selectedDiskId}</span>.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-none">
+              <button
+                type="button"
+                onClick={handleDiscardResume}
+                className="rounded-lg border border-white/20 bg-white/5 px-3 py-1.5 text-[12px] font-medium text-white/80 hover:bg-white/10 transition-all cursor-pointer"
+              >
+                Start Fresh
+              </button>
+              <button
+                type="button"
+                onClick={handleResumeSession}
+                className="rounded-lg bg-amber-600 px-4 py-1.5 text-[12px] font-semibold text-white shadow-md hover:bg-amber-500 transition-all cursor-pointer"
+              >
+                Resume Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex h-14 flex-none items-center justify-between border-b border-white/10 bg-[#232632] px-6">
         <div className="flex items-center gap-3">
@@ -365,15 +943,24 @@ export default function InstallerApp() {
               value={scenario}
               onChange={(e) => setScenario(e.target.value as TestScenario)}
               disabled={stage === "installing" || stage === "verifying"}
-              className="bg-transparent font-medium text-blue-300 outline-none cursor-pointer"
+              className="bg-transparent font-medium text-blue-300 outline-none cursor-pointer max-w-[190px] truncate"
             >
               <option value="normal" className="bg-[#232632] text-white">Normal (100% Pass)</option>
-              <option value="failed-copy" className="bg-[#232632] text-white">Failed File Copy</option>
-              <option value="failed-bootloader" className="bg-[#232632] text-white">Failed Bootloader</option>
-              <option value="missing-driver" className="bg-[#232632] text-white">Missing Driver (GPU)</option>
-              <option value="corrupt-config" className="bg-[#232632] text-white">Corrupted Config (Auto-Repair)</option>
-              <option value="low-disk-space" className="bg-[#232632] text-white">Low Disk Space</option>
-              <option value="interrupted-install" className="bg-[#232632] text-white">Interrupted Install</option>
+              <option value="wifi-auth-fail" className="bg-[#232632] text-white">1. Wi-Fi Handshake Fail</option>
+              <option value="dhcp-lease-fail" className="bg-[#232632] text-white">2. DHCP Lease Timeout</option>
+              <option value="dns-resolution-fail" className="bg-[#232632] text-white">3. DNS SERVFAIL</option>
+              <option value="cdn-tls-fail" className="bg-[#232632] text-white">4. CDN TLS Handshake Fail</option>
+              <option value="download-sha256-corrupt" className="bg-[#232632] text-white">5. Package SHA-256 Corrupt</option>
+              <option value="target-disk-readonly" className="bg-[#232632] text-white">6. Target Disk Read-Only</option>
+              <option value="partition-table-error" className="bg-[#232632] text-white">7. Partition Geometry Error</option>
+              <option value="mkfs-format-fail" className="bg-[#232632] text-white">8. mkfs.ext4 Superblock Fail</option>
+              <option value="failed-copy" className="bg-[#232632] text-white">9. Base Copy Missing Binary</option>
+              <option value="failed-bootloader" className="bg-[#232632] text-white">10. Bootloader EFI Missing</option>
+              <option value="missing-driver" className="bg-[#232632] text-white">11. GPU Driver Missing</option>
+              <option value="corrupt-config" className="bg-[#232632] text-white">12. Corrupt fstab (Auto-Repair)</option>
+              <option value="permission-bits-broken" className="bg-[#232632] text-white">13. Permission Error (Auto-Repair)</option>
+              <option value="low-disk-space" className="bg-[#232632] text-white">14. Low Disk Space on EFI</option>
+              <option value="interrupted-install" className="bg-[#232632] text-white">15. Incomplete Marker Found</option>
             </select>
           </div>
 
@@ -446,7 +1033,7 @@ export default function InstallerApp() {
               </div>
               <h2 className="text-[20px] font-bold text-white">Target Hardware Verification</h2>
               <p className="mt-1 text-[13px] text-white/60">
-                Auditing iMac Mid-2010 compatibility, safe graphics fallback, internal storage, and offline readiness.
+                Auditing iMac Mid-2010 compatibility, safe graphics fallback, internal storage, and network options.
               </p>
             </div>
 
@@ -529,19 +1116,6 @@ export default function InstallerApp() {
                 </div>
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-medium">VERIFIED</span>
               </div>
-
-              <div className="flex items-center justify-between p-3 rounded-xl border border-blue-500/25 bg-blue-950/15">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500/20 text-blue-400">
-                    <Check size={16} />
-                  </div>
-                  <div>
-                    <div className="text-[13px] font-semibold text-white">Package Delivery &amp; Network</div>
-                    <div className="text-[11.5px] text-white/60">Self-Contained Live Base (100% Offline Capable · Zero downloads required)</div>
-                  </div>
-                </div>
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-medium">OFFLINE READY</span>
-              </div>
             </div>
 
             {/* Navigation buttons */}
@@ -556,11 +1130,245 @@ export default function InstallerApp() {
 
               <button
                 type="button"
-                onClick={() => setStage("select")}
+                onClick={() => setStage("wifi_select")}
                 className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-[13px] font-semibold text-white shadow-md hover:bg-blue-500 transition-all cursor-pointer"
               >
-                Proceed to Select Destination <ChevronRight size={15} />
+                Configure Network <ChevronRight size={15} />
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* 1.6. Wi-Fi Network Selection Screen */}
+        {stage === "wifi_select" && (
+          <div className="mx-auto max-w-xl w-full space-y-5 animate-in fade-in duration-300">
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[11px] font-semibold tracking-wide uppercase mb-2">
+                <Wifi size={14} /> Stage 2: Wi-Fi &amp; Network Setup
+              </div>
+              <h2 className="text-[20px] font-bold text-white">Select Wi-Fi Network</h2>
+              <p className="mt-1 text-[13px] text-white/60">
+                Connect to download updated packages, or select Offline Mode to install directly from the live USB.
+              </p>
+            </div>
+
+            <div className="space-y-2.5">
+              {AVAILABLE_NETWORKS.map((net) => {
+                const isSelected = selectedNetwork.ssid === net.ssid;
+                return (
+                  <div
+                    key={net.ssid}
+                    onClick={() => setSelectedNetwork(net)}
+                    className={`flex items-center justify-between p-3.5 rounded-xl border transition-all cursor-pointer ${
+                      isSelected
+                        ? "border-blue-500 bg-blue-600/15 shadow-[0_0_15px_rgba(59,130,246,0.15)] ring-1 ring-blue-500"
+                        : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white/80">
+                        {net.isOffline ? <HardDrive size={18} /> : <Wifi size={18} />}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[13.5px] font-semibold text-white">{net.ssid}</span>
+                          {net.isOffline ? (
+                            <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-300 border border-emerald-500/30">
+                              Zero Downloads Required
+                            </span>
+                          ) : (
+                            <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-mono text-white/60">
+                              {net.security} · {net.freq}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-[11.5px] text-white/50">
+                          {net.isOffline
+                            ? "Complete live filesystem image already present on bootable media"
+                            : `Signal strength: ${net.signal}% · Ready for automated multi-stage network validation`}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      {isSelected ? (
+                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500 text-white">
+                          <Check size={14} />
+                        </div>
+                      ) : (
+                        <div className="h-4 w-4 rounded-full border border-white/20" />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Navigation buttons */}
+            <div className="flex items-center justify-between pt-2">
+              <button
+                type="button"
+                onClick={() => setStage("preflight")}
+                className="flex items-center gap-1.5 text-[13px] text-white/60 hover:text-white transition-colors cursor-pointer"
+              >
+                <ArrowLeft size={15} /> Back
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedNetwork.isOffline) {
+                    setStage("select");
+                  } else if (selectedNetwork.security === "Open") {
+                    setStage("network_validating");
+                  } else {
+                    setStage("wifi_auth");
+                  }
+                }}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-[13px] font-semibold text-white shadow-md hover:bg-blue-500 transition-all cursor-pointer"
+              >
+                {selectedNetwork.isOffline ? "Proceed Offline" : "Connect & Verify"} <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 1.7. Wi-Fi Authentication Screen */}
+        {stage === "wifi_auth" && (
+          <div className="mx-auto max-w-md w-full space-y-6 animate-in fade-in duration-300">
+            <div>
+              <h2 className="text-[20px] font-bold text-white">Join “{selectedNetwork.ssid}”</h2>
+              <p className="mt-1 text-[13px] text-white/60">
+                Enter the WPA2/WPA3 Pre-Shared Key for this Wi-Fi network.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-4">
+              <div>
+                <label className="block text-[12px] font-medium text-white/70 mb-1.5">
+                  Network Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={wifiPassword}
+                    onChange={(e) => setWifiPassword(e.target.value)}
+                    className="w-full rounded-lg border border-white/20 bg-black/40 px-3 py-2 text-[13px] text-white placeholder-white/30 focus:border-blue-500 focus:outline-none"
+                    placeholder="Enter password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2.5 top-2.5 text-[11px] text-blue-400 hover:text-blue-300 cursor-pointer"
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-[11.5px] text-white/50">
+                <Lock size={13} className="text-emerald-400" />
+                <span>Protected with WPA2-Personal (AES-CCMP)</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              <button
+                type="button"
+                onClick={() => setStage("wifi_select")}
+                className="flex items-center gap-1.5 text-[13px] text-white/60 hover:text-white transition-colors cursor-pointer"
+              >
+                <ArrowLeft size={15} /> Back
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStage("network_validating")}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-[13px] font-semibold text-white shadow-md hover:bg-blue-500 transition-all cursor-pointer"
+              >
+                Join Network <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 1.8. Network Validation Screen */}
+        {stage === "network_validating" && (
+          <div className="mx-auto max-w-lg w-full space-y-6 animate-in fade-in duration-300">
+            <div className="text-center space-y-1.5">
+              <div className="inline-block animate-spin text-blue-400">
+                <RotateCw size={32} />
+              </div>
+              <h2 className="text-[20px] font-bold text-white">Validating Network Connection</h2>
+              <p className="text-[13px] text-white/60">
+                Testing link, DHCP lease, DNS resolution, and package CDN reachability...
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+              {networkValidationSteps.map((step, idx) => (
+                <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-black/20 text-[12.5px]">
+                  <div className="flex items-center gap-2.5">
+                    {step.status === "pass" ? (
+                      <Check size={15} className="text-emerald-400 flex-none" />
+                    ) : step.status === "fail" ? (
+                      <XCircle size={15} className="text-red-400 flex-none" />
+                    ) : (
+                      <RotateCw size={14} className="text-blue-400 animate-spin flex-none" />
+                    )}
+                    <span className="font-medium text-white/90">{step.label}</span>
+                  </div>
+                  <span className="text-[11px] font-mono text-white/50">{step.detail}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={handleFallbackOffline}
+                className="text-[12px] text-white/50 hover:text-white underline cursor-pointer"
+              >
+                Skip and continue using bundled offline packages
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 1.9. Package Downloading Screen */}
+        {stage === "downloading" && (
+          <div className="mx-auto max-w-lg w-full space-y-6 animate-in fade-in duration-300">
+            <div className="text-center space-y-1.5">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-blue-500/20 text-blue-400">
+                <DownloadCloud size={24} />
+              </div>
+              <h2 className="text-[20px] font-bold text-white">Downloading G1OS Packages</h2>
+              <p className="text-[13px] text-blue-300 font-medium">{downloadPhase}</p>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="space-y-2">
+              <div className="flex justify-between text-[12px] font-medium text-white/70">
+                <span className="text-blue-400 font-mono">{downloadTransferred}</span>
+                <span className="font-mono text-white">{downloadProgress}%</span>
+              </div>
+
+              <div className="h-2.5 w-full overflow-hidden rounded-full bg-white/10 p-0.5">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-200"
+                  style={{ width: `${downloadProgress}%` }}
+                />
+              </div>
+
+              <div className="flex justify-between text-[11px] font-mono text-white/50 pt-1">
+                <span>Speed: {downloadSpeed}</span>
+                <span>ETA: {downloadEta}</span>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-[11.5px] text-white/60 space-y-1">
+              <div>✓ Release Mirror: <span className="font-mono text-white/80">cdn.g1os.org/v1</span> (TLS 1.3 encrypted)</div>
+              <div>✓ SHA-256 verification active on complete archive stream</div>
             </div>
           </div>
         )}
@@ -569,6 +1377,9 @@ export default function InstallerApp() {
         {stage === "select" && (
           <div className="mx-auto max-w-2xl w-full space-y-6 animate-in fade-in duration-300">
             <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[11px] font-semibold tracking-wide uppercase mb-2">
+                <HardDrive size={14} /> Stage 3: Destination Storage
+              </div>
               <h2 className="text-[20px] font-bold text-white">Choose Where to Install G1OS</h2>
               <p className="mt-1 text-[13px] text-white/60">
                 Live USB media is automatically protected and excluded. Select the internal drive.
@@ -651,7 +1462,7 @@ export default function InstallerApp() {
             <div className="flex items-center justify-between pt-2">
               <button
                 type="button"
-                onClick={() => setStage("welcome")}
+                onClick={() => setStage("wifi_select")}
                 className="flex items-center gap-1.5 text-[13px] text-white/60 hover:text-white transition-colors cursor-pointer"
               >
                 <ArrowLeft size={15} /> Back
@@ -745,7 +1556,7 @@ export default function InstallerApp() {
                     : "bg-white/10 text-white/30 cursor-not-allowed"
                 }`}
               >
-                Erase & Install G1OS <ChevronRight size={15} />
+                Erase &amp; Install G1OS <ChevronRight size={15} />
               </button>
             </div>
           </div>
@@ -799,7 +1610,7 @@ export default function InstallerApp() {
               >
                 <span className="flex items-center gap-2">
                   <Terminal size={14} className="text-blue-400" />
-                  Installation Activity & Logs
+                  Installation Activity &amp; Logs
                 </span>
                 <span className="flex items-center gap-1 text-[11px] text-blue-400">
                   {showLogs ? "Hide details" : "Show live log"}
@@ -851,7 +1662,7 @@ export default function InstallerApp() {
             {/* Live 16-Domain Verification Checklist Grid */}
             <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3.5 max-h-56 overflow-y-auto space-y-2">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-white/50 px-1">
-                Integrity & Bootability Domains (16 Checks)
+                Integrity &amp; Bootability Domains (16 Checks)
               </div>
               <div className="grid grid-cols-2 gap-2 text-[12px]">
                 {checks.map((chk) => (
@@ -1029,57 +1840,103 @@ export default function InstallerApp() {
           </div>
         )}
 
-        {/* 8. Section 20: Failure Summary Screen with Automatic Repair */}
+        {/* 8. Section 20: Failure Summary Screen with Automatic Repair and Rich Diagnostic Card */}
         {stage === "error" && (
-          <div className="mx-auto max-w-lg w-full py-6 text-center space-y-5 animate-in fade-in duration-300">
-            <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-red-500/20 text-red-400 ring-8 ring-red-500/10">
-              <XCircle size={38} />
+          <div className="mx-auto max-w-xl w-full py-4 text-center space-y-5 animate-in fade-in duration-300">
+            <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-red-500/20 text-red-400 ring-8 ring-red-500/10">
+              <XCircle size={34} />
             </div>
 
             <div>
               <h2 className="text-[20px] font-bold text-white">Installation Could Not Be Completed</h2>
-              <div className="mt-2 inline-flex items-center gap-2 rounded-lg bg-red-500/20 px-3.5 py-1.5 border border-red-500/30 text-red-300 font-semibold text-[13px]">
-                <span>✗ {failureInfo?.title || "Verification failed"}</span>
-              </div>
-              <p className="mt-2 text-[12.5px] leading-relaxed text-red-200/80 max-w-md mx-auto">
-                {failureInfo?.message || "A mandatory pre-flight verification check returned an error."}
+              <p className="mt-1 text-[12.5px] text-red-300/80 max-w-md mx-auto">
+                A verification or execution pre-condition failed. The No-Break Guarantee has halted progress to protect hardware.
               </p>
             </div>
 
+            {/* Rich Diagnostic Card (§25 Acceptance Test Format) */}
+            {diagnosticCard && (
+              <div className="rounded-xl border border-red-500/30 bg-[#251314]/90 p-4 text-left shadow-lg space-y-2.5">
+                <div className="flex items-center justify-between border-b border-red-500/20 pb-2">
+                  <div className="flex items-center gap-2 text-[12.5px] font-bold text-red-200">
+                    <AlertTriangle size={15} className="text-red-400" />
+                    <span>DIAGNOSTIC CARD: {diagnosticCard.phase}</span>
+                  </div>
+                  <span className="rounded bg-red-500/25 px-2 py-0.5 font-mono text-[10px] font-bold text-red-300 border border-red-500/30">
+                    STATUS: {diagnosticCard.status} (exit {diagnosticCard.exitCode})
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11.5px] text-white/70">
+                  <div><span className="text-white/40">Sub-phase:</span> <span className="text-white font-medium">{diagnosticCard.subPhase}</span></div>
+                  <div><span className="text-white/40">Elapsed:</span> <span className="text-white font-medium">{diagnosticCard.elapsed}</span></div>
+                </div>
+
+                <div className="text-[11.5px]">
+                  <span className="text-white/40">Action:</span>{" "}
+                  <span className="text-white/90">{diagnosticCard.action}</span>
+                </div>
+
+                <div className="rounded-lg bg-black/60 p-2 font-mono text-[11px] text-amber-300/90 break-all border border-white/5">
+                  <span className="text-white/40">$ </span>{diagnosticCard.command}
+                </div>
+
+                <div className="rounded-lg bg-red-950/40 p-2.5 border border-red-500/20 text-[11.5px] text-red-200">
+                  <div className="font-semibold text-red-300 mb-0.5">Error Detail:</div>
+                  <div className="leading-relaxed">{diagnosticCard.error}</div>
+                </div>
+
+                <div className="rounded-lg bg-emerald-950/30 p-2.5 border border-emerald-500/20 text-[11.5px] text-emerald-200">
+                  <div className="font-semibold text-emerald-300 mb-0.5">Suggested Recovery:</div>
+                  <div className="leading-relaxed">{diagnosticCard.recovery}</div>
+                </div>
+              </div>
+            )}
+
             {/* Error Log Box */}
-            <div className="rounded-xl border border-red-500/20 bg-black/60 p-3.5 text-left font-mono text-[11px] text-red-300/90 h-32 overflow-y-auto space-y-1">
+            <div className="rounded-xl border border-red-500/20 bg-black/60 p-3 text-left font-mono text-[11px] text-red-300/90 h-28 overflow-y-auto space-y-1">
               {logs.slice(-6).map((l, i) => (
                 <div key={i} className="leading-relaxed">{l}</div>
               ))}
             </div>
 
-            {/* Section 20 & 21: Action buttons: [Retry] [Repair] [View Details] */}
-            <div className="flex items-center justify-center gap-3 pt-2">
+            {/* Action buttons: [Retry] [Repair] [Fallback to Offline] [View Details] */}
+            <div className="flex items-center justify-center gap-2.5 pt-1">
               <button
                 type="button"
                 onClick={handleRetry}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-white/20 transition-all cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 px-4 py-2 text-[12.5px] font-semibold text-white hover:bg-white/20 transition-all cursor-pointer"
               >
-                <RotateCw size={14} /> Retry
+                <RotateCw size={13} /> Retry Stage
               </button>
 
-              {failureInfo?.canRepair ? (
+              {diagnosticCard?.canFallbackOffline && (
+                <button
+                  type="button"
+                  onClick={handleFallbackOffline}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-[12.5px] font-semibold text-white shadow-md hover:bg-blue-500 transition-all cursor-pointer"
+                >
+                  <HardDrive size={13} /> Continue in Offline Mode
+                </button>
+              )}
+
+              {diagnosticCard?.canAutoRepair && (
                 <button
                   type="button"
                   onClick={handleRepair}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-6 py-2.5 text-[13px] font-semibold text-white shadow-lg shadow-emerald-900/40 hover:bg-emerald-500 transition-all cursor-pointer"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2 text-[12.5px] font-semibold text-white shadow-lg shadow-emerald-900/40 hover:bg-emerald-500 transition-all cursor-pointer"
                 >
-                  <ShieldCheck size={14} /> Automatic Repair & Re-Verify
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowLogs(!showLogs)}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-white/20 px-5 py-2.5 text-[13px] font-medium text-white/80 hover:bg-white/10 transition-all cursor-pointer"
-                >
-                  <Terminal size={14} /> {showLogs ? "Hide Details" : "View Details"}
+                  <ShieldCheck size={14} /> Automatic Repair &amp; Re-Verify
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => setShowLogs(!showLogs)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-white/20 px-3.5 py-2 text-[12.5px] font-medium text-white/80 hover:bg-white/10 transition-all cursor-pointer"
+              >
+                <Terminal size={13} /> {showLogs ? "Hide Logs" : "Logs"}
+              </button>
             </div>
 
             <p className="text-[11px] text-white/40">
