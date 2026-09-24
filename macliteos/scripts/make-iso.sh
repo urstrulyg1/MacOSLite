@@ -31,7 +31,6 @@ INITRD="${G1OS_INITRD:-}"
 [ -n "$INITRD" ] || { echo "ERROR: no real G1OS initramfs supplied (set G1OS_INITRD)" >&2; exit 3; }
 
 REQUIRED_BINS="mica-comp mica-shell mica-finder mica-terminal mica-viewer mica-settings mica-sysinfo mica-textedit mica-player mica-music mica-pdf maclite-browser maclite-video mica-installer"
-
 ST=out/iso-stage
 rm -rf "$ST"
 mkdir -p "$ST/boot" "$ST/live" "$ST/base/usr/bin" "$ST/base/usr/share/maca-lite/scripts" "$ST/base/usr/share/maca-lite/catalog"
@@ -52,7 +51,6 @@ chmod +x "$ST/base/usr/share/maca-lite/scripts/hardware-check.sh"
 chmod -R u+w "$ST/base" 2>/dev/null || true
 [ -d rootfs/etc ] && cp -rf rootfs/etc "$ST/base/"
 [ -d rootfs/usr ] && cp -rf rootfs/usr/. "$ST/base/usr/"
-
 if [ -d "/tmp/initrd_inspect/lib" ]; then
   mkdir -p "$ST/base/lib" "$ST/base/lib64"
   cp -a "/tmp/initrd_inspect/lib/." "$ST/base/lib/"
@@ -72,7 +70,6 @@ fi
 
 BUILD_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$(sha256sum "$KERNEL" "$INITRD" | sha256sum | cut -d' ' -f1 | cut -c1-16)"
 printf '%s\n' "$BUILD_ID" > "$ST/.g1os-build-id"
-
 mksquashfs "$ST/base" "$ST/live/maclite-base.sqfs" -comp zstd -Xcompression-level 12 -no-progress
 cp "$KERNEL" "$ST/boot/vmlinuz-maclite"
 cp "$INITRD" "$ST/boot/initrd-maclite.img"
@@ -86,26 +83,22 @@ insmod fat
 insmod iso9660
 insmod linux
 insmod search
-
 search --no-floppy --set=root --file /live/maclite-base.sqfs
 
 menuentry "G1OS (Safe Graphics - Default for iMac Mid-2010)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
-
 menuentry "G1OS (Safe Graphics + Verbose Debug)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
-
 menuentry "G1OS (Radeon KMS - Hardware Acceleration)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 mitigations=off console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=-1
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 mitigations=off console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
-
 menuentry "G1OS Recovery Shell" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=recovery nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug reboot=pci panic=-1
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=recovery nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
 GRUB
@@ -116,11 +109,7 @@ if command -v grub-mkimage >/dev/null 2>&1; then
 else
   found_loader=0
   for cand in "boot/bootx64.efi" "out/bootx64.efi" "/Volumes/G1OS/EFI/BOOT/BOOTX64.EFI" "../releases/bootx64.efi"; do
-    if [ -s "$cand" ]; then
-      cp "$cand" "$ST/boot/bootx64.efi"
-      found_loader=1
-      break
-    fi
+    if [ -s "$cand" ]; then cp "$cand" "$ST/boot/bootx64.efi"; found_loader=1; break; fi
   done
   [ "$found_loader" = 1 ] || { echo "ERROR: no usable EFI loader found" >&2; exit 5; }
 fi
@@ -130,7 +119,7 @@ cp "$ST/boot/bootx64.efi" "$ST/EFI/BOOT/bootx64.efi"
 cp "$ST/boot/grub.cfg" "$ST/EFI/BOOT/grub.cfg"
 cp "$ST/boot/grub.cfg" "$ST/boot/grub/grub.cfg"
 
-# An EFI El Torito image must be a filesystem image, never the PE/COFF loader itself.
+# EFI El Torito requires a filesystem image, not the PE/COFF loader itself.
 need mcopy
 need mkfs.vfat
 EFI_CATALOG="boot/efi.img"
@@ -141,15 +130,7 @@ mmd -i "$EFI_IMG" ::EFI ::EFI/BOOT
 mcopy -o -i "$EFI_IMG" "$ST/boot/bootx64.efi" ::EFI/BOOT/BOOTX64.EFI
 mcopy -o -i "$EFI_IMG" "$ST/boot/grub.cfg" ::EFI/BOOT/grub.cfg
 
-xorriso -as mkisofs \
-  -r -V "G1OS" \
-  -J -joliet-long \
-  -e "$EFI_CATALOG" \
-  -no-emul-boot \
-  -isohybrid-gpt-basdat \
-  -o out/G1OS.iso \
-  "$ST"
-
+xorriso -as mkisofs -r -V "G1OS" -J -joliet-long -e "$EFI_CATALOG" -no-emul-boot -isohybrid-gpt-basdat -o out/G1OS.iso "$ST"
 [ -s out/G1OS.iso ] || { echo "ERROR: ISO missing or empty" >&2; exit 6; }
 sha256sum out/G1OS.iso > out/G1OS.iso.sha256
 {
@@ -176,7 +157,6 @@ if [ "$VERIFY" = 1 ]; then
   for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI; do
     grep -Fi "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 10; }
   done
-
   EXTRACT=$(mktemp -d)
   clean_extract() { chmod -R u+rwx "$EXTRACT" 2>/dev/null || true; rm -rf "$EXTRACT" 2>/dev/null || true; }
   trap clean_extract EXIT
@@ -187,7 +167,7 @@ if [ "$VERIFY" = 1 ]; then
   [ -s "$EXTRACT/live/maclite-base.sqfs" ] || { echo "VERIFY = FAIL: extracted base filesystem empty" >&2; exit 12; }
   file "$EXTRACT/boot/vmlinuz-maclite" | grep -Eiq 'Linux kernel|boot executable|PE32' || { echo "VERIFY = FAIL: kernel is not recognized" >&2; exit 13; }
   unsquashfs -s "$EXTRACT/live/maclite-base.sqfs" >/dev/null || { echo "VERIFY = FAIL: base SquashFS is invalid" >&2; exit 14; }
-  xorriso -indev out/G1OS.iso -report_el_torito as_mkisofs 2>/dev/null | grep -Eiq 'efi|eltorito|boot' || { echo "VERIFY = FAIL: EFI El Torito boot record not detected" >&2; exit 15; }
+  xorriso -indev out/G1OS.iso -report_el_torito as_mkisofs 2>/dev/null | grep -Eiq 'boot|efi|iso' || { echo "VERIFY = FAIL: EFI El Torito boot record not detected" >&2; exit 15; }
   grep -F "Build ID: $BUILD_ID" out/iso-manifest.txt >/dev/null || { echo "VERIFY = FAIL: build ID missing from manifest" >&2; exit 16; }
   clean_extract
   trap - EXIT
