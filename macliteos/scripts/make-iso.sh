@@ -76,7 +76,18 @@ for b in $REQUIRED_BINS; do
   cp "out/$b" "$ST/base/usr/bin/$b"
 done
 
-BUILD_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$(sha256sum "$KERNEL" "$INITRD" $(for b in $REQUIRED_BINS; do printf 'out/%s ' "$b"; done) | sha256sum | cut -d' ' -f1 | cut -c1-16)"
+# Build a deterministic manifest of the exact input files without relying on
+# unquoted word splitting. This is both ShellCheck-clean and robust to paths
+# containing whitespace in future build environments.
+BUILD_INPUT_LIST=$(mktemp)
+cleanup_build_input_list() { rm -f "$BUILD_INPUT_LIST"; }
+trap cleanup_build_input_list EXIT
+printf '%s\n' "$KERNEL" "$INITRD" > "$BUILD_INPUT_LIST"
+for b in $REQUIRED_BINS; do
+  printf '%s\n' "out/$b" >> "$BUILD_INPUT_LIST"
+done
+BUILD_INPUT_HASH="$(while IFS= read -r input; do sha256sum "$input"; done < "$BUILD_INPUT_LIST" | sha256sum | cut -d' ' -f1 | cut -c1-16)"
+BUILD_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$BUILD_INPUT_HASH"
 printf '%s\n' "$BUILD_ID" > "$ST/.g1os-build-id"
 
 # Record the exact binaries used to assemble this image. This makes stale ISO
