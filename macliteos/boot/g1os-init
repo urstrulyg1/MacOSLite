@@ -1,0 +1,181 @@
+#!/bin/sh
+# G1OS PID 1 for the live/install environment.
+# Fail-closed: critical failures are displayed/logged and never become an
+# automatic reboot or a silent terminal fallback.
+set -eu
+
+LOG=/run/g1os-boot.log
+STATE=/run/g1os-boot-state
+mkdir -p /run /run/live /run/maclite-base /run/g1os /tmp/macliteos-0
+: > "$LOG"
+: > "$STATE"
+export XDG_RUNTIME_DIR=/tmp/macliteos-0
+
+emit() {
+    msg="$*"
+    printf '%s\n' "$msg" >> "$LOG"
+    if [ -e /dev/console ]; then printf '%s\n' "$msg" >/dev/console 2>/dev/null || true; fi
+    if [ -e /dev/ttyS0 ]; then printf '%s\n' "$msg" >/dev/ttyS0 2>/dev/null || true; fi
+}
+status() {
+    state="$1"; shift
+    printf '%s|%s\n' "$state" "$*" >> "$STATE"
+    emit "[$state] $*"
+}
+fatal() {
+    emit ""
+    emit "============================================================"
+    emit "[FAIL] $*"
+    emit "[FAIL] G1OS will NOT reboot automatically."
+    emit "[FAIL] Boot log: /run/g1os-boot.log"
+    emit "[FAIL] Inspect with: dmesg | tail -200"
+    emit "============================================================"
+    while :; do /bin/sh </dev/console >/dev/console 2>&1 || /bin/sh || sleep 2; done
+}
+
+mount -t proc proc /proc || fatal "cannot mount /proc"
+mount -t sysfs sysfs /sys || fatal "cannot mount /sys"
+if ! mount -t devtmpfs devtmpfs /dev 2>/dev/null; then
+    mount -t tmpfs -o mode=0755 tmpfs /dev || fatal "cannot mount /dev"
+fi
+CMDLINE=$(cat /proc/cmdline 2>/dev/null || true)
+status OK "Kernel started"
+status OK "Initrd entrypoint /init started"
+emit "Kernel command line: $CMDLINE"
+SAFE=0
+case " $CMDLINE " in *nomodeset*|*radeon.modeset=0*|*maclite.gl=off*) SAFE=1 ;; esac
+if [ "$SAFE" = 1 ]; then
+    status OK "Safe Graphics selected (EFI framebuffer / software compositor)"
+else
+    status OK "Normal Graphics selected (Radeon KMS requested)"
+fi
+for mod in tg3 b43 snd-hda-intel; do
+    if modprobe "$mod" >/dev/null 2>&1; then
+        status OK "Kernel module loaded: $mod"
+    else
+        emit "[WARN] Kernel module unavailable: $mod (not required to reach installer)"
+    fi
+done
+case " $CMDLINE " in
+    *rd.maclite=recovery*)
+        status OK "Recovery mode requested"
+        emit "Run maclite-hardware or maclite-install from this shell."
+        while :; do /bin/sh </dev/console >/dev/console 2>&1 || sleep 2; done
+        ;;
+esac
+ROOT_DEV=""
+for param in $CMDLINE; do
+    case "$param" in
+        root=UUID=*) ROOT_DEV=$(blkid -U "${param#root=UUID=}" 2>/dev/null || true) ;;
+        root=PARTUUID=*) ROOT_DEV=$(blkid -t PARTUUID="${param#root=PARTUUID=}" -o device 2>/dev/null || true) ;;
+        root=/dev/*) ROOT_DEV=${param#root=} ;;
+    esac
+done
+if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
+    status OK "Installed root resolved: $ROOT_DEV"
+    mount "$ROOT_DEV" /mnt || fatal "cannot mount installed root $ROOT_DEV"
+    [ -x /mnt/usr/bin/mica-comp ] || fatal "installed root is missing /usr/bin/mica-comp"
+    mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run
+    mount --bind /dev /mnt/dev || fatal "cannot bind /dev into installed root"
+    mount -t proc proc /mnt/proc || fatal "cannot mount /proc in installed root"
+    mount -t sysfs sysfs /mnt/sys || fatal "cannot mount /sys in installed root"
+    mount -t tmpfs -o mode=0755 tmpfs /mnt/run || fatal "cannot mount /run in installed root"
+    status OK "Installed root filesystem verified"
+    BACKEND=auto
+    [ "$SAFE" = 1 ] && BACKEND=fbdev
+    status OK "Starting installed G1OS compositor ($BACKEND)"
+    exec chroot /mnt /usr/bin/mica-comp --session --backend "$BACKEND"
+fi
+status OK "Live-boot path selected"
+emit "Locating G1OS live installation media..."
+LIVE_DEV=""
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    for dev in /dev/sd[a-z] /dev/sd[a-z][0-9]* /dev/nvme*n1 /dev/nvme*n1p* /dev/mmcblk* /dev/sr*; do
+        [ -b "$dev" ] || continue
+        umount /run/g1os-probe 2>/dev/null || true
+        mkdir -p /run/g1os-probe
+        if mount -o ro "$dev" /run/g1os-probe 2>/dev/null; then
+            if [ -s /run/g1os-probe/live/maclite-base.sqfs ]; then
+                LIVE_DEV="$dev"
+                umount /run/g1os-probe 2>/dev/null || true
+                break 2
+            fi
+            umount /run/g1os-probe 2>/dev/null || true
+        fi
+    done
+    emit "[WAIT] live media probe ${attempt}/15"
+    sleep 1
+done
+[ -n "$LIVE_DEV" ] || fatal "G1OS live media not found after 15 seconds"
+status OK "Live installation media found: $LIVE_DEV"
+mount -o ro "$LIVE_DEV" /run/live || fatal "cannot mount live media $LIVE_DEV"
+[ -s /run/live/live/maclite-base.sqfs ] || fatal "live/maclite-base.sqfs is missing or empty"
+[ -s /run/live/.g1os-build-id ] && status OK "Booting build ID: $(cat /run/live/.g1os-build-id)"
+status OK "Live SquashFS located"
+mount -t squashfs -o ro,loop /run/live/live/maclite-base.sqfs /run/maclite-base || fatal "cannot mount live SquashFS (loop/squashfs path failed)"
+status OK "Live base filesystem mounted"
+if [ -d /run/maclite-base/etc ]; then cp -a /run/maclite-base/etc/. /etc/ || fatal "cannot import base /etc"; fi
+if [ -d /run/maclite-base/usr/share ]; then mkdir -p /usr/share; cp -a /run/maclite-base/usr/share/. /usr/share/ || fatal "cannot import base /usr/share"; fi
+export PATH=/usr/bin:/bin:/sbin:/usr/sbin
+export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/run/maclite-base/lib:/run/maclite-base/lib64:/run/maclite-base/usr/lib
+[ -x /usr/bin/mica-comp ] || fatal "graphical compositor /usr/bin/mica-comp is missing"
+[ -x /usr/bin/mica-installer ] || fatal "graphical installer /usr/bin/mica-installer is missing"
+[ -x /usr/bin/g1os-ui-health ] || fatal "graphical UI health probe is missing"
+[ -x /usr/bin/maclite-installer-backend ] || fatal "installer backend is missing"
+BACKEND=auto
+if [ "$SAFE" = 1 ]; then BACKEND=fbdev; export MICA_GL=off; fi
+status OK "Graphical installer runtime present"
+status RUNNING "Starting compositor ($BACKEND)"
+MICA_LOG=/run/g1os/mica-comp.log
+export MICA_LOG
+# Installer boot intentionally does NOT use --session: the desktop/panel/dock
+# are not the installer UI. The installer must be the first application window.
+/usr/bin/mica-comp --backend "$BACKEND" >>"$MICA_LOG" 2>&1 &
+COMP_PID=$!
+printf '%s\n' "$COMP_PID" > /run/g1os/compositor.pid
+SOCK="$XDG_RUNTIME_DIR/mica-comp.sock"
+READY=0
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if [ -S "$SOCK" ]; then READY=1; break; fi
+    if ! kill -0 "$COMP_PID" 2>/dev/null; then
+        wait "$COMP_PID" || true
+        fatal "compositor exited before creating IPC socket; see $MICA_LOG"
+    fi
+    emit "[WAIT] compositor initialization ${i}/20"
+    sleep 1
+done
+[ "$READY" = 1 ] || fatal "compositor did not become ready within 20 seconds; see $MICA_LOG"
+status OK "Compositor IPC endpoint ready: $SOCK"
+status RUNNING "Starting graphical G1OS installer"
+export MICA_LOG=/run/g1os/mica-installer.log
+: > "$MICA_LOG"
+/usr/bin/mica-installer >>"$MICA_LOG" 2>&1 &
+INSTALL_PID=$!
+printf '%s\n' "$INSTALL_PID" > /run/g1os/installer.pid
+UI_READY=0
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
+        RC=0
+        wait "$INSTALL_PID" || RC=$?
+        fatal "graphical installer exited during startup (exit code $RC); see $MICA_LOG"
+    fi
+    if /usr/bin/g1os-ui-health >>/run/g1os/ui-health.log 2>&1; then UI_READY=1; break; fi
+    emit "[WAIT] graphical installer surface/health ${i}/10"
+    sleep 1
+done
+[ "$UI_READY" = 1 ] || fatal "graphical installer is alive but its compositor surface is not healthy; see /run/g1os/ui-health.log and $MICA_LOG"
+status OK "Graphical installer ready: compositor responsive and installer surface present"
+while :; do
+    if ! kill -0 "$COMP_PID" 2>/dev/null; then
+        RC=1; wait "$COMP_PID" || RC=$?
+        fatal "compositor crashed/exited (exit code $RC); see $MICA_LOG"
+    fi
+    if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
+        RC=0; wait "$INSTALL_PID" || RC=$?
+        if [ "$RC" -ne 0 ]; then fatal "graphical installer exited with error code $RC; see /run/g1os/mica-installer.log"; fi
+        status OK "Graphical installer exited normally"
+        emit "[INFO] Returning to rescue shell; no automatic reboot will occur."
+        while :; do /bin/sh </dev/console >/dev/console 2>&1 || sleep 2; done
+    fi
+    sleep 1
+done

@@ -1,7 +1,11 @@
-# Minimal repository-resident initramfs content. Generated kernel modules and
-# static BusyBox are injected by scripts/make-initrd.sh from explicit build outputs.
+# Runtime components required before and during the live graphical installer.
+# Kernel modules and static BusyBox are injected by scripts/make-initrd.sh.
 /usr/bin/mica-comp
 /usr/bin/mica-shell
+/usr/bin/mica-installer
+/usr/bin/g1os-ui-health
+/usr/bin/maclite-install
+/usr/bin/maclite-installer-backend
 /usr/bin/g1os-splash
 /etc/maca-lite/mode
 /etc/modprobe.d/maclite-apple.conf

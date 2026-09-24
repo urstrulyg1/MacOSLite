@@ -30,37 +30,33 @@ INITRD="${G1OS_INITRD:-}"
 [ -n "$KERNEL" ] || { echo "ERROR: no real G1OS kernel image supplied (set G1OS_KERNEL)" >&2; exit 3; }
 [ -n "$INITRD" ] || { echo "ERROR: no real G1OS initramfs supplied (set G1OS_INITRD)" >&2; exit 3; }
 
+# Required runtime binaries MUST come from the current build output. Never
+# silently replace a fresh binary with a tracked/rootfs copy later in staging.
 REQUIRED_BINS="mica-comp mica-shell mica-finder mica-terminal mica-viewer mica-settings mica-sysinfo mica-textedit mica-player mica-music mica-pdf maclite-browser maclite-video mica-installer"
-
 ST=out/iso-stage
 rm -rf "$ST"
 mkdir -p "$ST/boot" "$ST/live" "$ST/base/usr/bin" "$ST/base/usr/share/maca-lite/scripts" "$ST/base/usr/share/maca-lite/catalog"
 for b in $REQUIRED_BINS; do
-  src=""
-  for cand in "out/$b" "rootfs/usr/bin/$b" "/Volumes/G1OS/base/usr/bin/$b" "/tmp/initrd_inspect/usr/bin/$b"; do
-    if [ -x "$cand" ]; then src="$cand"; break; fi
-  done
-  [ -n "$src" ] || { echo "ERROR: required binary missing: $b" >&2; exit 4; }
+  src="out/$b"
+  [ -x "$src" ] || { echo "ERROR: current build output missing required binary: $src" >&2; exit 4; }
   cp "$src" "$ST/base/usr/bin/"
 done
+
+# Static installer helpers/resources are sourced from version-controlled files.
 cp installer/maclite-install "$ST/base/usr/bin/"
 cp installer/maclite-installer-backend "$ST/base/usr/bin/"
 chmod +x "$ST/base/usr/bin/maclite-install" "$ST/base/usr/bin/maclite-installer-backend"
 cp scripts/hardware-check.sh "$ST/base/usr/share/maca-lite/scripts/"
 chmod +x "$ST/base/usr/share/maca-lite/scripts/hardware-check.sh"
 [ -f drivers/catalog/maclite-offline.cat ] && cp drivers/catalog/maclite-offline.cat "$ST/base/usr/share/maca-lite/catalog/"
-chmod -R u+w "$ST/base" 2>/dev/null || true
-[ -d rootfs/etc ] && cp -rf rootfs/etc "$ST/base/"
-[ -d rootfs/usr ] && cp -rf rootfs/usr/. "$ST/base/usr/"
 
-# Copy runtime libraries and BusyBox into base SquashFS to guarantee self-contained execution
+# Copy static rootfs configuration/data first. Binary paths are restored from
+# the current out/ build afterwards so rootfs cannot overwrite fresh binaries.
+[ -d rootfs/etc ] && cp -rf rootfs/etc "$ST/base/"
+[ -d rootfs/usr/share ] && cp -rf rootfs/usr/share "$ST/base/usr/"
 if [ -d "/tmp/initrd_inspect/lib" ]; then
   mkdir -p "$ST/base/lib" "$ST/base/lib64"
   cp -a "/tmp/initrd_inspect/lib/." "$ST/base/lib/"
-  if [ -d "/tmp/initrd_inspect/lib/x86_64-linux-gnu" ]; then
-    mkdir -p "$ST/base/lib/x86_64-linux-gnu"
-    cp -a "/tmp/initrd_inspect/lib/x86_64-linux-gnu/." "$ST/base/lib/x86_64-linux-gnu/"
-  fi
 fi
 if [ -d "/tmp/initrd_inspect/lib64" ]; then
   mkdir -p "$ST/base/lib64"
@@ -71,9 +67,26 @@ if [ -s "/tmp/initrd_inspect/bin/busybox" ]; then
   cp "/tmp/initrd_inspect/bin/busybox" "$ST/base/bin/busybox"
   chmod +x "$ST/base/bin/busybox"
   for applet in sh bash cat ls cp mv rm mount umount mkdir grep sed awk sleep; do
-    ln -sf /bin/busybox "$ST/base/bin/$applet" 2>/dev/null || true
+    ln -sf /bin/busybox "$ST/base/bin/$applet"
   done
 fi
+
+# Re-apply the current build outputs after rootfs/usr was copied.
+for b in $REQUIRED_BINS; do
+  cp "out/$b" "$ST/base/usr/bin/$b"
+done
+
+BUILD_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$(sha256sum "$KERNEL" "$INITRD" $(for b in $REQUIRED_BINS; do printf 'out/%s ' "$b"; done) | sha256sum | cut -d' ' -f1 | cut -c1-16)"
+printf '%s\n' "$BUILD_ID" > "$ST/.g1os-build-id"
+
+# Record the exact binaries used to assemble this image. This makes stale ISO
+# provenance detectable from the extracted filesystem rather than by filename.
+{
+  echo "G1OS runtime binary provenance"
+  for b in $REQUIRED_BINS; do
+    printf '%s  %s\n' "$(sha256sum "out/$b" | cut -d' ' -f1)" "$b"
+  done
+} > "$ST/base/usr/share/maca-lite/runtime-provenance.sha256"
 
 mksquashfs "$ST/base" "$ST/live/maclite-base.sqfs" -comp zstd -Xcompression-level 12 -no-progress
 cp "$KERNEL" "$ST/boot/vmlinuz-maclite"
@@ -88,26 +101,23 @@ insmod fat
 insmod iso9660
 insmod linux
 insmod search
-
 search --no-floppy --set=root --file /live/maclite-base.sqfs
 
 menuentry "G1OS (Safe Graphics - Default for iMac Mid-2010)" {
-  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb:novesa fbcon=map:0 console=tty0 efi=noruntime acpi_backlight=native reboot=pci panic=0
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
-
 menuentry "G1OS (Safe Graphics + Verbose Debug)" {
-  linux /boot/vmlinuz-maclite rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb:novesa fbcon=map:0 console=tty0 efi=noruntime debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
-
 menuentry "G1OS (Radeon KMS - Hardware Acceleration)" {
-  linux /boot/vmlinuz-maclite rd.maclite=1 mitigations=off console=tty0 acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 mitigations=off console=tty0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
-
 menuentry "G1OS Recovery Shell" {
-  linux /boot/vmlinuz-maclite rd.maclite=recovery nomodeset radeon.modeset=0 video=efifb:novesa console=tty0 reboot=pci panic=0
+  search --no-floppy --set=root --file /live/maclite-base.sqfs
+  linux /boot/vmlinuz-maclite init=/init rd.maclite=recovery nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 loglevel=7 ignore_loglevel initcall_debug reboot=pci panic=-1
   initrd /boot/initrd-maclite.img
 }
 GRUB
@@ -116,12 +126,11 @@ mkdir -p "$ST/EFI/BOOT" "$ST/boot/grub"
 if command -v grub-mkimage >/dev/null 2>&1; then
   grub-mkimage -O x86_64-efi -o "$ST/boot/bootx64.efi" -p /boot part_gpt part_msdos fat iso9660 linux search normal
 else
+  found_loader=0
   for cand in "boot/bootx64.efi" "out/bootx64.efi" "/Volumes/G1OS/EFI/BOOT/BOOTX64.EFI" "../releases/bootx64.efi"; do
-    if [ -s "$cand" ]; then
-      cp "$cand" "$ST/boot/bootx64.efi"
-      break
-    fi
+    if [ -s "$cand" ]; then cp "$cand" "$ST/boot/bootx64.efi"; found_loader=1; break; fi
   done
+  [ "$found_loader" = 1 ] || { echo "ERROR: no usable EFI loader found" >&2; exit 5; }
 fi
 [ -s "$ST/boot/bootx64.efi" ] || { echo "ERROR: bootx64.efi missing or empty" >&2; exit 5; }
 cp "$ST/boot/bootx64.efi" "$ST/EFI/BOOT/BOOTX64.EFI"
@@ -129,34 +138,22 @@ cp "$ST/boot/bootx64.efi" "$ST/EFI/BOOT/bootx64.efi"
 cp "$ST/boot/grub.cfg" "$ST/EFI/BOOT/grub.cfg"
 cp "$ST/boot/grub.cfg" "$ST/boot/grub/grub.cfg"
 
-EFI_CATALOG="boot/bootx64.efi"
-EFI_IMG="$ST/boot/efi.img"
-if command -v mcopy >/dev/null 2>&1 && (command -v mkfs.vfat >/dev/null 2>&1 || command -v mformat >/dev/null 2>&1); then
-  dd if=/dev/zero of="$EFI_IMG" bs=1k count=4096 status=none 2>/dev/null || dd if=/dev/zero of="$EFI_IMG" bs=1k count=4096
-  if command -v mkfs.vfat >/dev/null 2>&1; then
-    mkfs.vfat -F 12 -n "ESP" "$EFI_IMG" >/dev/null 2>&1
-  else
-    mformat -i "$EFI_IMG" -h 64 -s 32 -t 2 -C -v "ESP" :: >/dev/null 2>&1
-  fi
-  mmd -i "$EFI_IMG" ::EFI ::EFI/BOOT 2>/dev/null || true
-  mcopy -o -i "$EFI_IMG" "$ST/boot/bootx64.efi" ::EFI/BOOT/BOOTX64.EFI
-  mcopy -o -i "$EFI_IMG" "$ST/boot/grub.cfg" ::EFI/BOOT/grub.cfg
-  EFI_CATALOG="boot/efi.img"
-fi
+need mcopy
+need mkfs.vfat
+EFI_CATALOG="boot/efi.img"
+EFI_IMG="$ST/$EFI_CATALOG"
+dd if=/dev/zero of="$EFI_IMG" bs=1k count=4096 status=none 2>/dev/null || dd if=/dev/zero of="$EFI_IMG" bs=1k count=4096
+mkfs.vfat -F 12 -n "ESP" "$EFI_IMG" >/dev/null 2>&1
+mmd -i "$EFI_IMG" ::EFI ::EFI/BOOT
+mcopy -o -i "$EFI_IMG" "$ST/boot/bootx64.efi" ::EFI/BOOT/BOOTX64.EFI
+mcopy -o -i "$EFI_IMG" "$ST/boot/grub.cfg" ::EFI/BOOT/grub.cfg
 
-xorriso -as mkisofs \
-  -r -V "G1OS" \
-  -J -joliet-long \
-  -e "$EFI_CATALOG" \
-  -no-emul-boot \
-  -isohybrid-gpt-basdat \
-  -o out/G1OS.iso \
-  "$ST"
-
-[ -s out/G1OS.iso ] || { echo "ERROR: ISO missing or empty" >&2; exit 5; }
+xorriso -as mkisofs -r -V "G1OS" -J -joliet-long -e "$EFI_CATALOG" -no-emul-boot -isohybrid-gpt-basdat -o out/G1OS.iso "$ST"
+[ -s out/G1OS.iso ] || { echo "ERROR: ISO missing or empty" >&2; exit 6; }
 sha256sum out/G1OS.iso > out/G1OS.iso.sha256
 {
   echo "G1OS ISO Build Manifest"
+  echo "Build ID: $BUILD_ID"
   echo "Build Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   echo "Kernel: $(basename "$KERNEL")"
   echo "Initramfs: $(basename "$INITRD")"
@@ -165,58 +162,50 @@ sha256sum out/G1OS.iso > out/G1OS.iso.sha256
   echo "SHA256: $(cat out/G1OS.iso.sha256)"
 } > out/iso-manifest.txt
 
-[ -s "$ST/boot/vmlinuz-maclite" ] || { echo "ERROR: staged kernel missing" >&2; exit 6; }
-[ -s "$ST/boot/initrd-maclite.img" ] || { echo "ERROR: staged initramfs missing" >&2; exit 6; }
-[ -s "$ST/live/maclite-base.sqfs" ] || { echo "ERROR: staged live base missing" >&2; exit 6; }
-[ -s "$ST/boot/bootx64.efi" ] || { echo "ERROR: staged EFI loader missing" >&2; exit 6; }
-[ -s "$ST/boot/grub.cfg" ] || { echo "ERROR: staged GRUB configuration missing" >&2; exit 6; }
+[ -s "$ST/boot/vmlinuz-maclite" ] || { echo "ERROR: staged kernel missing" >&2; exit 7; }
+[ -s "$ST/boot/initrd-maclite.img" ] || { echo "ERROR: staged initramfs missing" >&2; exit 7; }
+[ -s "$ST/live/maclite-base.sqfs" ] || { echo "ERROR: staged live base missing" >&2; exit 7; }
+[ -s "$ST/boot/bootx64.efi" ] || { echo "ERROR: staged EFI loader missing" >&2; exit 7; }
+[ -s "$ST/boot/grub.cfg" ] || { echo "ERROR: staged GRUB configuration missing" >&2; exit 7; }
 
 if [ "$VERIFY" = 1 ]; then
   echo "== independent ISO verification"
-  sha256sum -c out/G1OS.iso.sha256 >/dev/null || { echo "VERIFY = FAIL: ISO checksum mismatch" >&2; exit 7; }
-  xorriso -indev out/G1OS.iso -find / -exec report_lba > out/iso-file-list.txt 2>/dev/null || true
-  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs; do
-    grep -Fi "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 8; }
+  sha256sum -c out/G1OS.iso.sha256 >/dev/null || { echo "VERIFY = FAIL: ISO checksum mismatch" >&2; exit 8; }
+  xorriso -indev out/G1OS.iso -find / -exec report_lba > out/iso-file-list.txt 2>/dev/null || { echo "VERIFY = FAIL: cannot inspect ISO file list" >&2; exit 9; }
+  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI .g1os-build-id; do
+    grep -Fi "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 10; }
   done
-
   EXTRACT=$(mktemp -d)
-  clean_extract() {
-    chmod -R u+rwx "$EXTRACT" 2>/dev/null || true
-    rm -rf "$EXTRACT" 2>/dev/null || true
-  }
+  clean_extract() { chmod -R u+rwx "$EXTRACT" 2>/dev/null || true; rm -rf "$EXTRACT" 2>/dev/null || true; }
   trap clean_extract EXIT
-  xorriso -osirrox on -indev out/G1OS.iso -extract / "$EXTRACT" >/dev/null 2>&1 || { echo "VERIFY = FAIL: ISO cannot be extracted" >&2; exit 9; }
-  [ -s "$EXTRACT/boot/vmlinuz-maclite" ] || { echo "VERIFY = FAIL: extracted kernel empty" >&2; exit 10; }
-  [ -s "$EXTRACT/boot/initrd-maclite.img" ] || { echo "VERIFY = FAIL: extracted initramfs empty" >&2; exit 10; }
-  [ -s "$EXTRACT/boot/bootx64.efi" ] || { echo "VERIFY = FAIL: extracted EFI loader empty" >&2; exit 10; }
-  [ -s "$EXTRACT/live/maclite-base.sqfs" ] || { echo "VERIFY = FAIL: extracted base filesystem empty" >&2; exit 10; }
-  file "$EXTRACT/boot/vmlinuz-maclite" | grep -Eiq 'Linux kernel|boot executable|PE32' || { echo "VERIFY = FAIL: kernel is not a recognized executable" >&2; exit 11; }
-  unsquashfs -s "$EXTRACT/live/maclite-base.sqfs" >/dev/null || { echo "VERIFY = FAIL: base SquashFS is invalid" >&2; exit 12; }
-  xorriso -indev out/G1OS.iso -report_el_torito as_mkisofs 2>/dev/null | grep -Eiq 'boot|efi|iso' || { echo "VERIFY = FAIL: ISO lacks a detectable El Torito/EFI boot record" >&2; exit 13; }
-
-  grep -F "G1OS ISO Build Manifest" out/iso-manifest.txt >/dev/null || { echo "VERIFY = FAIL: manifest missing" >&2; exit 14; }
+  xorriso -osirrox on -indev out/G1OS.iso -extract / "$EXTRACT" >/dev/null 2>&1 || { echo "VERIFY = FAIL: ISO cannot be extracted" >&2; exit 11; }
+  [ -s "$EXTRACT/boot/vmlinuz-maclite" ] || { echo "VERIFY = FAIL: extracted kernel empty" >&2; exit 12; }
+  [ -s "$EXTRACT/boot/initrd-maclite.img" ] || { echo "VERIFY = FAIL: extracted initramfs empty" >&2; exit 12; }
+  [ -s "$EXTRACT/boot/bootx64.efi" ] || { echo "VERIFY = FAIL: extracted EFI loader empty" >&2; exit 12; }
+  [ -s "$EXTRACT/live/maclite-base.sqfs" ] || { echo "VERIFY = FAIL: extracted base filesystem empty" >&2; exit 12; }
+  file "$EXTRACT/boot/vmlinuz-maclite" | grep -Eiq 'Linux kernel|boot executable|PE32' || { echo "VERIFY = FAIL: kernel is not recognized" >&2; exit 13; }
+  unsquashfs -s "$EXTRACT/live/maclite-base.sqfs" >/dev/null || { echo "VERIFY = FAIL: base SquashFS is invalid" >&2; exit 14; }
+  xorriso -indev out/G1OS.iso -report_el_torito as_mkisofs 2>/dev/null | grep -Eiq 'boot|efi|iso' || { echo "VERIFY = FAIL: EFI El Torito boot record not detected" >&2; exit 15; }
+  grep -F "Build ID: $BUILD_ID" out/iso-manifest.txt >/dev/null || { echo "VERIFY = FAIL: build ID missing from manifest" >&2; exit 16; }
+  unsquashfs -cat "$EXTRACT/live/maclite-base.sqfs" "usr/share/maca-lite/runtime-provenance.sha256" > "$EXTRACT/runtime-provenance.sha256" 2>/dev/null || { echo "VERIFY = FAIL: runtime provenance missing from SquashFS" >&2; exit 17; }
+  for b in $REQUIRED_BINS; do
+    expected=$(sha256sum "out/$b" | cut -d' ' -f1)
+    grep -F "$expected  $b" "$EXTRACT/runtime-provenance.sha256" >/dev/null || { echo "VERIFY = FAIL: stale/mismatched runtime binary provenance for $b" >&2; exit 18; }
+  done
   clean_extract
   trap - EXIT
-  echo "VERIFY = PASS: ISO readable, boot artifacts present/non-empty, SquashFS valid, EFI boot record detected, checksum valid"
+  echo "VERIFY = PASS: ISO checksum, EFI boot record, kernel, initramfs, SquashFS, runtime provenance and required paths verified"
 fi
 
-# Remove existing builds and store freshly verified artifacts in releases/
 REL_DIR="../releases"
-if [ -d "$REL_DIR" ]; then
-  rm -f "$REL_DIR"/*.iso "$REL_DIR"/*.img "$REL_DIR"/vmlinuz* "$REL_DIR"/*.sha256 "$REL_DIR"/iso-manifest.txt "$REL_DIR"/iso-file-list.txt 2>/dev/null || true
-fi
 mkdir -p "$REL_DIR"
+rm -f "$REL_DIR"/*.iso "$REL_DIR"/*.img "$REL_DIR"/vmlinuz* "$REL_DIR"/*.sha256 "$REL_DIR"/iso-manifest.txt "$REL_DIR"/iso-file-list.txt
 cp out/G1OS.iso "$REL_DIR/"
 cp out/G1OS.iso.sha256 "$REL_DIR/"
 cp out/iso-manifest.txt "$REL_DIR/"
-if [ -f out/iso-file-list.txt ]; then
-  cp out/iso-file-list.txt "$REL_DIR/"
-fi
-if [ -f "$KERNEL" ]; then
-  cp "$KERNEL" "$REL_DIR/"
-fi
-if [ -f "$INITRD" ]; then
-  cp "$INITRD" "$REL_DIR/"
-fi
+[ ! -f out/iso-file-list.txt ] || cp out/iso-file-list.txt "$REL_DIR/"
+cp "$KERNEL" "$REL_DIR/"
+cp "$INITRD" "$REL_DIR/"
 
 echo "SUCCESS: fresh G1OS ISO assembled and stored in releases/: out/G1OS.iso -> releases/G1OS.iso"
+echo "BUILD ID: $BUILD_ID"

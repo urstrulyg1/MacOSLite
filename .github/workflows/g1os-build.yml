@@ -23,13 +23,14 @@ jobs:
             libdrm-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev \
             libfreetype6-dev libudev-dev libx11-dev libasound2-dev \
             xorriso grub-efi-amd64-bin squashfs-tools cpio xz-utils \
-            bzip2 file genisoimage shellcheck qemu-system-x86
+            bzip2 file genisoimage shellcheck qemu-system-x86 \
+            dosfstools mtools ovmf
 
       - name: Shell syntax and ShellCheck
         working-directory: macliteos
         run: |
           set -eu
-          for f in $(find . -type f \( -name '*.sh' -o -path './installer/maclite-install' -o -path './installer/maclite-installer-backend' \)); do
+          for f in $(find . -type f \( -name '*.sh' -o -path './installer/maclite-install' -o -path './installer/maclite-installer-backend' -o -path './boot/g1os-init' \)); do
             sh -n "$f"
             shellcheck -s sh "$f"
           done
@@ -52,6 +53,7 @@ jobs:
           G1OS_BUSYBOX="$PWD/out/busybox" \
           G1OS_KERNEL_MODULES="$PWD/out/kernel-modules" \
             sh scripts/make-initrd.sh "$PWD/out/initrd-maclite.img"
+          sh scripts/validate-boot-artifacts.sh "$PWD/out/initrd-maclite.img"
 
       - name: Assemble and independently verify ISO
         working-directory: macliteos
@@ -59,9 +61,37 @@ jobs:
           G1OS_KERNEL="$PWD/out/vmlinuz-maclite" \
           G1OS_INITRD="$PWD/out/initrd-maclite.img" \
             sh scripts/make-iso.sh --verify
+          sh scripts/validate-boot-artifacts.sh "$PWD/out/initrd-maclite.img" "$PWD/out/G1OS.iso"
           test -s out/G1OS.iso
           test -s out/G1OS.iso.sha256
           test -s out/iso-manifest.txt
+
+      - name: Boot ISO under real UEFI QEMU and capture console
+        working-directory: macliteos
+        run: |
+          set -eu
+          timeout 45s qemu-system-x86_64 \
+            -machine q35,accel=tcg \
+            -m 2048 \
+            -smp 2 \
+            -bios /usr/share/OVMF/OVMF_CODE_4M.fd \
+            -drive format=raw,file=out/G1OS.iso,if=ide,media=cdrom \
+            -boot d \
+            -serial stdio \
+            -display none \
+            -no-reboot \
+            2>&1 | tee out/qemu-uefi-console.log || rc=$?
+          rc=${rc:-0}
+          if grep -q "Initrd entrypoint /init started" out/qemu-uefi-console.log; then
+            echo "QEMU UEFI boot reached G1OS PID 1."
+          elif grep -qi "panic\|kernel BUG\|fatal" out/qemu-uefi-console.log; then
+            echo "ERROR: QEMU UEFI boot reported a kernel/init failure" >&2
+            exit 1
+          else
+            echo "ERROR: QEMU UEFI test did not reach G1OS init; inspect out/qemu-uefi-console.log" >&2
+            exit 1
+          fi
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ] || exit "$rc"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -76,3 +106,4 @@ jobs:
             macliteos/out/initrd-maclite.img
             macliteos/out/kernel-version.txt
             macliteos/out/kernel-source.sha256
+            macliteos/out/qemu-uefi-console.log
