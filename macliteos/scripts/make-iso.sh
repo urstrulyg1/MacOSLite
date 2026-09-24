@@ -121,7 +121,11 @@ if [ "$VERIFY" = 1 ]; then
   done
 
   EXTRACT=$(mktemp -d)
-  trap 'rm -rf "$EXTRACT"' EXIT
+  clean_extract() {
+    chmod -R u+rwx "$EXTRACT" 2>/dev/null || true
+    rm -rf "$EXTRACT" 2>/dev/null || true
+  }
+  trap clean_extract EXIT
   xorriso -osirrox on -indev out/G1OS.iso -extract / "$EXTRACT" >/dev/null 2>&1 || { echo "VERIFY = FAIL: ISO cannot be extracted" >&2; exit 9; }
   [ -s "$EXTRACT/boot/vmlinuz-maclite" ] || { echo "VERIFY = FAIL: extracted kernel empty" >&2; exit 10; }
   [ -s "$EXTRACT/boot/initrd-maclite.img" ] || { echo "VERIFY = FAIL: extracted initramfs empty" >&2; exit 10; }
@@ -132,6 +136,8 @@ if [ "$VERIFY" = 1 ]; then
   isoinfo -i out/G1OS.iso -d | grep -Eiq 'El Torito|EFI' || { echo "VERIFY = FAIL: ISO lacks a detectable El Torito/EFI boot record" >&2; exit 13; }
 
   grep -F "G1OS ISO Build Manifest" out/iso-manifest.txt >/dev/null || { echo "VERIFY = FAIL: manifest missing" >&2; exit 14; }
+  clean_extract
+  trap - EXIT
   echo "VERIFY = PASS: ISO readable, boot artifacts present/non-empty, SquashFS valid, EFI boot record detected, checksum valid"
 fi
 
