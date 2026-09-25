@@ -315,7 +315,7 @@ if [ "$DRY_RUN" = 0 ]; then
   [ "$(wc -c < "$INITRD" | tr -d ' ')" = "$EXPECTED_INITRD_SIZE" ] || fail "G1OS initramfs size does not match build manifest"
   [ "$(sha256sum "$KERNEL" | cut -d' ' -f1)" = "$EXPECTED_KERNEL_SHA" ] || fail "G1OS kernel checksum does not match build manifest"
   [ "$(sha256sum "$INITRD" | cut -d' ' -f1)" = "$EXPECTED_INITRD_SHA" ] || fail "G1OS initramfs checksum does not match build manifest"
-  file "$KERNEL" | grep -Eiq 'Linux kernel|boot executable|PE32' || fail "G1OS kernel is not a recognized x86 bootable kernel image"
+  [ "$(dd if="$KERNEL" bs=1 skip=514 count=4 2>/dev/null | grep -aFc "HdrS" || true)" -eq 1 ] || fail "G1OS kernel boot header is invalid or not an x86 bzImage"
 fi
 
 emit_state "PREPARING"
@@ -584,7 +584,7 @@ if [ "$DRY_RUN" = 0 ]; then
   [ -n "$MANIFEST_BUILD_ID" ] || fail "Verification FAIL: installed boot manifest has no build ID"
   [ "$INSTALLED_KERNEL_SHA" = "$MANIFEST_KERNEL_SHA" ] || fail "Verification FAIL: installed kernel checksum does not match ISO build manifest"
   [ "$INSTALLED_INITRD_SHA" = "$MANIFEST_INITRD_SHA" ] || fail "Verification FAIL: installed initramfs checksum does not match ISO build manifest"
-  file "$VERIFY_BOOT/boot/vmlinuz-g1os" | grep -Eiq 'Linux kernel|boot executable|PE32' || fail "Verification FAIL: installed kernel is not a recognized bootable kernel image"
+  [ "$(dd if="$VERIFY_BOOT/boot/vmlinuz-g1os" bs=1 skip=514 count=4 2>/dev/null | grep -aFc "HdrS" || true)" -eq 1 ] || fail "Verification FAIL: installed G1OS kernel boot header is invalid"
   GRUB_CFG="$VERIFY_BOOT/EFI/BOOT/grub.cfg"
   grep -F "linux /boot/vmlinuz-g1os" "$GRUB_CFG" >/dev/null || fail "Verification FAIL: bootloader does not reference the installed G1OS kernel"
   grep -F "initrd /boot/initrd-g1os.img" "$GRUB_CFG" >/dev/null || fail "Verification FAIL: bootloader does not reference the installed G1OS initramfs"
