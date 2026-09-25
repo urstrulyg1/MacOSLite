@@ -81,7 +81,28 @@ bool mlipc_send_fd(int fd, uint32_t type, const void *payload, uint32_t len, int
     cm->cmsg_type = SCM_RIGHTS;
     cm->cmsg_len = CMSG_LEN(sizeof(int));
     memcpy(CMSG_DATA(cm), &shm_fd, sizeof(int));
-    if (sendmsg(fd, &msg, MSG_NOSIGNAL) < 0) return false;
+    size_t total = sizeof h + (size_t)len;
+    ssize_t w;
+    do {
+        w = sendmsg(fd, &msg, MSG_NOSIGNAL);
+    } while (w < 0 && errno == EINTR);
+    if (w <= 0) return false;
+
+    /* SCM_RIGHTS is delivered with the first sendmsg() bytes. If sendmsg()
+     * accepts only part of the stream payload, never resend the fd: continue
+     * with ordinary writes from the exact byte offset instead. */
+    size_t sent = (size_t)w;
+    if (sent < total) {
+        const uint8_t *header = (const uint8_t *)&h;
+        if (sent < sizeof h) {
+            if (!write_all(fd, header + sent, sizeof h - sent)) return false;
+            sent = sizeof h;
+        }
+        if (sent < total) {
+            const uint8_t *body = (const uint8_t *)payload;
+            if (!write_all(fd, body + (sent - sizeof h), total - sent)) return false;
+        }
+    }
     return true;
 }
 
