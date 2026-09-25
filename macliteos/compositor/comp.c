@@ -32,6 +32,10 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <linux/input.h>
+#include <sys/ioctl.h>
 
 #define DECO_H 30
 #define MAX_CLIENTS 32
@@ -1021,6 +1025,7 @@ static void input_key(uint32_t key, uint32_t mods)
 
 static void input_button(int btn, bool down)
 {
+    if (btn < 0 || btn >= 3) return;
     C.btn[btn] = down;
     if (down) {
         bool in_deco = false;
@@ -1040,16 +1045,286 @@ static void input_button(int btn, bool down)
         focus_win(w);
         send_input(w, IN_DOWN, C.mx, C.my, (uint32_t)btn + 1, 0, 0);
     } else {
-        /* clients must see the release: dock launches, menu actions and text
-         * selection all fire on IN_UP. Deliver to the drag/resize target if a
-         * gesture is in flight (pointer may have left it), else to what is
-         * under the cursor. */
         win_t *w = C.drag_win ? C.drag_win : C.resize_win ? C.resize_win
                                                       : win_at(C.mx, C.my, NULL, NULL, NULL);
         if (w) send_input(w, IN_UP, C.mx, C.my, (uint32_t)btn + 1, 0, 0);
         C.drag_win = NULL;
         C.resize_win = NULL;
     }
+}
+
+static void input_scroll(int dx, int dy)
+{
+    win_t *w = win_at(C.mx, C.my, NULL, NULL, NULL);
+    if (!w || !w->cl) return;
+    msg_input m = {
+        .id = w->id, .kind = IN_SCROLL,
+        .x = C.mx - w->cur.x, .y = C.my - w->cur.y,
+        .dx = dx, .dy = dy, .time_ns = ml_now_ns()
+    };
+    mlipc_send(w->cl->fd, MS_INPUT, &m, sizeof m);
+}
+
+/* ------------------------------------------------------------------ evdev input
+ *
+ * The compositor previously had only scripted input. The kernel was correctly
+ * enumerating the Apple keyboard and USB mouse, but nothing opened /dev/input,
+ * so the GUI could render while all physical input was ignored. Keep input
+ * inside the same epoll loop as rendering: no polling thread and no busy loop.
+ * Devices are rescanned periodically so USB/Bluetooth receivers can be
+ * unplugged/replugged while the installer is running.
+ */
+typedef struct {
+    int fd;
+    char path[64];
+    char name[128];
+    ml_source *src;
+    bool pointer;
+    bool keyboard;
+    uint32_t mods;
+    bool caps;
+} input_dev_t;
+
+#define MAX_INPUT_DEVICES 32
+static input_dev_t INPUT_DEVS[MAX_INPUT_DEVICES];
+
+static bool bit_test(const unsigned long *bits, int bit)
+{
+    return (bits[bit / (int)(sizeof(unsigned long) * 8)] >>
+            (bit % (int)(sizeof(unsigned long) * 8))) & 1UL;
+}
+
+static bool input_has_cap(int fd, int type, int code)
+{
+    unsigned long bits[(KEY_MAX + 1 + sizeof(unsigned long) * 8 - 1) /
+                       (sizeof(unsigned long) * 8)];
+    memset(bits, 0, sizeof bits);
+    int max = type == EV_KEY ? KEY_MAX : type == EV_REL ? REL_MAX : EV_MAX;
+    if (ioctl(fd, EVIOCGBIT(type, (max + 1) * (int)sizeof(unsigned long)), bits) < 0)
+        return false;
+    return bit_test(bits, code);
+}
+
+static void input_close_device(int idx)
+{
+    if (idx < 0 || idx >= MAX_INPUT_DEVICES || INPUT_DEVS[idx].fd < 0) return;
+    int fd = INPUT_DEVS[idx].fd;
+    if (INPUT_DEVS[idx].src) {
+        ml_source_destroy(INPUT_DEVS[idx].src);
+        INPUT_DEVS[idx].src = NULL;
+    }
+    close(fd);
+    memset(&INPUT_DEVS[idx], 0, sizeof INPUT_DEVS[idx]);
+    INPUT_DEVS[idx].fd = -1;
+}
+
+static uint32_t linux_key_to_mica(int code, uint32_t mods)
+{
+    bool shift = (mods & ML_MOD_SHIFT) != 0;
+    if (code >= KEY_A && code <= KEY_Z) {
+        char ch = (char)('a' + code - KEY_A);
+        return (uint32_t)(shift ? ch - 'a' + 'A' : ch);
+    }
+    if (code >= KEY_1 && code <= KEY_0) {
+        static const char normal[] = "1234567890";
+        static const char shifted[] = "!@#$%^&*()";
+        int n = code - KEY_1;
+        return (uint32_t)(shift ? shifted[n] : normal[n]);
+    }
+    switch (code) {
+    case KEY_SPACE: return ' ';
+    case KEY_ENTER: case KEY_KPENTER: return 0xff0d;
+    case KEY_ESC: return 0xff1b;
+    case KEY_BACKSPACE: return 0xff08;
+    case KEY_TAB: return 0xff09;
+    case KEY_DELETE: return 0xffff;
+    case KEY_INSERT: return 0xff63;
+    case KEY_HOME: return 0xff50;
+    case KEY_END: return 0xff57;
+    case KEY_PAGEUP: return 0xff55;
+    case KEY_PAGEDOWN: return 0xff56;
+    case KEY_UP: return 0xff52;
+    case KEY_DOWN: return 0xff54;
+    case KEY_LEFT: return 0xff51;
+    case KEY_RIGHT: return 0xff53;
+    case KEY_F1: return 0xffbe; case KEY_F2: return 0xffbf;
+    case KEY_F3: return 0xffc0; case KEY_F4: return 0xffc1;
+    case KEY_F5: return 0xffc2; case KEY_F6: return 0xffc3;
+    case KEY_F7: return 0xffc4; case KEY_F8: return 0xffc5;
+    case KEY_F9: return 0xffc6; case KEY_F10: return 0xffc7;
+    case KEY_F11: return 0xffc8; case KEY_F12: return 0xffc9;
+    case KEY_MINUS: return shift ? '_' : '-';
+    case KEY_EQUAL: return shift ? '+' : '=';
+    case KEY_LEFTBRACE: return shift ? '{' : '[';
+    case KEY_RIGHTBRACE: return shift ? '}' : ']';
+    case KEY_SEMICOLON: return shift ? ':' : ';';
+    case KEY_APOSTROPHE: return shift ? '"' : '\'';
+    case KEY_GRAVE: return shift ? '~' : '`';
+    case KEY_BACKSLASH: return shift ? '|' : '\\';
+    case KEY_COMMA: return shift ? '<' : ',';
+    case KEY_DOT: return shift ? '>' : '.';
+    case KEY_SLASH: return shift ? '?' : '/';
+    case KEY_KPASTERISK: return '*';
+    case KEY_KPMINUS: return '-';
+    case KEY_KPPLUS: return '+';
+    case KEY_KPSLASH: return '/';
+    case KEY_KP0: return '0'; case KEY_KP1: return '1'; case KEY_KP2: return '2';
+    case KEY_KP3: return '3'; case KEY_KP4: return '4'; case KEY_KP5: return '5';
+    case KEY_KP6: return '6'; case KEY_KP7: return '7'; case KEY_KP8: return '8';
+    case KEY_KP9: return '9'; case KEY_KPDOT: return '.';
+    default: return 0;
+    }
+}
+
+static void input_key_event(input_dev_t *d, int code, int value)
+{
+    bool down = value != 0;
+    switch (code) {
+    case KEY_LEFTSHIFT: case KEY_RIGHTSHIFT:
+        if (down) d->mods |= ML_MOD_SHIFT; else d->mods &= ~ML_MOD_SHIFT;
+        return;
+    case KEY_LEFTCTRL: case KEY_RIGHTCTRL:
+        if (down) d->mods |= ML_MOD_CTRL; else d->mods &= ~ML_MOD_CTRL;
+        return;
+    case KEY_LEFTMETA: case KEY_RIGHTMETA:
+        if (down) d->mods |= ML_MOD_META; else d->mods &= ~ML_MOD_META;
+        return;
+    case KEY_LEFTALT: case KEY_RIGHTALT:
+        return;
+    case KEY_CAPSLOCK:
+        if (value == 1) d->caps = !d->caps;
+        return;
+    default:
+        break;
+    }
+    if (!down) return;
+    uint32_t mods = d->mods;
+    uint32_t key = linux_key_to_mica(code, mods);
+    if (d->caps && code >= KEY_A && code <= KEY_Z) {
+        bool upper = !(mods & ML_MOD_SHIFT);
+        key = (uint32_t)(upper ? ('A' + code - KEY_A) : ('a' + code - KEY_A));
+    }
+    if (key) input_key(key, mods);
+}
+
+static void input_event_fd(void *ud, uint32_t events)
+{
+    input_dev_t *d = ud;
+    if (!d || d->fd < 0) return;
+    int idx = (int)(d - INPUT_DEVS);
+    if (events & (EPOLLERR | EPOLLHUP)) {
+        input_close_device(idx);
+        return;
+    }
+
+    struct input_event ev[32];
+    int pending_dx = 0, pending_dy = 0, pending_wheel = 0, pending_hwheel = 0;
+    for (;;) {
+        ssize_t n = read(d->fd, ev, sizeof ev);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            input_close_device(idx);
+            return;
+        }
+        if (n == 0) {
+            input_close_device(idx);
+            return;
+        }
+        size_t count = (size_t)n / sizeof(struct input_event);
+        for (size_t i = 0; i < count; i++) {
+            struct input_event *e = &ev[i];
+            if (e->type == EV_SYN && e->code == SYN_DROPPED) {
+                pending_dx = pending_dy = pending_wheel = pending_hwheel = 0;
+                continue;
+            }
+            if (e->type == EV_REL) {
+                if (e->code == REL_X) pending_dx += e->value;
+                else if (e->code == REL_Y) pending_dy += e->value;
+                else if (e->code == REL_WHEEL) pending_wheel += e->value;
+                else if (e->code == REL_HWHEEL) pending_hwheel += e->value;
+                continue;
+            }
+            if (e->type == EV_KEY) {
+                if (e->code == BTN_LEFT || e->code == BTN_RIGHT || e->code == BTN_MIDDLE) {
+                    if (e->value == 0 || e->value == 1)
+                        input_button(e->code - BTN_LEFT, e->value == 1);
+                } else if (d->keyboard && (e->value == 0 || e->value == 1 || e->value == 2)) {
+                    input_key_event(d, e->code, e->value);
+                }
+                continue;
+            }
+            if (e->type == EV_SYN && e->code == SYN_REPORT) {
+                if (pending_dx || pending_dy)
+                    input_move(C.mx + pending_dx, C.my + pending_dy);
+                if (pending_wheel || pending_hwheel)
+                    input_scroll(pending_hwheel, pending_wheel);
+                pending_dx = pending_dy = pending_wheel = pending_hwheel = 0;
+            }
+        }
+    }
+}
+
+static void input_scan(void *ud)
+{
+    (void)ud;
+    DIR *dir = opendir("/dev/input");
+    if (!dir) return;
+    struct dirent *ent;
+    while ((ent = readdir(dir))) {
+        if (strncmp(ent->d_name, "event", 5) != 0) continue;
+        char path[64];
+        snprintf(path, sizeof path, "/dev/input/%s", ent->d_name);
+        if (access(path, R_OK) != 0) continue;
+
+        bool known = false;
+        for (int i = 0; i < MAX_INPUT_DEVICES; i++) {
+            if (INPUT_DEVS[i].fd >= 0 && !strcmp(INPUT_DEVS[i].path, path)) {
+                known = true;
+                break;
+            }
+        }
+        if (known) continue;
+
+        int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) continue;
+        bool pointer = input_has_cap(fd, EV_REL, REL_X) || input_has_cap(fd, EV_REL, REL_Y) ||
+                       input_has_cap(fd, EV_KEY, BTN_LEFT) || input_has_cap(fd, EV_KEY, BTN_RIGHT);
+        bool keyboard = input_has_cap(fd, EV_KEY, KEY_A) || input_has_cap(fd, EV_KEY, KEY_ENTER) ||
+                        input_has_cap(fd, EV_KEY, KEY_SPACE);
+        if (!pointer && !keyboard) {
+            close(fd);
+            continue;
+        }
+
+        int slot = -1;
+        for (int i = 0; i < MAX_INPUT_DEVICES; i++)
+            if (INPUT_DEVS[i].fd < 0) { slot = i; break; }
+        if (slot < 0) {
+            close(fd);
+            continue;
+        }
+
+        input_dev_t *d = &INPUT_DEVS[slot];
+        memset(d, 0, sizeof *d);
+        d->fd = fd;
+        d->pointer = pointer;
+        d->keyboard = keyboard;
+        snprintf(d->path, sizeof d->path, "%s", path);
+        if (ioctl(fd, EVIOCGNAME(sizeof d->name), d->name) < 0)
+            snprintf(d->name, sizeof d->name, "%s", path);
+        d->src = ml_loop_add_fd(C.loop, fd, EPOLLIN | EPOLLERR | EPOLLHUP, input_event_fd, d);
+        ML_INFO("input device: %s (%s)%s%s", d->path, d->name,
+                pointer ? " pointer" : "", keyboard ? " keyboard" : "");
+    }
+    closedir(dir);
+}
+
+static void input_init(void)
+{
+    for (int i = 0; i < MAX_INPUT_DEVICES; i++) INPUT_DEVS[i].fd = -1;
+    input_scan(NULL);
+    ml_loop_add_timer(C.loop, 500, true, input_scan, NULL);
 }
 
 /* children launched by name (dock/menu/launcher) must find our binaries even
@@ -1358,6 +1633,10 @@ int main(int argc, char **argv)
     ml_loop_add_signal(C.loop, SIGCHLD, on_sigchld, NULL);
     ml_loop_add_signal(C.loop, SIGTERM, on_term, NULL);
     ml_loop_add_signal(C.loop, SIGINT, on_term, NULL);
+
+    /* Consume real keyboard/mouse events from evdev in the compositor epoll
+     * loop before the installer client is started. */
+    input_init();
 
     damage_add(ml_rect_make(0, 0, C.screen_w, C.screen_h));
     request_frame();
