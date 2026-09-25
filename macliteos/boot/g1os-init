@@ -49,13 +49,49 @@ fatal() {
 
 silence_graphical_console() {
     GRAPHICAL_CONSOLE_QUIET=1
-    # Keep diagnostics in /run/g1os-boot.log, but do not let kernel printk/fbcon
-    # text paint over the graphical installer once the compositor takes over.
-    if [ -w /proc/sys/kernel/printk ]; then
-        printf '%s\n' '1 4 1 7' >/proc/sys/kernel/printk 2>/dev/null || true
-    fi
+    # This only silences G1OS user-space status text on the active console.
+    # Kernel diagnostics remain enabled and continue to /run/g1os-boot.log and
+    # serial. fbcon is detached separately during compositor ownership handoff.
     if [ -e /dev/console ]; then
         printf '\033[2J\033[H\033[?25l' >/dev/console 2>/dev/null || true
+    fi
+}
+
+handoff_graphical_console() {
+    # Never assume vtcon1 (or any particular vtconsole) exists. The kernel
+    # exposes the registered console drivers under /sys/class/vtconsole; the
+    # framebuffer console is identified by its name and can be detached by
+    # writing 0 to its bind attribute. This is the supported fbcon handoff and
+    # works for both DRM/KMS and fbdev framebuffers.
+    local_root="/sys/class/vtconsole"
+    if [ ! -d "$local_root" ]; then
+        emit "[INFO] vtconsole is unavailable; no framebuffer console to detach"
+        return 0
+    fi
+
+    found=0
+    for vt in "$local_root"/vtcon*; do
+        [ -d "$vt" ] || continue
+        name=$(cat "$vt/name" 2>/dev/null || true)
+        case "$name" in
+            *"frame buffer"*|*"framebuffer"*|*"Frame buffer"*|*"Framebuffer"*)
+                found=1
+                bind="$vt/bind"
+                if [ -w "$bind" ]; then
+                    if printf '0\n' >"$bind" 2>/dev/null; then
+                        emit "[OK] Detached framebuffer console: $(basename "$vt") ($name)"
+                    else
+                        emit "[WARN] Could not detach framebuffer console: $(basename "$vt") ($name)"
+                    fi
+                else
+                    emit "[INFO] Framebuffer console found but bind control is unavailable: $(basename "$vt")"
+                fi
+                ;;
+        esac
+    done
+
+    if [ "$found" -eq 0 ]; then
+        emit "[INFO] No framebuffer console backend registered; compositor owns display directly"
     fi
 }
 
@@ -194,6 +230,8 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
 done
 [ "$READY" = 1 ] || fatal "compositor did not become ready within 20 seconds; see $MICA_LOG"
 status OK "Compositor IPC endpoint ready: $SOCK"
+handoff_graphical_console
+status OK "Graphical console handoff complete; kernel/fbcon text cannot paint over compositor framebuffer"
 status RUNNING "Starting graphical G1OS installer"
 export MICA_LOG=/run/g1os/mica-installer.log
 : > "$MICA_LOG"
