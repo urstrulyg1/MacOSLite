@@ -504,22 +504,26 @@ if ! findmnt -n -T "$BOOT_MNT" >/dev/null 2>&1; then
 fi
 mkdir -p "$BOOT_MNT/EFI/BOOT" "$BOOT_MNT/boot/grub"
 if [ "$DRY_RUN" = 0 ]; then
-  if command -v grub-mkimage >/dev/null 2>&1; then
-    run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
+  if [ ! -s "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" ]; then
+    if command -v grub-mkimage >/dev/null 2>&1; then
+      run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
+    else
+      COPIED_LOADER=0
+      for cand in /run/live/EFI/BOOT/BOOTX64.EFI /run/live/boot/bootx64.efi /EFI/BOOT/BOOTX64.EFI /boot/bootx64.efi /run/live/EFI/BOOT/bootx64.efi; do
+        if [ -s "$cand" ]; then
+          run cp "$cand" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
+          COPIED_LOADER=1
+          break
+        fi
+      done
+      [ "$COPIED_LOADER" = 1 ] || fail "No EFI loader available (grub-mkimage missing and no BOOTX64.EFI found on live media)"
+    fi
   else
-    COPIED_LOADER=0
-    for cand in /run/live/EFI/BOOT/BOOTX64.EFI /run/live/boot/bootx64.efi /EFI/BOOT/BOOTX64.EFI /boot/bootx64.efi /run/live/EFI/BOOT/bootx64.efi; do
-      if [ -s "$cand" ]; then
-        run cp "$cand" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
-        COPIED_LOADER=1
-        break
-      fi
-    done
-    [ "$COPIED_LOADER" = 1 ] || fail "No EFI loader available (grub-mkimage missing and no BOOTX64.EFI found on live media)"
+    echo "Repair: existing EFI fallback loader preserved"
   fi
 fi
 
-cat > "$BOOT_MNT/EFI/BOOT/grub.cfg" <<EOF
+cat > "$BOOT_MNT/EFI/BOOT/grub.cfg.new" <<EOF
 set default=0
 set timeout=5
 insmod part_gpt
@@ -538,12 +542,12 @@ menuentry "G1OS" {
 }
 menuentry "G1OS Safe Graphics (Software Compositing)" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 acpi_backlight=native reboot=pci panic=0
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off radeon.modeset=1 fbcon=map:0 acpi_backlight=native reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
 menuentry "G1OS Safe Graphics (Verbose Debug)" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 console=tty0 earlycon debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off radeon.modeset=1 fbcon=map:0 console=tty0 earlycon debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
 menuentry "G1OS Recovery Shell" {
@@ -552,10 +556,32 @@ menuentry "G1OS Recovery Shell" {
   initrd /boot/initrd-g1os.img
 }
 EOF
+if [ "$DRY_RUN" = 1 ]; then
+  :
+elif [ ! -s "$BOOT_MNT/EFI/BOOT/grub.cfg" ] || [ "$(sha256sum "$BOOT_MNT/EFI/BOOT/grub.cfg" | cut -d' ' -f1)" != "$(sha256sum "$BOOT_MNT/EFI/BOOT/grub.cfg.new" | cut -d' ' -f1)" ]; then
+  run mv "$BOOT_MNT/EFI/BOOT/grub.cfg.new" "$BOOT_MNT/EFI/BOOT/grub.cfg"
+else
+  rm -f "$BOOT_MNT/EFI/BOOT/grub.cfg.new"
+  echo "Repair: existing GRUB configuration already matches desired configuration"
+fi
 run cp "$BOOT_MNT/EFI/BOOT/grub.cfg" "$BOOT_MNT/boot/grub/grub.cfg"
-if [ -n "$KERNEL" ]; then run cp "$KERNEL" "$BOOT_MNT/boot/vmlinuz-g1os"; fi
-if [ -n "$INITRD" ]; then run cp "$INITRD" "$BOOT_MNT/boot/initrd-g1os.img"; fi
-if [ -s "$BOOT_MANIFEST" ]; then run cp "$BOOT_MANIFEST" "$BOOT_MNT/boot/g1os-boot-manifest.txt"; fi
+if [ "$DRY_RUN" = 0 ]; then
+  if [ ! -s "$BOOT_MNT/boot/vmlinuz-g1os" ] || [ "$(sha256sum "$BOOT_MNT/boot/vmlinuz-g1os" | cut -d' ' -f1)" != "$EXPECTED_KERNEL_SHA" ]; then
+    run cp "$KERNEL" "$BOOT_MNT/boot/vmlinuz-g1os"
+    echo "Repair/install: authoritative G1OS kernel copied"
+  else
+    echo "Repair: existing G1OS kernel checksum already matches; preserved"
+  fi
+  if [ ! -s "$BOOT_MNT/boot/initrd-g1os.img" ] || [ "$(sha256sum "$BOOT_MNT/boot/initrd-g1os.img" | cut -d' ' -f1)" != "$EXPECTED_INITRD_SHA" ]; then
+    run cp "$INITRD" "$BOOT_MNT/boot/initrd-g1os.img"
+    echo "Repair/install: matching G1OS initramfs copied"
+  else
+    echo "Repair: existing G1OS initramfs checksum already matches; preserved"
+  fi
+  if [ ! -s "$BOOT_MNT/boot/g1os-boot-manifest.txt" ] || [ "$(sha256sum "$BOOT_MNT/boot/g1os-boot-manifest.txt" | cut -d' ' -f1)" != "$(sha256sum "$BOOT_MANIFEST" | cut -d' ' -f1)" ]; then
+    run cp "$BOOT_MANIFEST" "$BOOT_MNT/boot/g1os-boot-manifest.txt"
+  fi
+fi
 printf 'G1OS' > "$BOOT_MNT/.disk_label"
 run sync
 
