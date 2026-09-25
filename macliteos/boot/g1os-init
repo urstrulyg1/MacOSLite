@@ -117,7 +117,9 @@ if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
     fi
     [ -n "$DATA_UUID" ] || fatal "installed /etc/fstab has no UUID for /var/data"
     DATA_DEV=$(blkid -U "$DATA_UUID" 2>/dev/null || true)
-    [ -n "$DATA_DEV" ] && [ -b "$DATA_DEV" ] || fatal "persistent data partition UUID $DATA_UUID could not be resolved"
+    if [ -z "$DATA_DEV" ] || [ ! -b "$DATA_DEV" ]; then
+        fatal "persistent data partition UUID $DATA_UUID could not be resolved"
+    fi
     mkdir -p /mnt/var/data
     mount "$DATA_DEV" /mnt/var/data || fatal "cannot mount persistent data partition $DATA_DEV"
     status OK "Persistent data filesystem mounted: $DATA_DEV"
