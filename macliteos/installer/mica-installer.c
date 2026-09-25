@@ -852,7 +852,7 @@ static void draw(void)
         ml_draw_text(&c, f, cx - 205, 174, "A lightweight system designed for older hardware.", 13, ml_rgb(190, 198, 214));
         ml_draw_text(&c, f, cx - 215, 197, "Includes mandatory Final Verification & No-Break Guarantee.", 12, ml_rgb(125, 190, 255));
         ml_rect b = ml_rect_make(cx - 82, 262, 164, 42);
-        ml_fill_rounded(&c, b, 12, ml_rgb(52, 133, 242));
+        ml_fill_rounded(&c, b, 12, BUTTON_PRESSED ? ml_rgb(35, 105, 205) : ml_rgb(52, 133, 242));
         ml_draw_text(&c, fb, cx - 34, 288, "Continue", 13, ml_rgb(255, 255, 255));
 
     } else if (STAGE == STAGE_SELECT) {
@@ -878,7 +878,10 @@ static void draw(void)
             y += 72;
         }
         ml_rect b = ml_rect_make(s->w - 156, s->h - 68, 108, 36);
-        ml_fill_rounded(&c, b, 10, TARGET_DISK_IDX >= 0 ? ml_rgb(52, 133, 242) : ml_rgba(255, 255, 255, 20));
+        ml_rect back = ml_rect_make(48, s->h - 68, 108, 36);
+        ml_fill_rounded(&c, back, 10, ml_rgba(255, 255, 255, 18));
+        ml_draw_text(&c, fb, 82, s->h - 45, "Back", 12, ml_rgb(225, 232, 242));
+        ml_fill_rounded(&c, b, 10, TARGET_DISK_IDX >= 0 ? (BUTTON_PRESSED ? ml_rgb(35, 105, 205) : ml_rgb(52, 133, 242)) : ml_rgba(255, 255, 255, 20));
         ml_draw_text(&c, fb, s->w - 132, s->h - 45, "Continue", 12, ml_rgb(255, 255, 255));
 
     } else if (STAGE == STAGE_CONFIRM) {
@@ -897,8 +900,11 @@ static void draw(void)
             }
             ml_draw_text(&c, f, 86, 306, "I understand this disk will be erased.", 12, ml_rgb(205, 212, 225));
         }
+        ml_rect back = ml_rect_make(48, s->h - 68, 108, 36);
+        ml_fill_rounded(&c, back, 10, ml_rgba(255, 255, 255, 18));
+        ml_draw_text(&c, fb, 82, s->h - 45, "Back", 12, ml_rgb(225, 232, 242));
         ml_rect b = ml_rect_make(s->w - 238, s->h - 68, 190, 36);
-        ml_fill_rounded(&c, b, 10, CONFIRMED_ERASE ? ml_rgb(214, 61, 55) : ml_rgba(255, 255, 255, 18));
+        ml_fill_rounded(&c, b, 10, CONFIRMED_ERASE ? (BUTTON_PRESSED ? ml_rgb(180, 45, 40) : ml_rgb(214, 61, 55)) : ml_rgba(255, 255, 255, 18));
         ml_draw_text(&c, fb, s->w - 214, s->h - 45, "Erase & Install", 12, ml_rgb(255, 255, 255));
 
     } else if (STAGE == STAGE_INSTALLING || STAGE == STAGE_VERIFYING) {
@@ -1065,7 +1071,7 @@ static void input(mica_win *w, const msg_input *in)
             add_log("UI: Continue UP/hit local=%d,%d -> activate", in->x, in->y);
             activate_continue();
         } else if (back_button_hit(in->x, in->y)) {
-            add_log("UI: Back UP/hit local=%d,%d -> activate");
+            add_log("UI: Back UP/hit local=%d,%d -> activate", in->x, in->y);
             activate_back();
         } else {
             draw();
