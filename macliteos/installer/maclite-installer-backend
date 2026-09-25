@@ -153,7 +153,9 @@ validate_physical_target() {
   [ ! -e "/sys/block/$TARGET/partition" ] || fail "refusing partition as installation target: $DEV"
   [ -e "/sys/block/$TARGET/device" ] || fail "target has no physical sysfs device identity: $DEV"
   size_bytes=$(read_disk_size_bytes "$TARGET" || true)
-  [ -n "$size_bytes" ] && [ "$size_bytes" -gt 0 ] || fail "target has no reliable non-zero capacity: $DEV"
+  if [ -z "$size_bytes" ] || [ "$size_bytes" -le 0 ]; then
+    fail "target has no reliable non-zero capacity: $DEV"
+  fi
   if command -v stat >/dev/null 2>&1; then
     file_type=$(stat -c %F "$DEV" 2>/dev/null || true)
     [ "$file_type" = "block special" ] || fail "target is not a block device: $DEV"
