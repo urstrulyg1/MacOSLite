@@ -36,6 +36,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 
 #define DECO_H 30
 #define MAX_CLIENTS 32
@@ -151,6 +152,60 @@ static struct {
     const char *backend_req;
     bool backend_explicit;
 } C;
+
+/* ------------------------------------------------------ console ownership -- */
+static void detach_framebuffer_console(void)
+{
+    const char *root = "/sys/class/vtconsole";
+    DIR *d = opendir(root);
+    if (!d) {
+        ML_INFO("console handoff: %s unavailable; no fbcon detach required", root);
+        return;
+    }
+
+    struct dirent *e;
+    int found = 0, detached = 0;
+    while ((e = readdir(d))) {
+        if (strncmp(e->d_name, "vtcon", 5) != 0) continue;
+
+        char name_path[256], bind_path[256], name[128] = {0};
+        snprintf(name_path, sizeof name_path, "%s/%s/name", root, e->d_name);
+        snprintf(bind_path, sizeof bind_path, "%s/%s/bind", root, e->d_name);
+
+        int fd = open(name_path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+        ssize_t n = read(fd, name, sizeof(name) - 1);
+        close(fd);
+        if (n <= 0) continue;
+        name[n] = 0;
+        while (n > 0 && (name[n - 1] == '\n' || name[n - 1] == '\r'))
+            name[--n] = 0;
+
+        if (!strcasestr(name, "frame buffer") && !strcasestr(name, "framebuffer"))
+            continue;
+
+        found++;
+        fd = open(bind_path, O_WRONLY | O_CLOEXEC);
+        if (fd < 0) {
+            ML_WARN("console handoff: cannot open %s: %s", bind_path, strerror(errno));
+            continue;
+        }
+        if (write(fd, "0\n", 2) == 2) {
+            detached++;
+            ML_INFO("console handoff: detached %s (%s)", e->d_name, name);
+        } else {
+            ML_WARN("console handoff: failed to detach %s (%s): %s",
+                    e->d_name, name, strerror(errno));
+        }
+        close(fd);
+    }
+    closedir(d);
+
+    if (!found)
+        ML_INFO("console handoff: no framebuffer console backend registered");
+    else
+        ML_INFO("console handoff: detached %d/%d framebuffer console backend(s)", detached, found);
+}
 
 /* ---------------------------------------------------------------- utils -- */
 static void notify(const msg_notify *n);        /* defined below; the frame loop uses these */
@@ -1635,6 +1690,8 @@ int main(int argc, char **argv)
         ml_display_open(&C.disp, C.backend_req, &w, &h);
         if (C.disp.kind != ML_DISP_HEADLESS) { C.screen_w = w; C.screen_h = h; }
         ML_INFO("present backend: %s (%s)", ml_disp_kind_name(C.disp.kind), C.disp.note);
+        if (C.disp.kind == ML_DISP_KMS || C.disp.kind == ML_DISP_FBDEV)
+            detach_framebuffer_console();
         /* An explicit --backend/--drm is a requirement. Degrading it silently
          * would let a user (or a boot script) believe the panel is driven by KMS
          * while every frame actually lands in memory: refuse and say why. */
