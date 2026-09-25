@@ -353,8 +353,16 @@ static void paint_notifications(ml_ctx *c, ml_rect clip)
     }
 }
 
+static ml_rect cursor_damage_rect(int x, int y)
+{
+    return ml_rect_make(x - 4, y - 4, 24, 28);
+}
+
 static void paint_cursor(ml_ctx *c, ml_rect clip)
 {
+    ml_rect cr = cursor_damage_rect(C.mx, C.my);
+    if (ml_rect_empty(ml_rect_intersect(cr, clip))) return;
+
     ml_path p;
     ml_path_init(&p);
     ml_path_parse(&p, "M0,0 L0,16 L4.4,12.4 L7.2,18.4 L9.8,17.2 L7,11.4 L12.4,11 Z");
@@ -1018,8 +1026,10 @@ static void input_move(int x, int y)
     int oldx = C.mx, oldy = C.my;
     C.mx = ML_CLAMP(x, 0, C.screen_w - 1);
     C.my = ML_CLAMP(y, 0, C.screen_h - 1);
-    damage_add(ml_rect_make(oldx - 4, oldy - 4, 24, 28));
-    damage_add(ml_rect_make(C.mx - 4, C.my - 4, 24, 28));
+    /* Every pointer move invalidates both the old and new cursor bounds.
+     * This is mandatory for damage-only scanout and prevents stale pixels. */
+    damage_add(cursor_damage_rect(oldx, oldy));
+    damage_add(cursor_damage_rect(C.mx, C.my));
     if (C.drag_win) {
         win_damage_all(C.drag_win);
         C.drag_win->cur.x += C.mx - oldx;
