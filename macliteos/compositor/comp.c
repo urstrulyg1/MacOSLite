@@ -1110,6 +1110,9 @@ static void input_resync_state(input_dev_t *d)
 {
     if (!d || d->fd < 0) return;
 
+    d->mods = 0;
+    d->caps = false;
+
     unsigned long key_bits[(KEY_MAX + 1 + sizeof(unsigned long) * 8 - 1) /
                            (sizeof(unsigned long) * 8)];
     memset(key_bits, 0, sizeof key_bits);
@@ -1348,6 +1351,7 @@ static void input_scan(void *ud)
         snprintf(d->path, sizeof d->path, "%s", path);
         if (ioctl(fd, EVIOCGNAME(sizeof d->name), d->name) < 0)
             snprintf(d->name, sizeof d->name, "%s", path);
+        input_resync_state(d);
         d->src = ml_loop_add_fd(C.loop, fd, EPOLLIN | EPOLLERR | EPOLLHUP, input_event_fd, d);
         ML_INFO("input device: %s (%s)%s%s", d->path, d->name,
                 pointer ? " pointer" : "", keyboard ? " keyboard" : "");
