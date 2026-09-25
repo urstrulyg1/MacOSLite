@@ -82,6 +82,7 @@ static bool TEST_MODE = false;
 static bool BUTTON_PRESSED = false;
 static bool BACK_BUTTON_PRESSED = false;
 static bool AUX_BUTTON_PRESSED = false;
+static int ERROR_BTN_PRESSED = 0; /* 0 = none, 1 = retry, 2 = repair, 3 = details */
 static int BUTTON_PRESSED_X = -1, BUTTON_PRESSED_Y = -1;
 
 /* Authoritative backend state. */
@@ -1048,15 +1049,15 @@ static void draw(void)
 
         /* Buttons: [Retry] [Repair] [View Details] */
         ml_rect btn_retry = ml_rect_make(cx - 150, 420, 90, 36);
-        ml_fill_rounded(&c, btn_retry, 10, ml_rgb(52, 133, 242));
+        ml_fill_rounded(&c, btn_retry, 10, ERROR_BTN_PRESSED == 1 ? ml_rgb(32, 95, 185) : ml_rgb(52, 133, 242));
         ml_draw_text(&c, fb, cx - 132, 443, "Retry", 12, ml_rgb(255, 255, 255));
 
         ml_rect btn_repair = ml_rect_make(cx - 45, 420, 95, 36);
-        ml_fill_rounded(&c, btn_repair, 10, ml_rgb(40, 160, 100));
+        ml_fill_rounded(&c, btn_repair, 10, ERROR_BTN_PRESSED == 2 ? ml_rgb(25, 115, 70) : ml_rgb(40, 160, 100));
         ml_draw_text(&c, fb, cx - 28, 443, "Repair", 12, ml_rgb(255, 255, 255));
 
         ml_rect btn_details = ml_rect_make(cx + 65, 420, 105, 36);
-        ml_fill_rounded(&c, btn_details, 10, ml_rgba(255, 255, 255, 20));
+        ml_fill_rounded(&c, btn_details, 10, ERROR_BTN_PRESSED == 3 ? ml_rgba(255, 255, 255, 45) : ml_rgba(255, 255, 255, 20));
         ml_draw_text(&c, fb, cx + 76, 443, SHOW_DETAILS ? "Hide Details" : "View Details", 11, ml_rgb(220, 230, 245));
     }
 
@@ -1173,16 +1174,21 @@ static void input(mica_win *w, const msg_input *in)
             int cx = (WIN && WIN->surf ? WIN->surf->w : WIN_W) / 2;
             if (rect_contains_inclusive(in->x, in->y, cx - 150, 420, 90, 36)) {
                 AUX_BUTTON_PRESSED = true;
+                ERROR_BTN_PRESSED = 1;
+                add_log("UI: Retry DOWN local=%d,%d", in->x, in->y);
                 draw();
                 return;
             }
             if (rect_contains_inclusive(in->x, in->y, cx - 45, 420, 95, 36)) {
                 AUX_BUTTON_PRESSED = true;
+                ERROR_BTN_PRESSED = 2;
+                add_log("UI: Repair DOWN local=%d,%d", in->x, in->y);
                 draw();
                 return;
             }
             if (rect_contains_inclusive(in->x, in->y, cx + 65, 420, 105, 36)) {
                 AUX_BUTTON_PRESSED = true;
+                ERROR_BTN_PRESSED = 3;
                 add_log("UI: View Details DOWN local=%d,%d", in->x, in->y);
                 draw();
                 return;
@@ -1196,9 +1202,11 @@ static void input(mica_win *w, const msg_input *in)
         bool was_continue = BUTTON_PRESSED;
         bool was_back = BACK_BUTTON_PRESSED;
         bool was_aux = AUX_BUTTON_PRESSED;
+        int was_error_btn = ERROR_BTN_PRESSED;
         BUTTON_PRESSED = false;
         BACK_BUTTON_PRESSED = false;
         AUX_BUTTON_PRESSED = false;
+        ERROR_BTN_PRESSED = 0;
 
         if (was_continue && continue_button_hit(in->x, in->y)) {
             add_log("UI: Continue UP/hit local=%d,%d -> activate", in->x, in->y);
@@ -1228,15 +1236,17 @@ static void input(mica_win *w, const msg_input *in)
                 }
             } else if (STAGE == STAGE_ERROR) {
                 int cx = (WIN && WIN->surf ? WIN->surf->w : WIN_W) / 2;
-                if (rect_contains_inclusive(in->x, in->y, cx - 150, 420, 90, 36)) {
+                if (was_error_btn == 1 || rect_contains_inclusive(in->x, in->y, cx - 150, 420, 90, 36)) {
+                    add_log("UI: Retry clicked -> re-running installation");
                     stop_backend(true);
                     BACKEND_FAILED = false;
                     start_backend(false);
-                } else if (rect_contains_inclusive(in->x, in->y, cx - 45, 420, 95, 36)) {
+                } else if (was_error_btn == 2 || rect_contains_inclusive(in->x, in->y, cx - 45, 420, 95, 36)) {
+                    add_log("UI: Repair clicked -> starting automatic repair mode");
                     stop_backend(true);
                     BACKEND_FAILED = false;
                     start_backend(true);
-                } else if (rect_contains_inclusive(in->x, in->y, cx + 65, 420, 105, 36)) {
+                } else if (was_error_btn == 3 || rect_contains_inclusive(in->x, in->y, cx + 65, 420, 105, 36)) {
                     SHOW_DETAILS = !SHOW_DETAILS;
                     add_log("UI: View Details %s", SHOW_DETAILS ? "opened" : "closed");
                 }

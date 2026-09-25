@@ -67,6 +67,7 @@ while read -r pat; do
             *)
                 for candidate in \
                     "out/$base" \
+                    "installer/$base" \
                     "rootfs$f" \
                     "rootfs/${f#/}" \
                     "${f#/}" \

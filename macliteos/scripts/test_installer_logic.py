@@ -306,6 +306,65 @@ def test_runtime_dependencies():
     assert "/lib/x86_64-linux-gnu/libc.so.6" in libs, "libc.so.6 must be detected"
     print("PASS: Dynamic linker and runtime dependency resolution")
 
+
+def test_kernel_lifecycle_and_verification():
+    import pathlib
+
+    backend_src = pathlib.Path("installer/maclite-installer-backend").read_text()
+    rootfs_backend = pathlib.Path("rootfs/usr/bin/maclite-installer-backend").read_text()
+    initrd_script = pathlib.Path("scripts/make-initrd.sh").read_text()
+
+    # 1. Rootfs copy synchronization
+    assert backend_src == rootfs_backend, "rootfs installer backend must be synchronized with installer source"
+
+    # 2. make-initrd.sh packaging precedence
+    cand_pos_installer = initrd_script.find('"installer/$base"')
+    cand_pos_rootfs = initrd_script.find('"rootfs$f"')
+    assert cand_pos_installer != -1 and cand_pos_rootfs != -1, "Candidate search must inspect installer and rootfs paths"
+    assert cand_pos_installer < cand_pos_rootfs, "make-initrd.sh must prioritize installer/$base over rootfs$f"
+
+    # 3. Backend live media kernel search paths
+    assert "/run/live/boot/vmlinuz-maclite" in backend_src, "Backend must search for live kernel on mounted live media"
+    assert "/run/live/boot/initrd-maclite.img" in backend_src, "Backend must search for live initramfs on mounted live media"
+    assert "g1os-boot-manifest.txt" in backend_src, "Backend must validate G1OS boot manifest"
+
+    # 4. Target installation and bootloader configuration
+    assert '$BOOT_MNT/boot/vmlinuz-g1os' in backend_src, "Backend must install kernel to target /boot/vmlinuz-g1os"
+    assert '$BOOT_MNT/boot/initrd-g1os.img' in backend_src, "Backend must install initramfs to target /boot/initrd-g1os.img"
+    assert 'linux /boot/vmlinuz-g1os' in backend_src, "Target GRUB configuration must boot /boot/vmlinuz-g1os"
+    assert 'initrd /boot/initrd-g1os.img' in backend_src, "Target GRUB configuration must boot /boot/initrd-g1os.img"
+
+    # 5. Check 4 authoritative verification
+    assert "Verification FAIL: real G1OS kernel vmlinuz-g1os missing or empty" in backend_src, \
+        "Verification must explicitly fail closed if target kernel is missing"
+    assert "KERNEL:" in backend_src and "path=/boot/vmlinuz-g1os" in backend_src, \
+        "Check 4 must output diagnostic Kernel path"
+
+    print("PASS: End-to-end G1OS kernel lifecycle, initrd packaging precedence, and target verification")
+
+
+def test_installer_error_buttons_and_recovery():
+    import pathlib
+    installer_src = pathlib.Path("installer/mica-installer.c").read_text()
+
+    # 1. Error button state tracking
+    assert "ERROR_BTN_PRESSED" in installer_src, "mica-installer.c must track pressed error button state"
+
+    # 2. Interactive visual feedback on Retry, Repair, View Details
+    assert "ERROR_BTN_PRESSED == 1 ?" in installer_src, "Retry button must provide pressed visual feedback"
+    assert "ERROR_BTN_PRESSED == 2 ?" in installer_src, "Repair button must provide pressed visual feedback"
+    assert "ERROR_BTN_PRESSED == 3 ?" in installer_src, "View Details button must provide pressed visual feedback"
+
+    # 3. Action dispatch in IN_UP
+    assert 'add_log("UI: Retry clicked -> re-running installation");' in installer_src
+    assert 'start_backend(false);' in installer_src, "Retry must re-run backend install"
+    assert 'add_log("UI: Repair clicked -> starting automatic repair mode");' in installer_src
+    assert 'start_backend(true);' in installer_src, "Repair must invoke backend in repair mode"
+    assert 'SHOW_DETAILS = !SHOW_DETAILS;' in installer_src, "View Details must toggle detail log visibility"
+
+    print("PASS: Installer error screen buttons (Retry, Repair, View Details) action dispatch and visual feedback")
+
+
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
@@ -325,6 +384,8 @@ def main():
     test_state_persistence_and_resumption()
     test_failure_recovery_matrix()
     test_runtime_dependencies()
+    test_kernel_lifecycle_and_verification()
+    test_installer_error_buttons_and_recovery()
     print("All G1OS installer logic tests PASSED.\n")
     return 0
 

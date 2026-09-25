@@ -35,6 +35,50 @@ fail() {
   exit 1
 }
 
+kernel_diagnostics() {
+  echo "=== G1OS Kernel Verification Diagnostics ==="
+  echo "Expected kernel: /run/live/boot/vmlinuz-maclite"
+  echo "Expected initramfs: /run/live/boot/initrd-maclite.img"
+  echo "Mounted installation media:"
+  if command -v findmnt >/dev/null 2>&1; then
+    findmnt -n -o SOURCE,FSTYPE,TARGET /run/live 2>/dev/null || echo "  /run/live: NOT MOUNTED"
+  else
+    grep ' /run/live ' /proc/self/mountinfo 2>/dev/null || echo "  /run/live: NOT MOUNTED"
+  fi
+  echo "Actual searched paths:"
+  for p in /run/live/boot/vmlinuz-maclite /run/live/boot/initrd-maclite.img /run/maclite-live/boot/vmlinuz-maclite /run/maclite-live/boot/initrd-maclite.img /boot/vmlinuz-g1os /boot/vmlinuz-maclite; do
+    if [ -e "$p" ]; then
+      echo "  FOUND $p size=$(wc -c < "$p" | tr -d ' ')"
+    else
+      echo "  MISSING $p"
+    fi
+  done
+  echo "Detected kernel candidates on mounted live media:"
+  found=0
+  if [ -d /run/live ]; then
+    for p in /run/live/boot/* /run/live/EFI/Linux/* /run/live/boot/efi/*; do
+      [ -f "$p" ] || continue
+      case "$p" in *.efi|*vmlinuz*|*bzImage*|*kernel*) echo "  CANDIDATE $p"; found=1 ;; esac
+    done
+  fi
+  [ "$found" = 1 ] || echo "  NONE"
+  echo "Selected kernel: ${KERNEL:-NONE}"
+  echo "Selected initramfs: ${INITRD:-NONE}"
+  if [ -n "${KERNEL:-}" ] && [ -f "$KERNEL" ]; then
+    echo "Kernel size: $(wc -c < "$KERNEL" | tr -d ' ')"
+    echo "Kernel SHA256: $(sha256sum "$KERNEL" | cut -d' ' -f1)"
+  fi
+  if [ -s "${BOOT_MANIFEST:-}" ]; then
+    echo "Build ID: $(sed -n 's/^build_id=//p' "$BOOT_MANIFEST")"
+    echo "Expected SHA256: $(sed -n 's/^kernel_sha256=//p' "$BOOT_MANIFEST")"
+    echo "Kernel version: $(sed -n 's/^kernel_version=//p' "$BOOT_MANIFEST")"
+    echo "Architecture: $(sed -n 's/^kernel_arch=//p' "$BOOT_MANIFEST")"
+  fi
+  echo "Boot partition target: ${DEV_BOOT:-UNSET}"
+  echo "Root filesystem target: ${DEV_BASE:-UNSET}"
+  echo "==========================================="
+}
+
 step() {
   CURRENT_PROGRESS=$2
   CURRENT_MESSAGE=$3
@@ -102,25 +146,81 @@ case "$TARGET" in /dev/*) TARGET=${TARGET#/dev/} ;; esac
 case "$TARGET" in ''|.|..|*[!A-Za-z0-9._-]*) fail "invalid target disk identifier" ;; esac
 
 DEV="/dev/$TARGET"
-[ "$DRY_RUN" = 1 ] || [ -b "$DEV" ] || fail "target block device does not exist: $DEV"
-[ "$DRY_RUN" = 1 ] || [ -e "/sys/block/$TARGET" ] || fail "target is not a whole block disk: $DEV"
-case "$TARGET" in loop*|ram*|sr*|dm-*|md*|zram*) fail "refusing non-physical installation target: $DEV" ;; esac
+
+is_forbidden_virtual_disk() {
+  case "$1" in
+    loop*|ram*|zram*|dm-*|md*|sr*|fd*|nbd*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+read_disk_size_bytes() {
+  name="$1"
+  [ -r "/sys/block/$name/size" ] || return 1
+  sectors=$(cat "/sys/block/$name/size" 2>/dev/null || echo 0)
+  case "$sectors" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$sectors" -gt 0 ] || return 1
+  echo $((sectors * 512))
+}
+
+whole_disk_from_source() {
+  src="$1"
+  case "$src" in /dev/*) ;; *) return 1 ;; esac
+  name=${src#/dev/}
+  if is_forbidden_virtual_disk "$name"; then
+    case "$name" in
+      loop*)
+        backing=$(cat "/sys/class/block/$name/loop/backing_file" 2>/dev/null || true)
+        [ -n "$backing" ] || return 1
+        backing_source=$(findmnt -n -o SOURCE -T "$backing" 2>/dev/null || true)
+        [ -n "$backing_source" ] || return 1
+        whole_disk_from_source "$backing_source"
+        return $?
+        ;;
+      *) return 1 ;;
+    esac
+  fi
+  if [ -e "/sys/class/block/$name/partition" ]; then
+    parent=$(lsblk -ndo PKNAME "/dev/$name" 2>/dev/null || true)
+    [ -n "$parent" ] || return 1
+    whole_disk_from_source "/dev/$parent"
+    return $?
+  fi
+  echo "$name"
+}
+
+validate_physical_target() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  [ -b "$DEV" ] || fail "target block device does not exist: $DEV"
+  [ -d "/sys/block/$TARGET" ] || fail "target is not a whole block disk: $DEV"
+  is_forbidden_virtual_disk "$TARGET" && fail "refusing virtual/optical installation target: $DEV"
+  [ ! -e "/sys/block/$TARGET/partition" ] || fail "refusing partition as installation target: $DEV"
+  [ -e "/sys/block/$TARGET/device" ] || fail "target has no physical sysfs device identity: $DEV"
+  size_bytes=$(read_disk_size_bytes "$TARGET" || true)
+  if [ -z "$size_bytes" ] || [ "$size_bytes" -le 0 ]; then
+    fail "target has no reliable non-zero capacity: $DEV"
+  fi
+  if command -v stat >/dev/null 2>&1; then
+    file_type=$(stat -c %F "$DEV" 2>/dev/null || true)
+    [ "$file_type" = "block special" ] || fail "target is not a block device: $DEV"
+  fi
+}
+
+validate_physical_target
 
 BOOT_DISK=""
-for mp in /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
+for mp in /run/live /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
   [ -d "$mp" ] || continue
   src=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
   [ -n "$src" ] || continue
-  case "$src" in
-    /dev/*)
-      b=${src#/dev/}
-      b=$(printf '%s' "$b" | sed -E 's/p?[0-9]+$//')
-      [ -e "/sys/block/$b" ] && { BOOT_DISK=$b; break; }
-      ;;
-  esac
+  b=$(whole_disk_from_source "$src" 2>/dev/null || true)
+  if [ -n "$b" ] && [ -e "/sys/block/$b" ]; then
+    BOOT_DISK="$b"
+    break
+  fi
 done
 
-[ -z "$BOOT_DISK" ] || [ "$TARGET" != "$BOOT_DISK" ] || fail "refusing to install to active live USB: $DEV"
+[ -z "$BOOT_DISK" ] || [ "$TARGET" != "$BOOT_DISK" ] || fail "refusing to install to active live installation media: $DEV"
 if [ "$DRY_RUN" = 0 ]; then
   if lsblk -nrpo NAME,MOUNTPOINT "$DEV" | awk '$2 != "" {print $1}' | grep -q .; then
     fail "target disk or one of its partitions is mounted: $DEV"
@@ -151,6 +251,8 @@ safe_mktemp_dir() {
 MODEL=$(cat "/sys/block/$TARGET/device/model" 2>/dev/null || echo "unknown")
 SERIAL=$(cat "/sys/block/$TARGET/device/serial" 2>/dev/null || echo "unknown")
 SECTORS=$(cat "/sys/block/$TARGET/size" 2>/dev/null || echo 0)
+case "$SECTORS" in ''|*[!0-9]*) fail "target capacity is not a valid sysfs sector count" ;; esac
+[ "$SECTORS" -gt 0 ] || fail "target reports zero capacity"
 SIZE_GB=$((SECTORS * 512 / 1000 / 1000 / 1000))
 echo "SELECTED DISK: /dev/$TARGET"
 echo "MODEL: $MODEL"
@@ -158,7 +260,44 @@ echo "SERIAL/IDENTIFIER: $SERIAL"
 echo "SIZE: ${SIZE_GB} GB"
 echo "LIVE MEDIA: ${BOOT_DISK:-not detected}"
 
-need mount; need umount; need blkid
+# The fixed installer layout needs room for a 256 MiB EFI partition, a 4 GiB
+# data partition, filesystem metadata/alignment, and the root partition.
+MIN_SECTORS=10485760
+[ "$DRY_RUN" = 1 ] || [ "$SECTORS" -ge "$MIN_SECTORS" ] || fail "target disk is too small for the G1OS partition layout (minimum 5 GiB)"
+
+need mount; need umount; need blkid; need findmnt; need lsblk
+
+read_block_tag() {
+  dev="$1"
+  tag="$2"
+  if [ "$DRY_RUN" = 1 ]; then
+    case "$tag" in
+      UUID) echo "DRYRUN-${dev#*/dev/}-UUID" ;;
+      PARTUUID) echo "DRYRUN-${dev#*/dev/}-PARTUUID" ;;
+      *) fail "unsupported block tag requested: $tag" ;;
+    esac
+    return 0
+  fi
+  value=""
+  attempt=1
+  while [ "$attempt" -le 10 ]; do
+    value=$(blkid -s "$tag" -o value "$dev" 2>/dev/null || true)
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  fail "cannot read $tag from $dev after partition/filesystem creation"
+}
+
+require_partition_nodes() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  for part in "$DEV_BOOT" "$DEV_DATA" "$DEV_BASE"; do
+    [ -b "$part" ] || fail "expected target partition did not appear after partition-table update: $part"
+  done
+}
 
 # Detect partitioning utility
 PART_TOOL=""
@@ -193,32 +332,52 @@ done
 
 KERNEL=""
 INITRD=""
-for p in /boot/vmlinuz-maclite /run/maclite-live/boot/vmlinuz-maclite /boot/vmlinuz-g1os; do [ -s "$p" ] && { KERNEL=$p; break; }; done
-for p in /boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img /boot/initrd-g1os.img; do [ -s "$p" ] && { INITRD=$p; break; }; done
-[ -n "$KERNEL" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS kernel image not found"
-[ -n "$INITRD" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS initramfs not found"
+BOOT_MANIFEST="/run/live/boot/g1os-boot-manifest.txt"
+# The installer kernel/initramfs are transient live-boot artifacts. The final
+# G1OS kernel is the exact kernel staged in the ISO /boot directory. Resolve
+# only from the mounted live media; never fall back to the running kernel.
+if [ "$DRY_RUN" = 0 ]; then
+  grep -q ' /run/live ' /proc/self/mountinfo || fail "live G1OS media is not mounted at /run/live"
+  [ -s "$BOOT_MANIFEST" ] || { kernel_diagnostics; fail "real G1OS kernel image not found: G1OS boot manifest missing from live media"; }
+  [ -s /run/live/boot/vmlinuz-maclite ] || { kernel_diagnostics; fail "real G1OS kernel image not found in ISO payload: /run/live/boot/vmlinuz-maclite"; }
+  [ -s /run/live/boot/initrd-maclite.img ] || { kernel_diagnostics; fail "real G1OS initramfs not found in ISO payload: /run/live/boot/initrd-maclite.img"; }
+fi
+KERNEL=/run/live/boot/vmlinuz-maclite
+INITRD=/run/live/boot/initrd-maclite.img
+if [ "$DRY_RUN" = 0 ]; then
+  MANIFEST_MAGIC=$(sed -n 's/^G1OS_BOOT_MANIFEST=//p' "$BOOT_MANIFEST")
+  EXPECTED_BUILD_ID=$(sed -n 's/^build_id=//p' "$BOOT_MANIFEST")
+  EXPECTED_KERNEL_SHA=$(sed -n 's/^kernel_sha256=//p' "$BOOT_MANIFEST")
+  EXPECTED_INITRD_SHA=$(sed -n 's/^initrd_sha256=//p' "$BOOT_MANIFEST")
+  EXPECTED_KERNEL_SIZE=$(sed -n 's/^kernel_size=//p' "$BOOT_MANIFEST")
+  EXPECTED_INITRD_SIZE=$(sed -n 's/^initrd_size=//p' "$BOOT_MANIFEST")
+  EXPECTED_ARCH=$(sed -n 's/^kernel_arch=//p' "$BOOT_MANIFEST")
+  [ "$MANIFEST_MAGIC" = "1" ] || fail "invalid G1OS boot manifest"
+  if [ -z "$EXPECTED_BUILD_ID" ] || [ -z "$EXPECTED_KERNEL_SHA" ] || [ -z "$EXPECTED_INITRD_SHA" ]; then
+    fail "incomplete G1OS boot manifest"
+  fi
+  [ "$EXPECTED_ARCH" = "x86_64" ] || fail "unsupported G1OS kernel architecture in boot manifest: $EXPECTED_ARCH"
+  [ "$(wc -c < "$KERNEL" | tr -d ' ')" = "$EXPECTED_KERNEL_SIZE" ] || { kernel_diagnostics; fail "G1OS kernel size does not match build manifest"; }
+  [ "$(wc -c < "$INITRD" | tr -d ' ')" = "$EXPECTED_INITRD_SIZE" ] || fail "G1OS initramfs size does not match build manifest"
+  [ "$(sha256sum "$KERNEL" | cut -d' ' -f1)" = "$EXPECTED_KERNEL_SHA" ] || { kernel_diagnostics; fail "G1OS kernel checksum does not match build manifest"; }
+  [ "$(sha256sum "$INITRD" | cut -d' ' -f1)" = "$EXPECTED_INITRD_SHA" ] || { kernel_diagnostics; fail "G1OS initramfs checksum does not match build manifest"; }
+  [ "$(dd if="$KERNEL" bs=1 skip=514 count=4 2>/dev/null | grep -aFc "HdrS" || true)" -eq 1 ] || fail "G1OS kernel boot header is invalid or not an x86 bzImage"
+fi
 
 emit_state "PREPARING"
 save_state "RUNNING" "PREPARING" 10 "Validated target disk, live media, base system, kernel and initramfs"
 step 1 10 "Validated target disk, live media, base system, kernel and initramfs"
-step 2 20 "Unmounting target partitions"
-if [ "$DRY_RUN" = 0 ]; then
-  # Unmount partitions on target if mounted
-  for p in "${DEV}"* "${DEV_BOOT}" "${DEV_DATA}" "${DEV_BASE}"; do
-    if [ -b "$p" ]; then
-      umount "$p" 2>/dev/null || true
-    fi
-  done
-fi
+step 2 20 "Confirming target partitions are not mounted"
 
 emit_state "INSTALLING"
 save_state "RUNNING" "INSTALLING" 30 "Partitioning target disk"
 if [ "$REPAIR_MODE" = 1 ]; then
   step 3 30 "Repair mode: preserving existing partitions on target"
-  BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT" 2>/dev/null || echo "78FA-C9B2")
-  DATA_UUID=$(blkid -s UUID -o value "$DEV_DATA" 2>/dev/null || echo "4a12b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c")
-  BASE_UUID=$(blkid -s UUID -o value "$DEV_BASE" 2>/dev/null || echo "e78d910a-3142-4f81-9b16-5fa4e872c019")
-  BASE_PARTUUID=$(blkid -s PARTUUID -o value "$DEV_BASE" 2>/dev/null || echo "9b165fa4-e872-c019-3142-e78d910a4f81")
+  require_partition_nodes
+  BOOT_UUID=$(read_block_tag "$DEV_BOOT" UUID)
+  DATA_UUID=$(read_block_tag "$DEV_DATA" UUID)
+  BASE_UUID=$(read_block_tag "$DEV_BASE" UUID)
+  BASE_PARTUUID=$(read_block_tag "$DEV_BASE" PARTUUID)
   step 4 40 "Repair mode: retaining existing filesystem data"
 else
   step 3 30 "Repartitioning target with EFI, persistent data and root partitions ($PART_TOOL)"
@@ -235,9 +394,16 @@ else
       run parted -s "$DEV" mkpart MACLITE_DATA ext4 257MiB 4353MiB
       run parted -s "$DEV" mkpart MACLITE_BASE ext4 4353MiB 100%
     else
-      printf "g\nn\n1\n\n+256M\nt\n1\nn\n2\n\n+4G\nt\n2\n20\nn\n3\n\n\nt\n3\n20\nw\n" | fdisk "$DEV" 2>/dev/null || true
+      run sh -c 'printf "%s\\n" "g" "n" "1" "" "+256M" "t" "1" "1" "n" "2" "" "+4G" "t" "2" "20" "n" "3" "" "" "t" "3" "20" "w" | fdisk "$1"' sh "$DEV"
     fi
-    command -v partprobe >/dev/null 2>&1 && run partprobe "$DEV" 2>/dev/null || true
+    if command -v partprobe >/dev/null 2>&1; then
+      run partprobe "$DEV"
+    elif command -v blockdev >/dev/null 2>&1; then
+      run blockdev --rereadpt "$DEV"
+    else
+      fail "cannot refresh kernel partition table: neither partprobe nor blockdev is available"
+    fi
+    require_partition_nodes
     sleep 1
   fi
 
@@ -257,93 +423,107 @@ else
       run mke2fs -t ext4 -F -L MACLITE_BASE "$DEV_BASE" 2>/dev/null || run mke2fs -F -L MACLITE_BASE "$DEV_BASE"
     fi
   fi
-  BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT" 2>/dev/null || echo "78FA-C9B2")
-  DATA_UUID=$(blkid -s UUID -o value "$DEV_DATA" 2>/dev/null || echo "4a12b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c")
-  BASE_UUID=$(blkid -s UUID -o value "$DEV_BASE" 2>/dev/null || echo "e78d910a-3142-4f81-9b16-5fa4e872c019")
-  BASE_PARTUUID=$(blkid -s PARTUUID -o value "$DEV_BASE" 2>/dev/null || echo "9b165fa4-e872-c019-3142-e78d910a4f81")
+  require_partition_nodes
+  BOOT_UUID=$(read_block_tag "$DEV_BOOT" UUID)
+  DATA_UUID=$(read_block_tag "$DEV_DATA" UUID)
+  BASE_UUID=$(read_block_tag "$DEV_BASE" UUID)
+  BASE_PARTUUID=$(read_block_tag "$DEV_BASE" PARTUUID)
 fi
 
-step 5 55 "Installing the verified live base onto the target root filesystem"
-save_state "RUNNING" "INSTALLING" 55 "Copying system base to root partition"
-BASE_MNT=$(safe_mktemp_dir /tmp/g1os-base.XXXXXX)
-BOOT_MNT=$(safe_mktemp_dir /tmp/g1os-boot.XXXXXX)
-cleanup() {
-  umount "$BASE_MNT" 2>/dev/null || true
-  umount "$BOOT_MNT" 2>/dev/null || true
-  rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true
-}
-trap cleanup EXIT HUP INT TERM
+if [ "$REPAIR_MODE" = 1 ]; then
+  step 5 55 "Repairing existing installation without replacing the root filesystem"
+  save_state "RUNNING" "INSTALLING" 55 "Mounting existing target and validating repair prerequisites"
+  BASE_MNT=$(safe_mktemp_dir /tmp/g1os-repair-root.XXXXXX)
+  BOOT_MNT=$(safe_mktemp_dir /tmp/g1os-repair-boot.XXXXXX)
+  cleanup() {
+    umount "$BOOT_MNT" 2>/dev/null || true
+    umount "$BASE_MNT" 2>/dev/null || true
+    rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true
+  }
+  trap cleanup EXIT HUP INT TERM
+  run mount "$DEV_BASE" "$BASE_MNT"
+  [ -d "$BASE_MNT/etc" ] || fail "Repair FAIL: existing G1OS root filesystem is missing /etc"
+  [ -d "$BASE_MNT/usr" ] || fail "Repair FAIL: existing G1OS root filesystem is missing /usr"
+  [ -x "$BASE_MNT/usr/bin/mica-comp" ] || fail "Repair FAIL: existing G1OS installation is not a recognizable G1OS root"
+  printf '%s\n'     "INSTALLED_DISK=/dev/$TARGET"     "INSTALLED_SERIAL=$SERIAL"     "INSTALLED_BASE_UUID=$BASE_UUID"     "INSTALLED_BASE_PARTUUID=$BASE_PARTUUID"     "INSTALLED_BOOT_UUID=$BOOT_UUID"     "INSTALLED_DATA_UUID=$DATA_UUID"     "INSTALLED_VERSION=G1OS 1.0"     "G1OS_BUILD_ID=$EXPECTED_BUILD_ID"     "G1OS_KERNEL_SHA256=$EXPECTED_KERNEL_SHA"     "G1OS_INITRD_SHA256=$EXPECTED_INITRD_SHA"     "G1OS_KERNEL_PATH=/boot/vmlinuz-g1os"     "G1OS_INITRD_PATH=/boot/initrd-g1os.img" > "$BASE_MNT/etc/g1os-installed"
+  run umount "$BASE_MNT"
+  step 6 70 "Repairing kernel, initramfs and boot configuration from authoritative ISO payload"
+else
+  step 5 55 "Installing the verified live base onto the target root filesystem"
+  save_state "RUNNING" "INSTALLING" 55 "Copying system base to root partition"
+  BASE_MNT=$(safe_mktemp_dir /tmp/g1os-base.XXXXXX)
+  BOOT_MNT=$(safe_mktemp_dir /tmp/g1os-boot.XXXXXX)
+  cleanup() {
+    umount "$BASE_MNT" 2>/dev/null || true
+    umount "$BOOT_MNT" 2>/dev/null || true
+    rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true
+  }
+  trap cleanup EXIT HUP INT TERM
 
-run mount "$DEV_BASE" "$BASE_MNT"
-if [ "$DRY_RUN" = 0 ] && [ -n "$LIVE_BASE" ]; then
-  # Create installation in-progress marker to detect partial installation
-  touch "$BASE_MNT/.g1os_install_in_progress"
-  run cp -a "$LIVE_BASE/." "$BASE_MNT/"
-  
-  # Ensure /bin/busybox and core tools exist on installed root
-  if [ -s /bin/busybox ] && [ ! -s "$BASE_MNT/bin/busybox" ]; then
-    mkdir -p "$BASE_MNT/bin" "$BASE_MNT/sbin"
-    cp -a /bin/busybox "$BASE_MNT/bin/busybox"
-    chmod 0755 "$BASE_MNT/bin/busybox"
-    for applet in sh bash mount umount ls cat cp mv rm mkdir grep sed awk sleep; do
-      ln -sf /bin/busybox "$BASE_MNT/bin/$applet" 2>/dev/null || true
-    done
-  fi
-  
-  # Ensure dynamic linker and shared libraries exist on installed root
-  for libpath in /lib/x86_64-linux-gnu /lib64 /lib /usr/lib; do
-    if [ -d "$libpath" ]; then
-      mkdir -p "$BASE_MNT$libpath"
-      cp -a "$libpath/." "$BASE_MNT$libpath/" 2>/dev/null || true
+  run mount "$DEV_BASE" "$BASE_MNT"
+  if [ "$DRY_RUN" = 0 ] && [ -n "$LIVE_BASE" ]; then
+    touch "$BASE_MNT/.g1os_install_in_progress"
+    run cp -a "$LIVE_BASE/." "$BASE_MNT/"
+    if [ -s /bin/busybox ] && [ ! -s "$BASE_MNT/bin/busybox" ]; then
+      mkdir -p "$BASE_MNT/bin" "$BASE_MNT/sbin"
+      cp -a /bin/busybox "$BASE_MNT/bin/busybox"
+      chmod 0755 "$BASE_MNT/bin/busybox"
+      for applet in sh bash mount umount ls cat cp mv rm mkdir grep sed awk sleep; do
+        ln -sf /bin/busybox "$BASE_MNT/bin/$applet" 2>/dev/null || true
+      done
     fi
-  done
-  if [ -f "$BASE_MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] && [ ! -e "$BASE_MNT/lib64/ld-linux-x86-64.so.2" ]; then
-    mkdir -p "$BASE_MNT/lib64"
-    ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$BASE_MNT/lib64/ld-linux-x86-64.so.2" 2>/dev/null || true
+    for libpath in /lib/x86_64-linux-gnu /lib64 /lib /usr/lib; do
+      if [ -d "$libpath" ]; then
+        mkdir -p "$BASE_MNT$libpath"
+        cp -a "$libpath/." "$BASE_MNT$libpath/" 2>/dev/null || true
+      fi
+    done
+    if [ -f "$BASE_MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] && [ ! -e "$BASE_MNT/lib64/ld-linux-x86-64.so.2" ]; then
+      mkdir -p "$BASE_MNT/lib64"
+      ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$BASE_MNT/lib64/ld-linux-x86-64.so.2" 2>/dev/null || true
+    fi
   fi
-fi
 
-mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log"
-cat > "$BASE_MNT/etc/fstab" <<EOF
-UUID=$BASE_UUID  /          ext4  ro,noatime,errors=remount-ro  0 1
+  mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log"
+  cat > "$BASE_MNT/etc/fstab" <<EOF
+UUID=$BASE_UUID  /          ext4  rw,noatime,errors=remount-ro  0 1
 UUID=$DATA_UUID  /var/data  ext4  rw,noatime,errors=remount-ro  0 2
 UUID=$BOOT_UUID  /boot/efi  vfat  rw,umask=0077               0 1
 EOF
 
-printf '%s\n' \
-  "INSTALLED_DISK=/dev/$TARGET" \
-  "INSTALLED_SERIAL=$SERIAL" \
-  "INSTALLED_BASE_UUID=$BASE_UUID" \
-  "INSTALLED_BASE_PARTUUID=$BASE_PARTUUID" \
-  "INSTALLED_BOOT_UUID=$BOOT_UUID" \
-  "INSTALLED_DATA_UUID=$DATA_UUID" \
-  "INSTALLED_VERSION=G1OS 1.0" > "$BASE_MNT/etc/g1os-installed"
+  printf '%s\n'     "INSTALLED_DISK=/dev/$TARGET"     "INSTALLED_SERIAL=$SERIAL"     "INSTALLED_BASE_UUID=$BASE_UUID"     "INSTALLED_BASE_PARTUUID=$BASE_PARTUUID"     "INSTALLED_BOOT_UUID=$BOOT_UUID"     "INSTALLED_DATA_UUID=$DATA_UUID"     "INSTALLED_VERSION=G1OS 1.0"     "G1OS_BUILD_ID=$EXPECTED_BUILD_ID"     "G1OS_KERNEL_SHA256=$EXPECTED_KERNEL_SHA"     "G1OS_INITRD_SHA256=$EXPECTED_INITRD_SHA"     "G1OS_KERNEL_PATH=/boot/vmlinuz-g1os"     "G1OS_INITRD_PATH=/boot/initrd-g1os.img" > "$BASE_MNT/etc/g1os-installed"
 
-# Clean in-progress marker before unmount
-rm -f "$BASE_MNT/.g1os_install_in_progress"
-run sync
-run umount "$BASE_MNT"
+  rm -f "$BASE_MNT/.g1os_install_in_progress"
+  run sync
+  run umount "$BASE_MNT"
+  step 6 70 "Installing Apple EFI fallback bootloader and UUID-bound boot configuration"
+fi
 
-step 6 70 "Installing Apple EFI fallback bootloader and UUID-bound boot configuration"
-run mount "$DEV_BOOT" "$BOOT_MNT"
+if ! findmnt -n -T "$BOOT_MNT" >/dev/null 2>&1; then
+  run mount "$DEV_BOOT" "$BOOT_MNT"
+fi
 mkdir -p "$BOOT_MNT/EFI/BOOT" "$BOOT_MNT/boot/grub"
 if [ "$DRY_RUN" = 0 ]; then
-  if command -v grub-mkimage >/dev/null 2>&1; then
-    run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
+  if [ ! -s "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" ]; then
+    if command -v grub-mkimage >/dev/null 2>&1; then
+      run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
+    else
+      COPIED_LOADER=0
+      for cand in /run/live/EFI/BOOT/BOOTX64.EFI /run/live/boot/bootx64.efi /EFI/BOOT/BOOTX64.EFI /boot/bootx64.efi /run/live/EFI/BOOT/bootx64.efi; do
+        if [ -s "$cand" ]; then
+          run cp "$cand" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
+          COPIED_LOADER=1
+          break
+        fi
+      done
+      [ "$COPIED_LOADER" = 1 ] || fail "No EFI loader available (grub-mkimage missing and no BOOTX64.EFI found on live media)"
+    fi
   else
-    COPIED_LOADER=0
-    for cand in /run/live/EFI/BOOT/BOOTX64.EFI /run/live/boot/bootx64.efi /EFI/BOOT/BOOTX64.EFI /boot/bootx64.efi /run/live/EFI/BOOT/bootx64.efi; do
-      if [ -s "$cand" ]; then
-        run cp "$cand" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
-        COPIED_LOADER=1
-        break
-      fi
-    done
-    [ "$COPIED_LOADER" = 1 ] || fail "No EFI loader available (grub-mkimage missing and no BOOTX64.EFI found on live media)"
+    echo "Repair: existing EFI fallback loader preserved"
   fi
 fi
 
-cat > "$BOOT_MNT/EFI/BOOT/grub.cfg" <<EOF
+cat > "$BOOT_MNT/EFI/BOOT/grub.cfg.new" <<EOF
 set default=0
 set timeout=5
 insmod part_gpt
@@ -357,17 +537,17 @@ set root=(\$boot)
 
 menuentry "G1OS" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 mitigations=off acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
 menuentry "G1OS Safe Graphics (Software Compositing)" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 acpi_backlight=native reboot=pci panic=0
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off radeon.modeset=1 fbcon=map:0 acpi_backlight=native reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
 menuentry "G1OS Safe Graphics (Verbose Debug)" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 fbcon=map:0 console=tty0 earlycon debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 maclite.gl=off radeon.modeset=1 fbcon=map:0 console=tty0 earlycon debug ignore_loglevel acpi_backlight=native reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
 menuentry "G1OS Recovery Shell" {
@@ -376,9 +556,32 @@ menuentry "G1OS Recovery Shell" {
   initrd /boot/initrd-g1os.img
 }
 EOF
+if [ "$DRY_RUN" = 1 ]; then
+  :
+elif [ ! -s "$BOOT_MNT/EFI/BOOT/grub.cfg" ] || [ "$(sha256sum "$BOOT_MNT/EFI/BOOT/grub.cfg" | cut -d' ' -f1)" != "$(sha256sum "$BOOT_MNT/EFI/BOOT/grub.cfg.new" | cut -d' ' -f1)" ]; then
+  run mv "$BOOT_MNT/EFI/BOOT/grub.cfg.new" "$BOOT_MNT/EFI/BOOT/grub.cfg"
+else
+  rm -f "$BOOT_MNT/EFI/BOOT/grub.cfg.new"
+  echo "Repair: existing GRUB configuration already matches desired configuration"
+fi
 run cp "$BOOT_MNT/EFI/BOOT/grub.cfg" "$BOOT_MNT/boot/grub/grub.cfg"
-if [ -n "$KERNEL" ]; then run cp "$KERNEL" "$BOOT_MNT/boot/vmlinuz-g1os"; fi
-if [ -n "$INITRD" ]; then run cp "$INITRD" "$BOOT_MNT/boot/initrd-g1os.img"; fi
+if [ "$DRY_RUN" = 0 ]; then
+  if [ ! -s "$BOOT_MNT/boot/vmlinuz-g1os" ] || [ "$(sha256sum "$BOOT_MNT/boot/vmlinuz-g1os" | cut -d' ' -f1)" != "$EXPECTED_KERNEL_SHA" ]; then
+    run cp "$KERNEL" "$BOOT_MNT/boot/vmlinuz-g1os"
+    echo "Repair/install: authoritative G1OS kernel copied"
+  else
+    echo "Repair: existing G1OS kernel checksum already matches; preserved"
+  fi
+  if [ ! -s "$BOOT_MNT/boot/initrd-g1os.img" ] || [ "$(sha256sum "$BOOT_MNT/boot/initrd-g1os.img" | cut -d' ' -f1)" != "$EXPECTED_INITRD_SHA" ]; then
+    run cp "$INITRD" "$BOOT_MNT/boot/initrd-g1os.img"
+    echo "Repair/install: matching G1OS initramfs copied"
+  else
+    echo "Repair: existing G1OS initramfs checksum already matches; preserved"
+  fi
+  if [ ! -s "$BOOT_MNT/boot/g1os-boot-manifest.txt" ] || [ "$(sha256sum "$BOOT_MNT/boot/g1os-boot-manifest.txt" | cut -d' ' -f1)" != "$(sha256sum "$BOOT_MANIFEST" | cut -d' ' -f1)" ]; then
+    run cp "$BOOT_MANIFEST" "$BOOT_MNT/boot/g1os-boot-manifest.txt"
+  fi
+fi
 printf 'G1OS' > "$BOOT_MNT/.disk_label"
 run sync
 
@@ -448,10 +651,31 @@ if [ "$DRY_RUN" = 0 ]; then
 fi
 
 # 4. Verify Kernel & Initramfs
-verify_check 4 86 "Kernel" "PASS" "vmlinuz-g1os and initrd-g1os.img readable and referenced correctly"
+verify_check 4 86 "Kernel" "PASS" "real G1OS kernel, matching initramfs, architecture and build provenance"
 if [ "$DRY_RUN" = 0 ]; then
-  [ -s "$VERIFY_BOOT/boot/vmlinuz-g1os" ] || fail "Verification FAIL: Kernel image vmlinuz-g1os missing or empty"
-  [ -s "$VERIFY_BOOT/boot/initrd-g1os.img" ] || fail "Verification FAIL: Initramfs initrd-g1os.img missing or empty"
+  [ -s "$VERIFY_BOOT/boot/vmlinuz-g1os" ] || fail "Verification FAIL: real G1OS kernel vmlinuz-g1os missing or empty"
+  [ -s "$VERIFY_BOOT/boot/initrd-g1os.img" ] || fail "Verification FAIL: real G1OS initramfs initrd-g1os.img missing or empty"
+  [ -s "$VERIFY_BOOT/boot/g1os-boot-manifest.txt" ] || fail "Verification FAIL: installed G1OS boot manifest missing"
+  grep -F "G1OS_BOOT_MANIFEST=1" "$VERIFY_BOOT/boot/g1os-boot-manifest.txt" >/dev/null || fail "Verification FAIL: installed boot manifest invalid"
+  INSTALLED_KERNEL_SHA=$(sha256sum "$VERIFY_BOOT/boot/vmlinuz-g1os" | cut -d' ' -f1)
+  INSTALLED_INITRD_SHA=$(sha256sum "$VERIFY_BOOT/boot/initrd-g1os.img" | cut -d' ' -f1)
+  MANIFEST_KERNEL_SHA=$(sed -n 's/^kernel_sha256=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  MANIFEST_INITRD_SHA=$(sed -n 's/^initrd_sha256=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  MANIFEST_BUILD_ID=$(sed -n 's/^build_id=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  [ -n "$MANIFEST_BUILD_ID" ] || fail "Verification FAIL: installed boot manifest has no build ID"
+  [ "$INSTALLED_KERNEL_SHA" = "$MANIFEST_KERNEL_SHA" ] || fail "Verification FAIL: installed kernel checksum does not match ISO build manifest"
+  [ "$INSTALLED_INITRD_SHA" = "$MANIFEST_INITRD_SHA" ] || fail "Verification FAIL: installed initramfs checksum does not match ISO build manifest"
+  [ "$(dd if="$VERIFY_BOOT/boot/vmlinuz-g1os" bs=1 skip=514 count=4 2>/dev/null | grep -aFc "HdrS" || true)" -eq 1 ] || fail "Verification FAIL: installed G1OS kernel boot header is invalid"
+  GRUB_CFG="$VERIFY_BOOT/EFI/BOOT/grub.cfg"
+  grep -F "linux /boot/vmlinuz-g1os" "$GRUB_CFG" >/dev/null || fail "Verification FAIL: bootloader does not reference the installed G1OS kernel"
+  grep -F "initrd /boot/initrd-g1os.img" "$GRUB_CFG" >/dev/null || fail "Verification FAIL: bootloader does not reference the installed G1OS initramfs"
+  KERNEL_PATH_IN_MANIFEST=$(sed -n 's/^kernel_install_filename=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  INITRD_PATH_IN_MANIFEST=$(sed -n 's/^initrd_install_filename=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  [ "$KERNEL_PATH_IN_MANIFEST" = "vmlinuz-g1os" ] || fail "Verification FAIL: kernel install filename provenance mismatch"
+  [ "$INITRD_PATH_IN_MANIFEST" = "initrd-g1os.img" ] || fail "Verification FAIL: initramfs install filename provenance mismatch"
+  echo "KERNEL: path=/boot/vmlinuz-g1os size=$(wc -c < "$VERIFY_BOOT/boot/vmlinuz-g1os" | tr -d ' ') architecture=x86_64 build_id=$MANIFEST_BUILD_ID checksum=$INSTALLED_KERNEL_SHA"
+  echo "INITRAMFS: path=/boot/initrd-g1os.img size=$(wc -c < "$VERIFY_BOOT/boot/initrd-g1os.img" | tr -d ' ') checksum=$INSTALLED_INITRD_SHA"
+  echo "BOOTLOADER: path=/EFI/BOOT/grub.cfg kernel=/boot/vmlinuz-g1os initramfs=/boot/initrd-g1os.img"
 fi
 
 # 5. Verify Drivers (Distinguish REQUIRED, OPTIONAL, UNSUPPORTED)
@@ -509,6 +733,9 @@ if [ "$DRY_RUN" = 0 ]; then
   grep -F "UUID=$BOOT_UUID" "$VERIFY_ROOT/etc/fstab" >/dev/null || fail "Verification FAIL: Boot UUID missing from /etc/fstab"
   grep -F "UUID=$DATA_UUID" "$VERIFY_ROOT/etc/fstab" >/dev/null || fail "Verification FAIL: Data UUID missing from /etc/fstab"
   [ -s "$VERIFY_ROOT/etc/g1os-installed" ] || fail "Verification FAIL: /etc/g1os-installed metadata missing"
+  grep -F "G1OS_BUILD_ID=$MANIFEST_BUILD_ID" "$VERIFY_ROOT/etc/g1os-installed" >/dev/null || fail "Verification FAIL: installed build ID does not match authoritative kernel manifest"
+  grep -F "G1OS_KERNEL_SHA256=$MANIFEST_KERNEL_SHA" "$VERIFY_ROOT/etc/g1os-installed" >/dev/null || fail "Verification FAIL: installed kernel provenance metadata is stale"
+  grep -F "G1OS_INITRD_SHA256=$MANIFEST_INITRD_SHA" "$VERIFY_ROOT/etc/g1os-installed" >/dev/null || fail "Verification FAIL: installed initramfs provenance metadata is stale"
 fi
 
 # 12. Verify Required Services & Integrity
