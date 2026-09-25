@@ -1034,11 +1034,16 @@ static void draw(void)
         ml_draw_text(&c, fb, 60, 222, fail_header, 13, ml_rgb(255, 140, 135));
         ml_draw_text(&c, f, 60, 244, ERROR_MESSAGE, 12, ml_rgb(238, 190, 190));
 
-        ml_rect logbox = ml_rect_make(52, 274, s->w - 104, 116);
-        ml_fill_rounded(&c, logbox, 10, ml_rgba(5, 7, 10, 220));
-        int first = N_LOG_LINES > 6 ? N_LOG_LINES - 6 : 0;
-        for (int i = first; i < N_LOG_LINES; i++)
-            ml_draw_text(&c, f, 64, 296 + (i - first) * 16, LOG_LINES[i], 9, ml_rgb(205, 155, 155));
+        /* Error details are opt-in. Previously the log was always painted,
+         * so toggling SHOW_DETAILS changed no visible state and made the View
+         * Details button appear broken. */
+        if (SHOW_DETAILS) {
+            ml_rect logbox = ml_rect_make(52, 274, s->w - 104, 116);
+            ml_fill_rounded(&c, logbox, 10, ml_rgba(5, 7, 10, 220));
+            int first = N_LOG_LINES > 6 ? N_LOG_LINES - 6 : 0;
+            for (int i = first; i < N_LOG_LINES; i++)
+                ml_draw_text(&c, f, 64, 296 + (i - first) * 16, LOG_LINES[i], 9, ml_rgb(205, 155, 155));
+        }
 
         /* Buttons: [Retry] [Repair] [View Details] */
         ml_rect btn_retry = ml_rect_make(cx - 150, 420, 90, 36);
@@ -1051,7 +1056,7 @@ static void draw(void)
 
         ml_rect btn_details = ml_rect_make(cx + 65, 420, 105, 36);
         ml_fill_rounded(&c, btn_details, 10, ml_rgba(255, 255, 255, 20));
-        ml_draw_text(&c, fb, cx + 76, 443, "View Details", 11, ml_rgb(220, 230, 245));
+        ml_draw_text(&c, fb, cx + 76, 443, SHOW_DETAILS ? "Hide Details" : "View Details", 11, ml_rgb(220, 230, 245));
     }
 
     mica_win_commit(WIN);
@@ -1176,7 +1181,8 @@ static void input(mica_win *w, const msg_input *in)
                 return;
             }
             if (rect_contains_inclusive(in->x, in->y, cx + 65, 420, 105, 36)) {
-                SHOW_DETAILS = !SHOW_DETAILS;
+                AUX_BUTTON_PRESSED = true;
+                add_log("UI: View Details DOWN local=%d,%d", in->x, in->y);
                 draw();
                 return;
             }
@@ -1229,6 +1235,9 @@ static void input(mica_win *w, const msg_input *in)
                     stop_backend(true);
                     BACKEND_FAILED = false;
                     start_backend(true);
+                } else if (rect_contains_inclusive(in->x, in->y, cx + 65, 420, 105, 36)) {
+                    SHOW_DETAILS = !SHOW_DETAILS;
+                    add_log("UI: View Details %s", SHOW_DETAILS ? "opened" : "closed");
                 }
             }
             draw();
