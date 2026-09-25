@@ -68,21 +68,31 @@ for exe in "$TMP/initrd"/usr/bin/*; do check_elf "$exe"; done
 
 KERNEL=${G1OS_KERNEL:-$OUT/vmlinuz-maclite}
 [ -s "$KERNEL" ] || fail "kernel artifact missing: $KERNEL"
-file "$KERNEL" | grep -Eiq 'Linux kernel|boot executable|PE32' || fail "kernel is not a recognized x86 boot executable"
+[ -s "$OUT/g1os-kernel-manifest.txt" ] || fail "authoritative kernel manifest missing"
+grep -F 'G1OS_KERNEL_MANIFEST=1' "$OUT/g1os-kernel-manifest.txt" >/dev/null || fail "invalid authoritative kernel manifest"
+manifest_kernel_sha=$(sed -n 's/^artifact_sha256=//p' "$OUT/g1os-kernel-manifest.txt")
+manifest_kernel_size=$(sed -n 's/^artifact_size=//p' "$OUT/g1os-kernel-manifest.txt")
+[ "$(wc -c < "$KERNEL" | tr -d ' ')" = "$manifest_kernel_size" ] || fail "kernel size does not match authoritative manifest"
+[ "$(sha256sum "$KERNEL" | awk '{print $1}')" = "$manifest_kernel_sha" ] || fail "kernel checksum does not match authoritative manifest"
+[ "$(dd if="$KERNEL" bs=1 skip=514 count=4 2>/dev/null | grep -aFc 'HdrS' || true)" -eq 1 ] || fail "kernel is not a valid x86 bzImage"
 
 if [ -s "$ISO" ]; then
     need xorriso
     need unsquashfs
     sha256sum "$ISO" >/dev/null || fail "cannot hash ISO"
     xorriso -indev "$ISO" -find / -exec report_lba >"$TMP/iso-files" 2>/dev/null || fail "xorriso cannot inspect ISO"
-    for required in /boot/vmlinuz-maclite /boot/initrd-maclite.img /boot/g1os-boot-manifest.txt /boot/grub.cfg /live/maclite-base.sqfs /EFI/BOOT/BOOTX64.EFI; do
+    for required in /boot/vmlinuz-maclite /boot/initrd-maclite.img /boot/g1os-kernel-manifest.txt /boot/g1os-initrd-manifest.txt /boot/g1os-boot-manifest.txt /boot/grub.cfg /live/maclite-base.sqfs /EFI/BOOT/BOOTX64.EFI; do
         grep -F "$required" "$TMP/iso-files" >/dev/null || fail "ISO missing required path: $required"
     done
     xorriso -osirrox on -indev "$ISO" -extract / "$TMP/iso" >/dev/null 2>&1 || fail "ISO extraction failed"
     chmod -R u+rwx "$TMP/iso" 2>/dev/null || true
     [ -s "$TMP/iso/boot/initrd-maclite.img" ] || fail "extracted ISO initramfs missing"
     [ -s "$TMP/iso/boot/vmlinuz-maclite" ] || fail "extracted ISO kernel missing"
+    [ -s "$TMP/iso/boot/g1os-kernel-manifest.txt" ] || fail "extracted ISO kernel manifest missing"
+    [ -s "$TMP/iso/boot/g1os-initrd-manifest.txt" ] || fail "extracted ISO initramfs manifest missing"
     [ -s "$TMP/iso/boot/g1os-boot-manifest.txt" ] || fail "extracted ISO G1OS boot manifest missing"
+    grep -F 'G1OS_KERNEL_MANIFEST=1' "$TMP/iso/boot/g1os-kernel-manifest.txt" >/dev/null || fail "invalid ISO kernel manifest"
+    grep -F 'G1OS_INITRD_MANIFEST=1' "$TMP/iso/boot/g1os-initrd-manifest.txt" >/dev/null || fail "invalid ISO initramfs manifest"
     grep -F 'G1OS_BOOT_MANIFEST=1' "$TMP/iso/boot/g1os-boot-manifest.txt" >/dev/null || fail "invalid G1OS boot manifest"
     manifest_kernel_sha=$(sed -n 's/^kernel_sha256=//p' "$TMP/iso/boot/g1os-boot-manifest.txt")
     manifest_initrd_sha=$(sed -n 's/^initrd_sha256=//p' "$TMP/iso/boot/g1os-boot-manifest.txt")
