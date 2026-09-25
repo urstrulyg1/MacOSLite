@@ -63,6 +63,26 @@ if grep -F 'runtime-provenance.sha256' scripts/make-iso.sh >/dev/null; then
 else
   fail "runtime provenance is missing"
 fi
+if grep -F '/tmp/initrd_inspect' scripts/make-iso.sh >/dev/null; then
+  fail "ISO build depends on stale external /tmp/initrd_inspect content"
+else
+  pass "ISO runtime content comes from the current initrd/build"
+fi
+if grep -Eq 'blkid.*\|\|[[:space:]]*echo[[:space:]]*"[0-9A-Za-z-]+"' installer/maclite-installer-backend >/dev/null; then
+  fail "installer can substitute fabricated block UUIDs after blkid failure"
+else
+  pass "installer fails closed when real filesystem/PARTUUID values cannot be read"
+fi
+if grep -F 'fdisk "$DEV" 2>/dev/null || true' installer/maclite-installer-backend >/dev/null; then
+  fail "fdisk partitioning failure is silently ignored"
+else
+  pass "fdisk partitioning failures are fatal"
+fi
+if grep -F 'partprobe "$DEV" 2>/dev/null || true' installer/maclite-installer-backend >/dev/null; then
+  fail "partition-table reread failure is silently ignored"
+else
+  pass "partition-table reread failures are fatal"
+fi
 
 for f in boot/g1os-init scripts/make-initrd.sh scripts/make-iso.sh; do
   if grep -nE '(^|;)[[:space:]]*(true|:)[[:space:]]*(#|$)' "$f" >/dev/null; then
