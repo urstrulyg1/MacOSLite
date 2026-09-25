@@ -386,67 +386,77 @@ else
   BASE_PARTUUID=$(read_block_tag "$DEV_BASE" PARTUUID)
 fi
 
-step 5 55 "Installing the verified live base onto the target root filesystem"
-save_state "RUNNING" "INSTALLING" 55 "Copying system base to root partition"
-BASE_MNT=$(safe_mktemp_dir /tmp/g1os-base.XXXXXX)
-BOOT_MNT=$(safe_mktemp_dir /tmp/g1os-boot.XXXXXX)
-cleanup() {
-  umount "$BASE_MNT" 2>/dev/null || true
-  umount "$BOOT_MNT" 2>/dev/null || true
-  rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true
-}
-trap cleanup EXIT HUP INT TERM
+if [ "$REPAIR_MODE" = 1 ]; then
+  step 5 55 "Repairing existing installation without replacing the root filesystem"
+  save_state "RUNNING" "INSTALLING" 55 "Mounting existing target and validating repair prerequisites"
+  BASE_MNT=$(safe_mktemp_dir /tmp/g1os-repair-root.XXXXXX)
+  BOOT_MNT=$(safe_mktemp_dir /tmp/g1os-repair-boot.XXXXXX)
+  cleanup() {
+    umount "$BOOT_MNT" 2>/dev/null || true
+    umount "$BASE_MNT" 2>/dev/null || true
+    rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true
+  }
+  trap cleanup EXIT HUP INT TERM
+  run mount "$DEV_BASE" "$BASE_MNT"
+  [ -d "$BASE_MNT/etc" ] || fail "Repair FAIL: existing G1OS root filesystem is missing /etc"
+  [ -d "$BASE_MNT/usr" ] || fail "Repair FAIL: existing G1OS root filesystem is missing /usr"
+  [ -x "$BASE_MNT/usr/bin/mica-comp" ] || fail "Repair FAIL: existing G1OS installation is not a recognizable G1OS root"
+  run umount "$BASE_MNT"
+  step 6 70 "Repairing kernel, initramfs and boot configuration from authoritative ISO payload"
+else
+  step 5 55 "Installing the verified live base onto the target root filesystem"
+  save_state "RUNNING" "INSTALLING" 55 "Copying system base to root partition"
+  BASE_MNT=$(safe_mktemp_dir /tmp/g1os-base.XXXXXX)
+  BOOT_MNT=$(safe_mktemp_dir /tmp/g1os-boot.XXXXXX)
+  cleanup() {
+    umount "$BASE_MNT" 2>/dev/null || true
+    umount "$BOOT_MNT" 2>/dev/null || true
+    rmdir "$BASE_MNT" "$BOOT_MNT" 2>/dev/null || true
+  }
+  trap cleanup EXIT HUP INT TERM
 
-run mount "$DEV_BASE" "$BASE_MNT"
-if [ "$DRY_RUN" = 0 ] && [ -n "$LIVE_BASE" ]; then
-  # Create installation in-progress marker to detect partial installation
-  touch "$BASE_MNT/.g1os_install_in_progress"
-  run cp -a "$LIVE_BASE/." "$BASE_MNT/"
-  
-  # Ensure /bin/busybox and core tools exist on installed root
-  if [ -s /bin/busybox ] && [ ! -s "$BASE_MNT/bin/busybox" ]; then
-    mkdir -p "$BASE_MNT/bin" "$BASE_MNT/sbin"
-    cp -a /bin/busybox "$BASE_MNT/bin/busybox"
-    chmod 0755 "$BASE_MNT/bin/busybox"
-    for applet in sh bash mount umount ls cat cp mv rm mkdir grep sed awk sleep; do
-      ln -sf /bin/busybox "$BASE_MNT/bin/$applet" 2>/dev/null || true
-    done
-  fi
-  
-  # Ensure dynamic linker and shared libraries exist on installed root
-  for libpath in /lib/x86_64-linux-gnu /lib64 /lib /usr/lib; do
-    if [ -d "$libpath" ]; then
-      mkdir -p "$BASE_MNT$libpath"
-      cp -a "$libpath/." "$BASE_MNT$libpath/" 2>/dev/null || true
+  run mount "$DEV_BASE" "$BASE_MNT"
+  if [ "$DRY_RUN" = 0 ] && [ -n "$LIVE_BASE" ]; then
+    touch "$BASE_MNT/.g1os_install_in_progress"
+    run cp -a "$LIVE_BASE/." "$BASE_MNT/"
+    if [ -s /bin/busybox ] && [ ! -s "$BASE_MNT/bin/busybox" ]; then
+      mkdir -p "$BASE_MNT/bin" "$BASE_MNT/sbin"
+      cp -a /bin/busybox "$BASE_MNT/bin/busybox"
+      chmod 0755 "$BASE_MNT/bin/busybox"
+      for applet in sh bash mount umount ls cat cp mv rm mkdir grep sed awk sleep; do
+        ln -sf /bin/busybox "$BASE_MNT/bin/$applet" 2>/dev/null || true
+      done
     fi
-  done
-  if [ -f "$BASE_MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] && [ ! -e "$BASE_MNT/lib64/ld-linux-x86-64.so.2" ]; then
-    mkdir -p "$BASE_MNT/lib64"
-    ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$BASE_MNT/lib64/ld-linux-x86-64.so.2" 2>/dev/null || true
+    for libpath in /lib/x86_64-linux-gnu /lib64 /lib /usr/lib; do
+      if [ -d "$libpath" ]; then
+        mkdir -p "$BASE_MNT$libpath"
+        cp -a "$libpath/." "$BASE_MNT$libpath/" 2>/dev/null || true
+      fi
+    done
+    if [ -f "$BASE_MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] && [ ! -e "$BASE_MNT/lib64/ld-linux-x86-64.so.2" ]; then
+      mkdir -p "$BASE_MNT/lib64"
+      ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$BASE_MNT/lib64/ld-linux-x86-64.so.2" 2>/dev/null || true
+    fi
   fi
-fi
 
-mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log"
-cat > "$BASE_MNT/etc/fstab" <<EOF
+  mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log"
+  cat > "$BASE_MNT/etc/fstab" <<EOF
 UUID=$BASE_UUID  /          ext4  rw,noatime,errors=remount-ro  0 1
 UUID=$DATA_UUID  /var/data  ext4  rw,noatime,errors=remount-ro  0 2
 UUID=$BOOT_UUID  /boot/efi  vfat  rw,umask=0077               0 1
 EOF
 
-printf '%s\n' \
-  "INSTALLED_DISK=/dev/$TARGET" \
-  "INSTALLED_SERIAL=$SERIAL" \
-  "INSTALLED_BASE_UUID=$BASE_UUID" \
-  "INSTALLED_BASE_PARTUUID=$BASE_PARTUUID" \
-  "INSTALLED_BOOT_UUID=$BOOT_UUID" \
-  "INSTALLED_DATA_UUID=$DATA_UUID" \
-  "INSTALLED_VERSION=G1OS 1.0" > "$BASE_MNT/etc/g1os-installed"
+  printf '%s\n'     "INSTALLED_DISK=/dev/$TARGET"     "INSTALLED_SERIAL=$SERIAL"     "INSTALLED_BASE_UUID=$BASE_UUID"     "INSTALLED_BASE_PARTUUID=$BASE_PARTUUID"     "INSTALLED_BOOT_UUID=$BOOT_UUID"     "INSTALLED_DATA_UUID=$DATA_UUID"     "INSTALLED_VERSION=G1OS 1.0" > "$BASE_MNT/etc/g1os-installed"
 
-# Clean in-progress marker before unmount
-rm -f "$BASE_MNT/.g1os_install_in_progress"
-run sync
-run umount "$BASE_MNT"
+  rm -f "$BASE_MNT/.g1os_install_in_progress"
+  run sync
+  run umount "$BASE_MNT"
+  step 6 70 "Installing Apple EFI fallback bootloader and UUID-bound boot configuration"
+fi
 
+if ! findmnt -n -T "$BOOT_MNT" >/dev/null 2>&1; then
+  run mount "$DEV_BOOT" "$BOOT_MNT"
+fi
 step 6 70 "Installing Apple EFI fallback bootloader and UUID-bound boot configuration"
 run mount "$DEV_BOOT" "$BOOT_MNT"
 mkdir -p "$BOOT_MNT/EFI/BOOT" "$BOOT_MNT/boot/grub"
