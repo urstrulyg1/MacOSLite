@@ -44,6 +44,44 @@ def test_console_handoff_architecture():
     print("PASS: graphical console handoff detaches fbcon without disabling kernel diagnostics")
 
 
+def test_pointer_capture_and_click_path():
+    import pathlib
+    comp = pathlib.Path("compositor/comp.c").read_text()
+    proto = pathlib.Path("compositor/proto.h").read_text()
+    installer = pathlib.Path("installer/mica-installer.c").read_text()
+
+    assert "pointer_capture[3]" in comp
+    assert "C.pointer_capture[btn] = w" in comp
+    assert "win_t *w = C.pointer_capture[btn]" in comp
+    assert "send_input(w, IN_DOWN" in comp
+    assert "send_input(w, IN_UP" in comp
+    assert "IN_DOWN" in proto and "IN_UP" in proto
+
+    assert "in->kind == IN_DOWN && in->button == 1" in installer
+    assert "in->kind == IN_UP && in->button == 1" in installer
+    assert "activate_continue()" in installer
+    assert "Continue DOWN" in installer
+    assert "Continue UP/hit" in installer
+
+    # The client must receive local content coordinates, while retaining the
+    # original screen coordinates for compositor diagnostics.
+    assert ".x = x - w->cur.x" in comp
+    assert ".y = y - w->cur.y" in comp
+    assert ".dx = x" in comp and ".dy = y" in comp
+    print("PASS: evdev button -> pointer capture -> IN_DOWN/IN_UP -> installer activation path")
+
+
+def test_continue_state_machine():
+    import pathlib
+    installer = pathlib.Path("installer/mica-installer.c").read_text()
+    assert "STAGE = STAGE_SELECT" in installer
+    assert "STAGE = STAGE_CONFIRM" in installer
+    assert "STAGE = STAGE_WELCOME" in installer
+    assert "No valid installation disk is selected" in installer
+    assert "selected disk is unavailable" in installer
+    print("PASS: Continue/Back state transitions and invalid-target diagnostics")
+
+
 def test_usb_protection():
     disks = [
         {"name": "sdb", "removable": True, "mountpoint": "/run/maclite-base", "size_gb": 16},
@@ -270,6 +308,8 @@ def test_runtime_dependencies():
 
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
+    test_pointer_capture_and_click_path()
+    test_continue_state_machine()
     test_usb_protection()
     test_storage_candidate_policy()
     test_console_handoff_architecture()
