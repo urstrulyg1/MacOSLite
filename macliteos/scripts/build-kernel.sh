@@ -13,7 +13,7 @@ TARBALL="$OUT/linux-${KVER}.tar.xz"
 JOBS=${G1OS_JOBS:-$(nproc 2>/dev/null || echo 2)}
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: required kernel-build tool missing: $1" >&2; exit 2; }; }
-for tool in curl sha256sum tar xz make gcc bison flex bc perl; do need "$tool"; done
+for tool in curl sha256sum tar xz make gcc bison flex bc perl dd grep cut wc tr; do need "$tool"; done
 
 mkdir -p "$OUT"
 if [ ! -s "$TARBALL" ]; then
@@ -43,13 +43,39 @@ done
 make -C "$SRC" O="$OUT/kernel-build" -j"$JOBS" bzImage modules
 make -C "$SRC" O="$OUT/kernel-build" modules_install INSTALL_MOD_PATH="$OUT/kernel-modules"
 
-cp "$OUT/kernel-build/arch/x86/boot/bzImage" "$OUT/vmlinuz-maclite"
-[ -s "$OUT/vmlinuz-maclite" ] || { echo "ERROR: kernel artifact missing or empty" >&2; exit 4; }
+KERNEL_ARTIFACT="$OUT/vmlinuz-maclite"
+cp "$OUT/kernel-build/arch/x86/boot/bzImage" "$KERNEL_ARTIFACT"
+[ -s "$KERNEL_ARTIFACT" ] || { echo "ERROR: kernel artifact missing or empty" >&2; exit 4; }
 [ -d "$OUT/kernel-modules/lib/modules" ] || { echo "ERROR: kernel modules staging missing" >&2; exit 4; }
 
 printf '%s\n' "$KVER" > "$OUT/kernel-version.txt"
 printf '%s  %s\n' "$KSHA" "linux-${KVER}.tar.xz" > "$OUT/kernel-source.sha256"
+KERNEL_SHA256=$(sha256sum "$KERNEL_ARTIFACT" | cut -d' ' -f1)
+KERNEL_SIZE=$(wc -c < "$KERNEL_ARTIFACT" | tr -d ' ')
+CONFIG_SHA256=$(sha256sum "$OUT/kernel-build/.config" | cut -d' ' -f1)
+[ "$(dd if="$KERNEL_ARTIFACT" bs=1 skip=514 count=4 2>/dev/null | grep -aFc 'HdrS' || true)" -eq 1 ] || {
+  echo "ERROR: generated kernel is not a valid x86 bzImage (missing HdrS)" >&2
+  exit 5
+}
+grep -qx 'CONFIG_EFI_STUB=y' "$OUT/kernel-build/.config" || { echo "ERROR: final kernel config does not enable EFI_STUB" >&2; exit 5; }
+cat > "$OUT/g1os-kernel-manifest.txt" <<EOF
+G1OS_KERNEL_MANIFEST=1
+artifact_path=out/vmlinuz-maclite
+artifact_filename=vmlinuz-maclite
+artifact_format=x86_64-bzImage
+artifact_arch=x86_64
+artifact_sha256=$KERNEL_SHA256
+artifact_size=$KERNEL_SIZE
+kernel_version=$KVER
+source_sha256=$KSHA
+config_sha256=$CONFIG_SHA256
+efi_stub=CONFIG_EFI_STUB=y
+EOF
+printf '%s  %s\n' "$KERNEL_SHA256" "$KERNEL_ARTIFACT" > "$OUT/g1os-kernel.sha256"
 echo "KERNEL CONFIG: EFI_STUB=Y FB_EFI=Y SQUASHFS_ZSTD=Y LOOP=Y"
 echo "KERNEL STATUS: PASS"
-echo "KERNEL: $OUT/vmlinuz-maclite"
+echo "KERNEL ARTIFACT: $KERNEL_ARTIFACT"
+echo "KERNEL SHA256: $KERNEL_SHA256"
+echo "KERNEL SIZE: $KERNEL_SIZE"
+echo "KERNEL MANIFEST: $OUT/g1os-kernel-manifest.txt"
 echo "MODULES: $OUT/kernel-modules/lib/modules"
