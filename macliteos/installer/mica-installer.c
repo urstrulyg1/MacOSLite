@@ -120,6 +120,8 @@ static verify_check_item SUMMARY_CHECKS[10] = {
     { "Installation integrity", false }
 };
 
+static void add_log(const char *fmt, ...);
+
 static bool rect_contains_inclusive(int x, int y, int rx, int ry, int rw, int rh)
 {
     return x >= rx && x <= rx + rw && y >= ry && y <= ry + rh;
