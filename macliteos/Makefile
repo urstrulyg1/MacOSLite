@@ -29,7 +29,7 @@ TOOLS := $(OUT)/maclite-memory $(OUT)/maclite-performance $(OUT)/maclite-ui-benc
          $(OUT)/maclite-storage $(OUT)/maclite-power $(OUT)/maclite-hardware \
          $(OUT)/maclite-cpu $(OUT)/maclite-drivers $(OUT)/maclite-fan
 TESTS := $(OUT)/test_render $(OUT)/test_units $(OUT)/test_idle $(OUT)/test_leak \
-         $(OUT)/test_hardware $(OUT)/test_installer
+         $(OUT)/test_hardware $(OUT)/test_installer $(OUT)/test_cursor_damage
 
 .PHONY: all core hw bins apps tools tests clean
 all: core hw bins apps tools tests
@@ -131,6 +131,7 @@ $(OUT)/test_leak: tests/test_leak.c $(LIB)
 $(OUT)/test_hardware: tests/test_hardware.c $(HWLIB) $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 $(OUT)/test_installer: tests/test_installer.c $(HWLIB) $(LIB)
+$(OUT)/test_cursor_damage: tests/test_cursor_damage.c $(LIB)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 bins: $(BINS)
 apps: $(APPS)
