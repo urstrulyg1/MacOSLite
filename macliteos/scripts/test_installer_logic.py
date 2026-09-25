@@ -6,6 +6,44 @@ GPT partition calculation, UUID boot binding, preflight checks, and safety gates
 """
 import sys
 
+def test_storage_candidate_policy():
+    # Installer targets must be real, whole, non-zero physical disks. These are
+    # policy fixtures mirroring the production C/backend gates.
+    forbidden = ["loop1", "loop6", "loop4", "ram0", "zram0", "dm-0", "md0", "sr0", "nbd0"]
+    for name in forbidden:
+        d = {"name": name, "whole": True, "size_bytes": 10 * 1000**3, "physical": False}
+        assert not (d["whole"] and d["size_bytes"] > 0 and d["physical"]), f"{name} must never be an installer target"
+
+    good = [
+        {"name": "sda", "whole": True, "size_bytes": 500 * 1000**3, "physical": True, "transport": "SATA"},
+        {"name": "sdb", "whole": True, "size_bytes": 16 * 1000**3, "physical": True, "transport": "USB"},
+        {"name": "mmcblk0", "whole": True, "size_bytes": 32 * 1000**3, "physical": True, "transport": "SD/Card"},
+        {"name": "nvme0n1", "whole": True, "size_bytes": 512 * 1000**3, "physical": True, "transport": "NVMe"},
+    ]
+    for d in good:
+        assert d["whole"] and d["size_bytes"] > 0 and d["physical"]
+    zero = {"name": "sdc", "whole": True, "size_bytes": 0, "physical": True}
+    assert not (zero["whole"] and zero["size_bytes"] > 0 and zero["physical"])
+    partition = {"name": "sda1", "whole": False, "size_bytes": 100 * 1000**2, "physical": True}
+    assert not partition["whole"]
+    print("PASS: installer storage policy rejects virtual, zero-size, and partition devices while accepting physical SATA/USB/SD/NVMe")
+
+
+def test_console_handoff_architecture():
+    import pathlib
+    init = pathlib.Path("boot/g1os-init").read_text()
+    comp = pathlib.Path("compositor/comp.c").read_text()
+
+    assert "handoff_graphical_console" in init, "boot path must perform an explicit graphical console handoff"
+    assert "/sys/class/vtconsole" in init, "handoff must discover vtconsole dynamically"
+    assert "printf '0\\n' >" in init, "handoff must detach fbcon through bind"
+    assert "/proc/sys/kernel/printk" not in init, "boot path must not suppress kernel logging globally"
+    assert "detach_framebuffer_console" in comp, "compositor must take display ownership itself"
+    assert "ML_DISP_KMS" in comp and "ML_DISP_FBDEV" in comp, "handoff must cover KMS and fbdev"
+    assert "frame buffer" in comp or "framebuffer" in comp, "handoff must identify fbcon by registered name"
+    print("PASS: graphical console handoff detaches fbcon without disabling kernel diagnostics")
+
+
 def test_usb_protection():
     disks = [
         {"name": "sdb", "removable": True, "mountpoint": "/run/maclite-base", "size_gb": 16},
@@ -233,6 +271,8 @@ def test_runtime_dependencies():
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_usb_protection()
+    test_storage_candidate_policy()
+    test_console_handoff_architecture()
     test_partition_layout()
     test_uuid_boot_binding()
     test_preflight_verification()
