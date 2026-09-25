@@ -1087,7 +1087,6 @@ typedef struct {
 
 #define MAX_INPUT_DEVICES 32
 static input_dev_t INPUT_DEVS[MAX_INPUT_DEVICES];
-static ml_source *INPUT_SCAN_TIMER;
 
 static bool bit_test(const unsigned long *bits, int bit)
 {
@@ -1160,7 +1159,7 @@ static uint32_t linux_key_to_mica(int code, uint32_t mods)
     case KEY_RIGHTBRACE: return shift ? '}' : ']';
     case KEY_SEMICOLON: return shift ? ':' : ';';
     case KEY_APOSTROPHE: return shift ? '"' : '\'';
-    case KEY_GRAVE: return shift ? '~' : '\`';
+    case KEY_GRAVE: return shift ? '~' : '`';
     case KEY_BACKSLASH: return shift ? '|' : '\\';
     case KEY_COMMA: return shift ? '<' : ',';
     case KEY_DOT: return shift ? '>' : '.';
@@ -1325,7 +1324,7 @@ static void input_init(void)
 {
     for (int i = 0; i < MAX_INPUT_DEVICES; i++) INPUT_DEVS[i].fd = -1;
     input_scan(NULL);
-    INPUT_SCAN_TIMER = ml_loop_add_timer(C.loop, 500, true, input_scan, NULL);
+    ml_loop_add_timer(C.loop, 500, true, input_scan, NULL);
 }
 
 /* children launched by name (dock/menu/launcher) must find our binaries even
