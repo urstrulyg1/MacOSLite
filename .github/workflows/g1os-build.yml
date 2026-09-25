@@ -45,9 +45,25 @@ jobs:
           sh scripts/audit-production.sh
           sh scripts/run-tests.sh
 
+      - name: Clean generated boot artifacts
+        working-directory: macliteos
+        run: |
+          set -eu
+          rm -rf out/kernel-src out/kernel-build out/kernel-modules out/iso-stage
+          rm -f out/vmlinuz-maclite out/initrd-maclite.img out/G1OS.iso out/G1OS.iso.sha256
+          rm -f out/g1os-kernel-manifest.txt out/g1os-kernel.sha256 out/g1os-initrd-manifest.txt
+          rm -f out/kernel-version.txt out/kernel-source.sha256 out/iso-manifest.txt out/iso-file-list.txt
+
       - name: Build G1OS kernel
         working-directory: macliteos
-        run: sh scripts/build-kernel.sh
+        run: |
+          set -eu
+          sh scripts/build-kernel.sh
+          test -s out/vmlinuz-maclite
+          test -s out/g1os-kernel-manifest.txt
+          grep -F "G1OS_KERNEL_MANIFEST=1" out/g1os-kernel-manifest.txt >/dev/null
+          grep -F "artifact_arch=x86_64" out/g1os-kernel-manifest.txt >/dev/null
+          grep -F "artifact_format=x86_64-bzImage" out/g1os-kernel-manifest.txt >/dev/null
 
       - name: Build initramfs
         working-directory: macliteos
@@ -72,6 +88,8 @@ jobs:
           test -s out/G1OS.iso.sha256
           test -s out/iso-manifest.txt
           test -s out/iso-file-list.txt
+          grep -F "boot/g1os-kernel-manifest.txt" out/iso-file-list.txt >/dev/null
+          grep -F "boot/g1os-initrd-manifest.txt" out/iso-file-list.txt >/dev/null
           grep -F "boot/g1os-boot-manifest.txt" out/iso-file-list.txt >/dev/null
 
       - name: Boot ISO under real UEFI QEMU and require graphical installer readiness
@@ -116,4 +134,7 @@ jobs:
             macliteos/out/initrd-maclite.img
             macliteos/out/kernel-version.txt
             macliteos/out/kernel-source.sha256
+            macliteos/out/g1os-kernel-manifest.txt
+            macliteos/out/g1os-kernel.sha256
+            macliteos/out/g1os-initrd-manifest.txt
             macliteos/out/qemu-uefi-console.log
