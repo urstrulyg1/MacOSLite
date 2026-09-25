@@ -1081,6 +1081,7 @@ typedef struct {
     ml_source *src;
     bool pointer;
     bool keyboard;
+    bool sync_dropped;
     uint32_t mods;
     bool caps;
 } input_dev_t;
@@ -1103,6 +1104,30 @@ static bool input_has_cap(int fd, int type, int code)
     if (ioctl(fd, EVIOCGBIT(type, (max + 1) * (int)sizeof(unsigned long)), bits) < 0)
         return false;
     return bit_test(bits, code);
+}
+
+static void input_resync_state(input_dev_t *d)
+{
+    if (!d || d->fd < 0) return;
+
+    unsigned long key_bits[(KEY_MAX + 1 + sizeof(unsigned long) * 8 - 1) /
+                           (sizeof(unsigned long) * 8)];
+    memset(key_bits, 0, sizeof key_bits);
+    if (ioctl(d->fd, EVIOCGKEY(sizeof key_bits), key_bits) >= 0) {
+        d->mods = 0;
+        if (bit_test(key_bits, KEY_LEFTSHIFT) || bit_test(key_bits, KEY_RIGHTSHIFT))
+            d->mods |= ML_MOD_SHIFT;
+        if (bit_test(key_bits, KEY_LEFTCTRL) || bit_test(key_bits, KEY_RIGHTCTRL))
+            d->mods |= ML_MOD_CTRL;
+        if (bit_test(key_bits, KEY_LEFTMETA) || bit_test(key_bits, KEY_RIGHTMETA))
+            d->mods |= ML_MOD_META;
+    }
+
+    unsigned long led_bits[(LED_MAX + 1 + sizeof(unsigned long) * 8 - 1) /
+                           (sizeof(unsigned long) * 8)];
+    memset(led_bits, 0, sizeof led_bits);
+    if (ioctl(d->fd, EVIOCGLED(sizeof led_bits), led_bits) >= 0)
+        d->caps = bit_test(led_bits, LED_CAPSL);
 }
 
 static void input_close_device(int idx)
@@ -1219,7 +1244,6 @@ static void input_event_fd(void *ud, uint32_t events)
 
     struct input_event ev[32];
     int pending_dx = 0, pending_dy = 0, pending_wheel = 0, pending_hwheel = 0;
-    bool sync_dropped = false;
     for (;;) {
         ssize_t n = read(d->fd, ev, sizeof ev);
         if (n < 0) {
@@ -1239,12 +1263,14 @@ static void input_event_fd(void *ud, uint32_t events)
                 /* evdev requires ignoring the remainder of this packet until
                  * SYN_REPORT after an overrun, then resynchronizing state. */
                 pending_dx = pending_dy = pending_wheel = pending_hwheel = 0;
-                sync_dropped = true;
+                d->sync_dropped = true;
                 continue;
             }
-            if (sync_dropped) {
-                if (e->type == EV_SYN && e->code == SYN_REPORT)
-                    sync_dropped = false;
+            if (d->sync_dropped) {
+                if (e->type == EV_SYN && e->code == SYN_REPORT) {
+                    d->sync_dropped = false;
+                    input_resync_state(d);
+                }
                 continue;
             }
             if (e->type == EV_REL) {
