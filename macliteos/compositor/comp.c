@@ -560,6 +560,8 @@ static void win_release(win_t *w)
     if (C.z_front == w) C.z_front = w->z_next;
     if (C.drag_win == w) C.drag_win = NULL;
     if (C.resize_win == w) C.resize_win = NULL;
+    for (int b = 0; b < 3; b++)
+        if (C.pointer_capture[b] == w) C.pointer_capture[b] = NULL;
     /* dangling hover pointers caused a use-after-free when a transient menu
      * closed under the cursor (segv in input_move); clear them here too */
     if (C.hover_win == w) { C.hover_win = NULL; C.hover_deco_btn = NULL; }
