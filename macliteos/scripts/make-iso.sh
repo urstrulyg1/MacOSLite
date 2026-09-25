@@ -54,22 +54,33 @@ chmod +x "$ST/base/usr/share/maca-lite/scripts/hardware-check.sh"
 # the current out/ build afterwards so rootfs cannot overwrite fresh binaries.
 [ -d rootfs/etc ] && cp -rf rootfs/etc "$ST/base/"
 [ -d rootfs/usr/share ] && cp -rf rootfs/usr/share "$ST/base/usr/"
-if [ -d "/tmp/initrd_inspect/lib" ]; then
-  mkdir -p "$ST/base/lib" "$ST/base/lib64"
-  cp -a "/tmp/initrd_inspect/lib/." "$ST/base/lib/"
+# The live SquashFS must use the exact runtime libraries from the initrd
+# produced in this build. Never depend on a stale /tmp extraction from an older
+# build, another machine, or another kernel/userspace combination.
+INITRD_RUNTIME=$(mktemp -d)
+cleanup_initrd_runtime() { chmod -R u+rwx "$INITRD_RUNTIME" 2>/dev/null || true; rm -rf "$INITRD_RUNTIME" 2>/dev/null || true; }
+trap cleanup_initrd_runtime EXIT HUP INT TERM
+if ! (cd "$INITRD_RUNTIME" && gzip -dc "$INITRD" | cpio -idm --no-absolute-filenames >/dev/null 2>&1); then
+  echo "ERROR: cannot extract the exact initrd runtime while assembling the live base" >&2
+  exit 4
 fi
-if [ -d "/tmp/initrd_inspect/lib64" ]; then
-  mkdir -p "$ST/base/lib64"
-  cp -a "/tmp/initrd_inspect/lib64/." "$ST/base/lib64/"
-fi
-if [ -s "/tmp/initrd_inspect/bin/busybox" ]; then
+for libdir in lib lib64 usr/lib usr/lib64; do
+  if [ -d "$INITRD_RUNTIME/$libdir" ]; then
+    mkdir -p "$ST/base/$libdir"
+    cp -a "$INITRD_RUNTIME/$libdir/." "$ST/base/$libdir/"
+  fi
+done
+if [ -s "$INITRD_RUNTIME/bin/busybox" ]; then
   mkdir -p "$ST/base/bin" "$ST/base/sbin"
-  cp "/tmp/initrd_inspect/bin/busybox" "$ST/base/bin/busybox"
+  cp -a "$INITRD_RUNTIME/bin/busybox" "$ST/base/bin/busybox"
   chmod +x "$ST/base/bin/busybox"
   for applet in sh bash cat ls cp mv rm mount umount mkdir grep sed awk sleep; do
     ln -sf /bin/busybox "$ST/base/bin/$applet"
   done
 fi
+cleanup_initrd_runtime
+trap - EXIT HUP INT TERM
+
 
 # Re-apply the current build outputs after rootfs/usr was copied.
 for b in $REQUIRED_BINS; do
@@ -103,36 +114,7 @@ mksquashfs "$ST/base" "$ST/live/maclite-base.sqfs" -comp zstd -Xcompression-leve
 cp "$KERNEL" "$ST/boot/vmlinuz-maclite"
 cp "$INITRD" "$ST/boot/initrd-maclite.img"
 
-cat > "$ST/boot/grub.cfg" <<'GRUB'
-set default=0
-set timeout=2
-insmod part_gpt
-insmod part_msdos
-insmod fat
-insmod iso9660
-insmod linux
-insmod search
-search --no-floppy --set=root --file /live/maclite-base.sqfs
-
-menuentry "G1OS (Safe Graphics - Default for iMac Mid-2010)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
-  initrd /boot/initrd-maclite.img
-}
-menuentry "G1OS (Safe Graphics + Verbose Debug)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 maclite.gl=off nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native reboot=pci panic=-1
-  initrd /boot/initrd-maclite.img
-}
-menuentry "G1OS (Radeon KMS - Hardware Acceleration)" {
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=1 mitigations=off console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=-1
-  initrd /boot/initrd-maclite.img
-}
-menuentry "G1OS Recovery Shell" {
-  search --no-floppy --set=root --file /live/maclite-base.sqfs
-  linux /boot/vmlinuz-maclite init=/init rd.maclite=recovery nomodeset radeon.modeset=0 video=efifb fbcon=map:0 console=tty0 console=ttyS0 loglevel=7 ignore_loglevel initcall_debug reboot=pci panic=-1
-  initrd /boot/initrd-maclite.img
-}
-GRUB
-
+cp boot/grub-efi.cfg "$ST/boot/grub.cfg"
 mkdir -p "$ST/EFI/BOOT" "$ST/boot/grub"
 if command -v grub-mkimage >/dev/null 2>&1; then
   grub-mkimage -O x86_64-efi -o "$ST/boot/bootx64.efi" -p /boot part_gpt part_msdos fat iso9660 linux search normal
