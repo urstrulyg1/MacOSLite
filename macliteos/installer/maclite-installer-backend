@@ -35,6 +35,50 @@ fail() {
   exit 1
 }
 
+kernel_diagnostics() {
+  echo "=== G1OS Kernel Verification Diagnostics ==="
+  echo "Expected kernel: /run/live/boot/vmlinuz-maclite"
+  echo "Expected initramfs: /run/live/boot/initrd-maclite.img"
+  echo "Mounted installation media:"
+  if command -v findmnt >/dev/null 2>&1; then
+    findmnt -n -o SOURCE,FSTYPE,TARGET /run/live 2>/dev/null || echo "  /run/live: NOT MOUNTED"
+  else
+    grep ' /run/live ' /proc/self/mountinfo 2>/dev/null || echo "  /run/live: NOT MOUNTED"
+  fi
+  echo "Actual searched paths:"
+  for p in /run/live/boot/vmlinuz-maclite /run/live/boot/initrd-maclite.img /run/maclite-live/boot/vmlinuz-maclite /run/maclite-live/boot/initrd-maclite.img /boot/vmlinuz-g1os /boot/vmlinuz-maclite; do
+    if [ -e "$p" ]; then
+      echo "  FOUND $p size=$(wc -c < "$p" | tr -d ' ')"
+    else
+      echo "  MISSING $p"
+    fi
+  done
+  echo "Detected kernel candidates on mounted live media:"
+  found=0
+  if [ -d /run/live ]; then
+    for p in /run/live/boot/* /run/live/EFI/Linux/* /run/live/boot/efi/*; do
+      [ -f "$p" ] || continue
+      case "$p" in *.efi|*vmlinuz*|*bzImage*|*kernel*) echo "  CANDIDATE $p"; found=1 ;; esac
+    done
+  fi
+  [ "$found" = 1 ] || echo "  NONE"
+  echo "Selected kernel: ${KERNEL:-NONE}"
+  echo "Selected initramfs: ${INITRD:-NONE}"
+  if [ -n "${KERNEL:-}" ] && [ -f "$KERNEL" ]; then
+    echo "Kernel size: $(wc -c < "$KERNEL" | tr -d ' ')"
+    echo "Kernel SHA256: $(sha256sum "$KERNEL" | cut -d' ' -f1)"
+  fi
+  if [ -s "${BOOT_MANIFEST:-}" ]; then
+    echo "Build ID: $(sed -n 's/^build_id=//p' "$BOOT_MANIFEST")"
+    echo "Expected SHA256: $(sed -n 's/^kernel_sha256=//p' "$BOOT_MANIFEST")"
+    echo "Kernel version: $(sed -n 's/^kernel_version=//p' "$BOOT_MANIFEST")"
+    echo "Architecture: $(sed -n 's/^kernel_arch=//p' "$BOOT_MANIFEST")"
+  fi
+  echo "Boot partition target: ${DEV_BOOT:-UNSET}"
+  echo "Root filesystem target: ${DEV_BASE:-UNSET}"
+  echo "==========================================="
+}
+
 step() {
   CURRENT_PROGRESS=$2
   CURRENT_MESSAGE=$3
@@ -294,9 +338,9 @@ BOOT_MANIFEST="/run/live/boot/g1os-boot-manifest.txt"
 # only from the mounted live media; never fall back to the running kernel.
 if [ "$DRY_RUN" = 0 ]; then
   grep -q ' /run/live ' /proc/self/mountinfo || fail "live G1OS media is not mounted at /run/live"
-  [ -s "$BOOT_MANIFEST" ] || fail "G1OS boot manifest missing from live media: $BOOT_MANIFEST"
-  [ -s /run/live/boot/vmlinuz-maclite ] || fail "real G1OS kernel image not found in ISO payload: /run/live/boot/vmlinuz-maclite"
-  [ -s /run/live/boot/initrd-maclite.img ] || fail "real G1OS initramfs not found in ISO payload: /run/live/boot/initrd-maclite.img"
+  [ -s "$BOOT_MANIFEST" ] || { kernel_diagnostics; fail "real G1OS kernel image not found: G1OS boot manifest missing from live media"; }
+  [ -s /run/live/boot/vmlinuz-maclite ] || { kernel_diagnostics; fail "real G1OS kernel image not found in ISO payload: /run/live/boot/vmlinuz-maclite"; }
+  [ -s /run/live/boot/initrd-maclite.img ] || { kernel_diagnostics; fail "real G1OS initramfs not found in ISO payload: /run/live/boot/initrd-maclite.img"; }
 fi
 KERNEL=/run/live/boot/vmlinuz-maclite
 INITRD=/run/live/boot/initrd-maclite.img
