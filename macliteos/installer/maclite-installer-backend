@@ -158,6 +158,11 @@ echo "SERIAL/IDENTIFIER: $SERIAL"
 echo "SIZE: ${SIZE_GB} GB"
 echo "LIVE MEDIA: ${BOOT_DISK:-not detected}"
 
+# The fixed installer layout needs room for a 256 MiB EFI partition, a 4 GiB
+# data partition, filesystem metadata/alignment, and the root partition.
+MIN_SECTORS=10485760
+[ "$DRY_RUN" = 1 ] || [ "$SECTORS" -ge "$MIN_SECTORS" ] || fail "target disk is too small for the G1OS partition layout (minimum 5 GiB)"
+
 need mount; need umount; need blkid
 
 read_block_tag() {
