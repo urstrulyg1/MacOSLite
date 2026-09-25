@@ -79,6 +79,8 @@ static int TARGET_DISK_IDX = -1;
 static bool CONFIRMED_ERASE = false;
 static bool SHOW_DETAILS = false;
 static bool TEST_MODE = false;
+static bool BUTTON_PRESSED = false;
+static int BUTTON_PRESSED_X = -1, BUTTON_PRESSED_Y = -1;
 
 /* Authoritative backend state. */
 static pid_t INSTALL_PID = -1;
@@ -115,6 +117,80 @@ static verify_check_item SUMMARY_CHECKS[10] = {
     { "Required services", false },
     { "Installation integrity", false }
 };
+
+static bool rect_contains_inclusive(int x, int y, int rx, int ry, int rw, int rh)
+{
+    return x >= rx && x <= rx + rw && y >= ry && y <= ry + rh;
+}
+
+static bool continue_button_hit(int x, int y)
+{
+    int w = WIN && WIN->surf ? WIN->surf->w : WIN_W;
+    int h = WIN && WIN->surf ? WIN->surf->h : WIN_H;
+    if (STAGE == STAGE_WELCOME)
+        return rect_contains_inclusive(x, y, w / 2 - 82, 262, 164, 42);
+    if (STAGE == STAGE_SELECT)
+        return rect_contains_inclusive(x, y, w - 156, h - 68, 108, 36);
+    return false;
+}
+
+static bool back_button_hit(int x, int y)
+{
+    int w = WIN && WIN->surf ? WIN->surf->w : WIN_W;
+    int h = WIN && WIN->surf ? WIN->surf->h : WIN_H;
+    return (STAGE == STAGE_SELECT || STAGE == STAGE_CONFIRM) &&
+           rect_contains_inclusive(x, y, 48, h - 68, 108, 36);
+}
+
+static void activate_continue(void)
+{
+    add_log("UI: Continue activation stage=%d target=%d", STAGE, TARGET_DISK_IDX);
+    if (STAGE == STAGE_WELCOME) {
+        STAGE = STAGE_SELECT;
+        TARGET_DISK_IDX = -1;
+        CONFIRMED_ERASE = false;
+        probe_disks();
+        add_log("UI: Continue -> disk selection (%d candidates)", N_DISKS);
+        draw();
+        return;
+    }
+
+    if (STAGE == STAGE_SELECT) {
+        if (TARGET_DISK_IDX < 0 || TARGET_DISK_IDX >= N_DISKS) {
+            set_failure("No valid installation disk is selected. Select a physical disk first.");
+            return;
+        }
+        disk_info *d = &DISKS[TARGET_DISK_IDX];
+        if (d->is_usb_boot || !revalidate_target_disk(d)) {
+            add_log("UI: Continue blocked: target=%s live=%d", d->devnode, d->is_usb_boot ? 1 : 0);
+            set_failure("The selected disk is unavailable or is the active live installation media. Rescan and select a valid disk.");
+            probe_disks();
+            return;
+        }
+        add_log("UI: Continue -> confirmation target=%s capacity=%llu bytes",
+                d->devnode, (unsigned long long)d->size_bytes);
+        STAGE = STAGE_CONFIRM;
+        CONFIRMED_ERASE = false;
+        draw();
+        return;
+    }
+}
+
+static void activate_back(void)
+{
+    if (STAGE == STAGE_CONFIRM) {
+        STAGE = STAGE_SELECT;
+        CONFIRMED_ERASE = false;
+        add_log("UI: Back -> disk selection");
+        draw();
+    } else if (STAGE == STAGE_SELECT) {
+        STAGE = STAGE_WELCOME;
+        TARGET_DISK_IDX = -1;
+        CONFIRMED_ERASE = false;
+        add_log("UI: Back -> welcome");
+        draw();
+    }
+}
 
 static void draw(void);
 static void input(mica_win *w, const msg_input *in);
@@ -941,106 +1017,72 @@ static void draw(void)
 
 static void input(mica_win *w, const msg_input *in)
 {
-    (void)w;
+    if (!in || w != WIN) return;
+
+    if (getenv("MICA_INPUT_DEBUG"))
+        ML_INFO("installer input: kind=%u screen=%d,%d local=%d,%d button=%u stage=%d",
+                in->kind, in->dx, in->dy, in->x, in->y, in->button, STAGE);
+
     if (in->kind == IN_KEY) {
-        if ((in->key == 0xff1b || in->key == 'q') && STAGE != STAGE_INSTALLING && STAGE != STAGE_VERIFYING) {
+        if ((in->key == 0xff1b || in->key == 'q') &&
+            STAGE != STAGE_INSTALLING && STAGE != STAGE_VERIFYING) {
             mica_quit(G, 0);
             return;
         }
-        if (in->key == 0xff0d || in->key == '\n') {
-            if (STAGE == STAGE_WELCOME) {
-                STAGE = STAGE_SELECT;
-                probe_disks();
+        if (in->key == 0xff0d || in->key == '\n' || in->key == ' ') {
+            if (STAGE == STAGE_CONFIRM && in->key == ' ') {
+                CONFIRMED_ERASE = !CONFIRMED_ERASE;
                 draw();
-            } else if (STAGE == STAGE_SELECT && TARGET_DISK_IDX >= 0) {
-                STAGE = STAGE_CONFIRM;
-                draw();
-            } else if (STAGE == STAGE_CONFIRM && CONFIRMED_ERASE) {
-                start_backend(false);
+            } else if (in->key == ' ' || in->key == 0xff0d) {
+                activate_continue();
             }
         }
         return;
     }
-    if (in->kind != IN_DOWN && in->kind != IN_CLICK) return;
-    int x = in->x, y = in->y;
-    int ww = WIN && WIN->surf ? WIN->surf->w : WIN_W;
-    int wh = WIN && WIN->surf ? WIN->surf->h : WIN_H;
-    int cx = ww / 2;
 
-    if (STAGE == STAGE_WELCOME) {
-        if (x >= cx - 82 && x <= cx + 82 && y >= 262 && y <= 304) {
-            STAGE = STAGE_SELECT;
-            probe_disks();
+    if (in->kind == IN_DOWN && in->button == 1) {
+        BUTTON_PRESSED = continue_button_hit(in->x, in->y);
+        BUTTON_PRESSED_X = in->x;
+        BUTTON_PRESSED_Y = in->y;
+        if (BUTTON_PRESSED)
+            add_log("UI: Continue DOWN local=%d,%d stage=%d", in->x, in->y, STAGE);
+        else if (back_button_hit(in->x, in->y))
+            add_log("UI: Back DOWN local=%d,%d stage=%d", in->x, in->y, STAGE);
+        draw();
+        return;
+    }
+
+    if (in->kind == IN_UP && in->button == 1) {
+        bool was_pressed = BUTTON_PRESSED;
+        BUTTON_PRESSED = false;
+        /* Activate on release when the pointer is still within the same button
+         * region. A small movement is fine; the compositor guarantees this UP
+         * is delivered to the press-captured window. */
+        if (was_pressed && continue_button_hit(in->x, in->y)) {
+            add_log("UI: Continue UP/hit local=%d,%d -> activate", in->x, in->y);
+            activate_continue();
+        } else if (back_button_hit(in->x, in->y)) {
+            add_log("UI: Back UP/hit local=%d,%d -> activate");
+            activate_back();
+        } else {
             draw();
         }
-    } else if (STAGE == STAGE_SELECT) {
-        int dy = 158;
-        for (int i = 0; i < N_DISKS; i++) {
-            if (x >= 48 && x <= ww - 48 && y >= dy && y <= dy + 62 && !DISKS[i].is_usb_boot) {
-                TARGET_DISK_IDX = i;
-                for (int j = 0; j < N_DISKS; j++) DISKS[j].is_target = j == i;
-                CONFIRMED_ERASE = false;
-                draw();
-                return;
-            }
-            dy += 72;
-        }
-        if (x >= WIN_W - 156 && x <= ww - 48 && y >= wh - 68 && y <= wh - 32 && TARGET_DISK_IDX >= 0) {
-            STAGE = STAGE_CONFIRM;
-            draw();
-        }
-    } else if (STAGE == STAGE_CONFIRM) {
-        if (x >= 48 && x <= ww - 48 && y >= 280 && y <= 320) {
-            CONFIRMED_ERASE = !CONFIRMED_ERASE;
-            draw();
-            return;
-        }
-        if (x >= ww - 238 && x <= ww - 48 && y >= WIN_H - 68 && y <= WIN_H - 32 && CONFIRMED_ERASE)
-            start_backend(false);
-    } else if (STAGE == STAGE_INSTALLING || STAGE == STAGE_VERIFYING) {
-        if (x >= 48 && x <= WIN_W - 48 && y >= 356 && y <= 384) {
-            SHOW_DETAILS = !SHOW_DETAILS;
-            draw();
-        }
-    } else if (STAGE == STAGE_SUMMARY) {
-        if (x >= 48 && x <= WIN_W - 48 && y >= 350 && y <= 376) {
-            SHOW_DETAILS = !SHOW_DETAILS;
-            draw();
-            return;
-        }
-        if (x >= cx - 100 && x <= cx + 100 && y >= WIN_H - 64 && y <= WIN_H - 26) {
-            STAGE = STAGE_COMPLETE;
-            draw();
-        }
-    } else if (STAGE == STAGE_COMPLETE) {
-        /* Section 24: Reboot Safety Gate - only allow restart if verified 100% */
-        if (x >= cx - 112 && x <= cx + 112 && y >= 314 && y <= 356) {
-            if (BACKEND_VERIFIED && INSTALL_PROGRESS >= 100) {
-                add_log("RESTART: user requested reboot after verified installation.");
-                if (!TEST_MODE) system("reboot 2>/dev/null || systemctl reboot 2>/dev/null || shutdown -r now 2>/dev/null");
-                mica_quit(G, 0);
-            } else {
-                add_log("REBOOT BLOCKED: Installation is not verified complete.");
-            }
-        }
-    } else if (STAGE == STAGE_ERROR) {
-        /* [Retry] */
-        if (x >= cx - 150 && x <= cx - 60 && y >= 420 && y <= 456) {
-            stop_backend(true);
-            BACKEND_FAILED = false;
-            start_backend(false);
-        }
-        /* [Repair] */
-        else if (x >= cx - 45 && x <= cx + 50 && y >= 420 && y <= 456) {
-            stop_backend(true);
-            BACKEND_FAILED = false;
-            start_backend(true); /* invoke automatic repair and re-verification */
-        }
-        /* [View Details] */
-        else if (x >= cx + 65 && x <= cx + 170 && y >= 420 && y <= 456) {
-            SHOW_DETAILS = !SHOW_DETAILS;
-            draw();
-        }
+        return;
+    }
+
+    if (in->kind == IN_MOVE && BUTTON_PRESSED) {
+        /* Keep pressed state while the pointer remains within a forgiving
+         * button boundary; the release is still captured by the compositor. */
+        draw();
+        return;
+    }
+
+    if (in->kind != IN_DOWN && in->kind != IN_CLICK) return;
+
+    /* Compatibility with scripted/older compositor clients that emit IN_CLICK. */
+    if (in->kind == IN_CLICK && in->button == 1 && continue_button_hit(in->x, in->y)) {
+        add_log("UI: legacy IN_CLICK -> Continue activation");
+        activate_continue();
     }
 }
 
