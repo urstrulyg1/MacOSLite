@@ -11,6 +11,12 @@ G1OS uses a pinned upstream Linux x86_64 long-term kernel as the hardware enable
 - Required boot/hardware paths include EFI/GPT, AHCI/SATA, USB mass storage, ISO9660, SquashFS, ext4, Radeon DRM, Broadcom TG3/B43 and Intel HDA audio.
 - Out-of-tree patches: none currently required.
 
+## Artifact contract
+
+The final kernel artifact is **only** `out/vmlinuz-maclite` produced by `scripts/build-kernel.sh`. The build also produces `out/g1os-kernel-manifest.txt` and `out/g1os-kernel.sha256`. ISO assembly is not allowed to discover a kernel from `/boot`, `releases/`, `/Volumes/G1OS`, or another stale location.
+
+The manifest binds the exact artifact path, x86_64 bzImage format, EFI-stub requirement, kernel version, source hash, config hash, size, and SHA-256. ISO creation consumes this manifest and independently verifies the extracted final ISO copy before publication. The installer consumes the same ISO manifest and never substitutes the running installer kernel.
+
 ## Build
 
 From `macliteos/` on Linux:
