@@ -707,6 +707,9 @@ if [ "$DRY_RUN" = 0 ]; then
   grep -F "UUID=$BOOT_UUID" "$VERIFY_ROOT/etc/fstab" >/dev/null || fail "Verification FAIL: Boot UUID missing from /etc/fstab"
   grep -F "UUID=$DATA_UUID" "$VERIFY_ROOT/etc/fstab" >/dev/null || fail "Verification FAIL: Data UUID missing from /etc/fstab"
   [ -s "$VERIFY_ROOT/etc/g1os-installed" ] || fail "Verification FAIL: /etc/g1os-installed metadata missing"
+  grep -F "G1OS_BUILD_ID=$MANIFEST_BUILD_ID" "$VERIFY_ROOT/etc/g1os-installed" >/dev/null || fail "Verification FAIL: installed build ID does not match authoritative kernel manifest"
+  grep -F "G1OS_KERNEL_SHA256=$MANIFEST_KERNEL_SHA" "$VERIFY_ROOT/etc/g1os-installed" >/dev/null || fail "Verification FAIL: installed kernel provenance metadata is stale"
+  grep -F "G1OS_INITRD_SHA256=$MANIFEST_INITRD_SHA" "$VERIFY_ROOT/etc/g1os-installed" >/dev/null || fail "Verification FAIL: installed initramfs provenance metadata is stale"
 fi
 
 # 12. Verify Required Services & Integrity
