@@ -679,11 +679,421 @@ static void send_input(win_t *w, uint32_t kind, int x, int y, uint32_t button, u
                 w->id, kind, x, y, m.x, m.y, button, ok ? 1 : 0);
 }
 
+static void broadcast_event(uint32_t kind, uint32_t a, uint32_t b, const char *text)
+{
+    msg_event e = { .kind = kind, .a = a, .b = b };
+    if (text) snprintf(e.text, sizeof e.text, "%s", text);
+    for (int i = 0; i < MAX_CLIENTS; i++)
+        if (C.clients[i].alive && !C.clients[i].is_tool) mlipc_send(C.clients[i].fd, MS_EVENT, &e, sizeof e);
+}
+
+static void focus_win(win_t *w)
+{
+    if (!w || (w->flags & WIN_F_NO_FOCUS)) return;
+    if (C.z_front == w && (w->state & WS_FOCUSED)) return;
+    win_t *prev = C.z_front;
+    z_raise(w);
+    w->state |= WS_FOCUSED;
+    if (prev && prev != w) prev->state &= ~WS_FOCUSED;
+    if (prev) win_damage_all(prev);
+    win_damage_all(w);
+    win_send_state(w);
+    if (prev) win_send_state(prev);
+    broadcast_event(EV_FOCUS, w->id, 0, w->appid);
+}
+
+static void toggle_maximize(win_t *w)
+{
+    if (!w) return;
+    ml_rect from = w->cur, to;
+    if (w->state & WS_MAXIMIZED) {
+        to = ml_rect_make(120, 120, C.screen_w - 240, C.screen_h - 240);
+        w->state &= ~WS_MAXIMIZED;
+    } else {
+        to = ml_rect_make(0, DECO_H + 2, C.screen_w, C.screen_h - DECO_H - 2 - 84);
+        w->state |= WS_MAXIMIZED;
+    }
+    win_damage_all(w);
+    w->tgt = to;
+    w->geom = ml_anim_rect(C.anim, from, to, 0.24, ML_EASE_OUT_QUINT);
+    request_frame();
+}
+
+static void minimize_win(win_t *w)
+{
+    if (!w || w->minimized) return;
+    w->minimized = true;
+    w->state |= WS_MINIMIZED;
+    win_damage_all(w);
+    w->fade = ml_anim_start(C.anim, 1, 0, 0.24, ML_EASE_IN_OUT_CUBIC);
+    ml_anim_set_ud(w->fade, w);
+    w->closing = false;
+    win_send_state(w);
+    /* focus next visible window */
+    for (win_t *n = C.z_front; n; n = n->z_next)
+        if (n != w && win_visible(n) && !(n->flags & WIN_F_NO_FOCUS)) { focus_win(n); break; }
+}
+
+static void unminimize_win(win_t *w)
+{
+    if (!w || !w->minimized) return;
+    w->minimized = false;
+    w->state &= ~WS_MINIMIZED;
+    w->opacity = 0;
+    w->fade = ml_anim_start(C.anim, 0, 1, 0.24, ML_EASE_OUT_CUBIC);
+    ml_anim_set_ud(w->fade, w);
+    win_damage_all(w);
+    focus_win(w);
+}
+
+static void switch_workspace(int dir)
+{
+    int next = ML_CLAMP(C.cur_ws + dir, 0, N_WS - 1);
+    if (next == C.cur_ws) return;
+    C.cur_ws = next;
+    damage_add(ml_rect_make(0, 0, C.screen_w, C.screen_h));
+    broadcast_event(EV_WORKSPACE, (uint32_t)C.cur_ws, 0, NULL);
+    request_frame();
+}
+
+static void notify(const msg_notify *n)
+{
+    int slot = -1;
+    for (int i = 0; i < MAX_NOTIFS; i++)
+        if (!C.notifs[i].title[0]) { slot = i; break; }
+    if (slot < 0) slot = 0;
+    notif_t *t = &C.notifs[slot];
+    snprintf(t->title, sizeof t->title, "%s", n->title);
+    snprintf(t->body, sizeof t->body, "%s", n->body);
+    snprintf(t->icon, sizeof t->icon, "%s", n->icon);
+    t->born_ms = ml_wall_ms();
+    t->timeout_ms = n->timeout_ms ? n->timeout_ms : 5000;
+    t->dying = false;
+    t->out = NULL;
+    t->in = ml_anim_start(C.anim, 0, 1, 0.26, ML_EASE_OUT_QUINT);
+    damage_add(ml_rect_make(C.screen_w - 400, 20, 420, 400));
+    request_frame();
+    broadcast_event(EV_NOTIFY, 0, 0, n->title);
+}
+
+/* ------------------------------------------------------- client protocol */
+static void client_gone(client_t *cl)
+{
+    cl->alive = false;
+    for (win_t *w = C.z_front; w; w = w->z_next) {
+        if (w->cl == cl && !w->closing) { w->cl = NULL; win_close(w); }
+    }
+    if (cl->fd >= 0) { close(cl->fd); cl->fd = -1; }
+}
+
+static void handle_client(void *ud, int fd, uint32_t type, const void *payload, uint32_t len, int fd_recv)
+{
+    client_t *cl = ud;
+    (void)len;
+    switch (type) {
+    case MC_WIN_NEW: {
+        const msg_win_new *m = payload;
+        if (fd_recv < 0) break;
+        size_t bytes = (size_t)m->w * m->h * 4;
+        uint32_t *px = ml_shm_map(fd_recv, bytes);
+        if (!px) { close(fd_recv); break; }
+        win_t *w = ml_zalloc(sizeof *w);
+        w->cl = cl;
+        w->id = m->id;
+        w->shm_fd = fd_recv;
+        w->px = px;
+        w->shm_bytes = bytes;
+        w->surf = ml_surface_wrap(px, m->w, m->h, m->w);
+        w->flags = m->flags;
+        snprintf(w->title, sizeof w->title, "%s", m->title);
+        snprintf(w->appid, sizeof w->appid, "%s", m->appid);
+        w->ws = C.cur_ws;
+        w->opacity = 1;
+        w->scale = 1;
+        ml_region_init(&w->pending);
+        bool centered = true;
+        static int cascade = 0;
+        w->cur = w->tgt = ml_rect_make((C.screen_w - m->w) / 2 + (cascade % 6) * 28 - 84,
+                                       (C.screen_h - m->h) / 2 + (cascade % 6) * 24 - 60,
+                                       m->w, m->h);
+        cascade++;
+        (void)centered;
+        if (w->flags & WIN_F_BOTTOM) { z_push_bottom(w); }
+        else { z_raise(w); focus_win(w); }
+        w->mapped = true;
+        C.nwin++;
+        win_open_anim(w);
+        win_damage_all(w);
+        msg_win_ok ok = { .id = w->id, .x = w->cur.x, .y = w->cur.y, .w = w->cur.w, .h = w->cur.h, .state = w->state };
+        mlipc_send(cl->fd, MS_WIN_OK, &ok, sizeof ok);
+        broadcast_event(EV_WIN_OPEN, w->id, 0, w->appid);
+        break;
+    }
+    case MC_WIN_COMMIT: {
+        const msg_win_commit *m = payload;
+        win_t *w = win_find(m->id);
+        if (!w) break;
+        for (uint32_t i = 0; i < m->n; i++) {
+            ml_rect r = ml_rect_make(m->rects[i * 4], m->rects[i * 4 + 1], m->rects[i * 4 + 2], m->rects[i * 4 + 3]);
+            r.x += w->cur.x; r.y += w->cur.y;
+            damage_add(r);
+        }
+        if (!m->n) win_damage_all(w);
+        request_frame();
+        break;
+    }
+    case MC_WIN_RESIZE: {
+        const msg_win_resize *m = payload;
+        win_t *w = win_find(m->id);
+        if (!w || fd_recv < 0) { if (fd_recv >= 0) close(fd_recv); break; }
+        size_t bytes = (size_t)m->w * m->h * 4;
+        uint32_t *px = ml_shm_map(fd_recv, bytes);
+        if (!px) { close(fd_recv); break; }
+        munmap(w->px, w->shm_bytes);
+        close(w->shm_fd);
+        w->px = px; w->shm_fd = fd_recv; w->shm_bytes = bytes;
+        ml_surface_free(w->surf);
+        w->surf = ml_surface_wrap(px, m->w, m->h, m->w);
+        win_damage_all(w);
+        w->cur.w = w->tgt.w = m->w;
+        w->cur.h = w->tgt.h = m->h;
+        win_damage_all(w);
+        break;
+    }
+    case MC_WIN_TITLE: {
+        const msg_win_title *m = payload;
+        win_t *w = win_find(m->id);
+        if (!w) break;
+        snprintf(w->title, sizeof w->title, "%s", m->title);
+        win_damage_all(w);
+        break;
+    }
+    case MC_WIN_ACTION: {
+        const msg_win_action *m = payload;
+        win_t *w = win_find(m->id);
+        if (!w) break;
+        switch (m->action) {
+        case ACT_CLOSE: win_close(w); break;
+        case ACT_MINIMIZE: minimize_win(w); break;
+        case ACT_MAXIMIZE: toggle_maximize(w); break;
+        case ACT_FULLSCREEN: toggle_maximize(w); break;
+        case ACT_RAISE: focus_win(w); break;
+        default: break;
+        }
+        break;
+    }
+    case MC_WIN_DRAG: {
+        const msg_win_drag *m = payload;
+        win_t *w = win_find(m->id);
+        if (!w) break;
+        win_damage_all(w);
+        w->cur.x += m->dx; w->cur.y += m->dy;
+        w->tgt = w->cur;
+        win_damage_all(w);
+        break;
+    }
+    case MC_WIN_PLACE: {
+        const msg_win_place *m = payload;
+        win_t *w = win_find(m->id);
+        if (!w) break;
+        win_damage_all(w);
+        w->cur.x = w->tgt.x = m->x;
+        w->cur.y = w->tgt.y = m->y;
+        win_damage_all(w);
+        break;
+    }
+    case MC_FOCUS: {
+        const msg_id *m = payload;
+        focus_win(win_find(m->id));
+        break;
+    }
+    case MC_WORKSPACE: {
+        const msg_ws *m = payload;
+        switch_workspace(m->dir);
+        break;
+    }
+    case MC_LAUNCH:
+        do_launch(((const msg_launch *)payload)->cmd);
+        break;
+    case MC_NOTIFY:
+        notify(payload);
+        break;
+    case MC_SET_MODE: {
+        const msg_mode *m = payload;
+        C.mode = m->mode;
+        /* An explicit request is a promise, exactly like --mode/MICA_MODE: the
+         * operator (or a script that steps through the modes) asked for this,
+         * so the automatic reduction below must leave it alone. */
+        C.mode_pinned = true;
+        C.mode_frozen = true;
+        damage_add(ml_rect_make(0, 0, C.screen_w, C.screen_h));
+        request_frame();
+        broadcast_event(EV_MODE, C.mode, 0, mica_mode_name(C.mode));
+        break;
+    }
+    case MC_QUERY: {
+        msg_stats st = { 0 };
+        st.frames = C.frames;
+        st.dropped = C.dropped;
+        st.presents = C.presents;
+        /* fps over a real 1 s sliding window of presents — never a constant */
+        uint32_t fps = 0;
+        if (C.pts_n > 1) {
+            uint64_t qnow = ml_now_ns();
+            uint64_t cut = qnow > 1000000000ull ? qnow - 1000000000ull : 0;
+            uint32_t inwin = 0;
+            for (int i = 0; i < C.pts_n; i++) if (C.pts[i] >= cut) inwin++;
+            fps = inwin * 100;
+        }
+        st.fps_x100 = fps;
+        st.frame_us = C.presents ? (uint32_t)(C.frame_us_sum / C.presents) : 0;
+        st.worst_us = (uint32_t)C.frame_us_worst;
+        st.damage_px_last = (uint32_t)C.damage_last;
+        st.mode = C.mode;
+        st.mode_steps = C.mode_steps;
+        st.mode_pinned = C.mode_pinned ? 1u : 0u;
+        st.nwindows = (uint32_t)C.nwin;
+        for (int i = 0; i < MAX_CLIENTS; i++) if (C.clients[i].alive) st.nclients++;
+        /* 0 headless, 1 drm/kms, 2 fbdev — the real backend, never a constant.
+         * accel stays 0 until a GL compositing path lands (docs/gpu.md). */
+        st.backend = (uint32_t)C.disp.kind;
+        st.accel = 0;
+        st.screen_w = C.screen_w; st.screen_h = C.screen_h;
+        st.cur_ws = (uint32_t)C.cur_ws; st.n_ws = N_WS;
+        snprintf(st.gpu_name, sizeof st.gpu_name, "%s", C.gpu.device[0] ? C.gpu.device : "software");
+        mlipc_send(fd, MS_STATS, &st, sizeof st);
+        break;
+    }
+    case MC_PING: {
+        uint64_t t = ml_now_ns();
+        mlipc_send(fd, MS_PONG, &t, sizeof t);
+        break;
+    }
+    case MC_SHUTDOWN:
+        C.shutting_down = true;
+        ml_loop_quit(C.loop, 0);
+        break;
+    case 0:
+        client_gone(cl);
+        break;
+    default:
+        break;
+    }
+}
+
+static void accept_client(void *ud, uint32_t events)
+{
+    (void)ud; (void)events;
+    int fd = accept(C.listen_fd, NULL, NULL);
+    if (fd < 0) return;
+    uint8_t buf[512];
+    uint32_t len = 0;
+    uint32_t t = mlipc_recv(fd, buf, sizeof buf, &len, NULL);
+    if (t != MC_HELLO || len < sizeof(msg_hello)) { close(fd); return; }
+    const msg_hello *h = (const msg_hello *)buf;
+    int slot = -1;
+    for (int i = 0; i < MAX_CLIENTS; i++)
+        if (!C.clients[i].alive) { slot = i; break; }
+    if (slot < 0) { close(fd); return; }
+    client_t *cl = &C.clients[slot];
+    memset(cl, 0, sizeof *cl);
+    cl->fd = fd;
+    cl->pid = (pid_t)h->pid;
+    cl->alive = true;
+    cl->is_tool = strncmp(h->name, "tool:", 5) == 0;
+    snprintf(cl->name, sizeof cl->name, "%s", h->name);
+    msg_welcome w = { .version = MICA_PROTO_VERSION, .screen_w = C.screen_w, .screen_h = C.screen_h,
+                      .scale = 1, .mode = C.mode, .nworkspaces = N_WS, .cur_ws = (uint32_t)C.cur_ws };
+    snprintf(w.name, sizeof w.name, "mica-comp");
+    mlipc_send(fd, MS_WELCOME, &w, sizeof w);
+    mlipc_watch(C.loop, fd, handle_client, cl);
+    ML_INFO("client connected: %s (pid %d)", cl->name, cl->pid);
+}
+
+/* --------------------------------------------------------- input source -- */
+static void input_move(int x, int y)
+{
+    int oldx = C.mx, oldy = C.my;
+    C.mx = ML_CLAMP(x, 0, C.screen_w - 1);
+    C.my = ML_CLAMP(y, 0, C.screen_h - 1);
+    damage_add(ml_rect_make(oldx - 4, oldy - 4, 24, 28));
+    damage_add(ml_rect_make(C.mx - 4, C.my - 4, 24, 28));
+    if (C.drag_win) {
+        win_damage_all(C.drag_win);
+        C.drag_win->cur.x += C.mx - oldx;
+        C.drag_win->cur.y += C.my - oldy;
+        C.drag_win->tgt = C.drag_win->cur;
+        win_damage_all(C.drag_win);
+    } else if (C.resize_win) {
+        win_t *w = C.resize_win;
+        win_damage_all(w);
+        w->cur.w = ML_CLAMP(w->cur.w + (C.mx - oldx), 240, C.screen_w);
+        w->cur.h = ML_CLAMP(w->cur.h + (C.my - oldy), 160, C.screen_h);
+        w->tgt = w->cur;
+        win_send_configure(w);
+        win_damage_all(w);
+    } else {
+        win_t *captured = NULL;
+        for (int b = 0; b < 3; b++)
+            if (C.btn[b] && C.pointer_capture[b]) { captured = C.pointer_capture[b]; break; }
+        if (captured) {
+            send_input(captured, IN_MOVE, C.mx, C.my, 0, 0, 0);
+        } else {
+            win_t *w = win_at(C.mx, C.my, NULL, NULL, NULL);
+            if (w != C.hover_win) {
+                if (C.hover_win) send_input(C.hover_win, IN_LEAVE, C.mx, C.my, 0, 0, 0);
+                if (w) send_input(w, IN_ENTER, C.mx, C.my, 0, 0, 0);
+                C.hover_win = w;
+            }
+            if (w) send_input(w, IN_MOVE, C.mx, C.my, 0, 0, 0);
+        }
+    }
+    request_frame();
+}
+
+static pid_t launcher_pid;
+static void launch_launcher(void)
+{
+    char *exe = ml_find_in_path("mica-shell");
+    if (!exe) {
+        char *self = realpath("/proc/self/exe", NULL);
+        char *dir = ml_path_dir(self ? self : "");
+        exe = ml_path_join(dir, "mica-shell");
+        ml_free(self); ml_free(dir);
+        if (!ml_file_exists(exe)) { ml_free(exe); return; }
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        execl(exe, exe, "--role", "launcher", (char *)NULL);
+        _exit(127);
+    }
+    if (C.n_launched < 64) C.launched[C.n_launched++] = pid;
+    launcher_pid = pid;
+    ml_free(exe);
+}
+static void input_key(uint32_t key, uint32_t mods)
+{
+    /* global hotkeys (spec §37, §33): Meta+Space launcher, Meta+arrows spaces */
+    if (mods & ML_MOD_META) {
+        if (key == ' ') {
+            if (launcher_pid > 0 && kill(launcher_pid, 0) == 0) { kill(launcher_pid, SIGTERM); launcher_pid = 0; }
+            else launch_launcher();
+            return;
+        }
+        if (key == 0xff53) { switch_workspace(-1); return; }
+        if (key == 0xff51) { switch_workspace(1); return; }
+    }
+    win_t *w = C.z_front;
+    for (; w; w = w->z_next)
+        if (win_visible(w) && !(w->flags & WIN_F_NO_FOCUS)) break;
+    if (w) send_input(w, IN_KEY, C.mx, C.my, 0, key, mods);
+}
+
 static void input_button(int btn, bool down)
 {
     if (btn < 0 || btn >= 3) return;
     C.btn[btn] = down;
-
     if (down) {
         bool in_deco = false;
         win_t *w = win_at(C.mx, C.my, NULL, NULL, &in_deco);
@@ -691,7 +1101,6 @@ static void input_button(int btn, bool down)
             ML_INFO("input button DOWN: button=%d screen=%d,%d target=%s id=%u deco=%d",
                     btn + 1, C.mx, C.my, w ? w->appid : "<none>", w ? w->id : 0, in_deco ? 1 : 0);
         if (!w) return;
-
         if (in_deco) {
             int db = deco_button_at(w, C.mx, C.my);
             if (db == 0) { win_close(w); return; }
@@ -704,7 +1113,6 @@ static void input_button(int btn, bool down)
             C.pointer_capture[btn] = w;
             return;
         }
-
         focus_win(w);
         C.pointer_capture[btn] = w;
         send_input(w, IN_DOWN, C.mx, C.my, (uint32_t)btn + 1, 0, 0);
@@ -720,51 +1128,6 @@ static void input_button(int btn, bool down)
             C.resize_win = NULL;
         }
     }
-}
-
-static void input_move(int x, int y)
-{
-    int oldx = C.mx, oldy = C.my;
-    C.mx = ML_CLAMP(x, 0, C.screen_w - 1);
-    C.my = ML_CLAMP(y, 0, C.screen_h - 1);
-    damage_add(ml_rect_make(oldx - 4, oldy - 4, 24, 28));
-    damage_add(ml_rect_make(C.mx - 4, C.my - 4, 24, 28));
-
-    if (C.drag_win) {
-        win_damage_all(C.drag_win);
-        C.drag_win->cur.x += C.mx - oldx;
-        C.drag_win->cur.y += C.my - oldy;
-        C.drag_win->tgt = C.drag_win->cur;
-        win_damage_all(C.drag_win);
-        return;
-    }
-    if (C.resize_win) {
-        win_t *w = C.resize_win;
-        win_damage_all(w);
-        w->cur.w = ML_CLAMP(w->cur.w + (C.mx - oldx), 240, C.screen_w);
-        w->cur.h = ML_CLAMP(w->cur.h + (C.my - oldy), 160, C.screen_h);
-        w->tgt = w->cur;
-        win_send_configure(w);
-        win_damage_all(w);
-        return;
-    }
-
-    win_t *captured = NULL;
-    for (int b = 0; b < 3; b++)
-        if (C.btn[b] && C.pointer_capture[b]) { captured = C.pointer_capture[b]; break; }
-
-    if (captured) {
-        send_input(captured, IN_MOVE, C.mx, C.my, 0, 0, 0);
-    } else {
-        win_t *w = win_at(C.mx, C.my, NULL, NULL, NULL);
-        if (w != C.hover_win) {
-            if (C.hover_win) send_input(C.hover_win, IN_LEAVE, C.mx, C.my, 0, 0, 0);
-            if (w) send_input(w, IN_ENTER, C.mx, C.my, 0, 0, 0);
-            C.hover_win = w;
-        }
-        if (w) send_input(w, IN_MOVE, C.mx, C.my, 0, 0, 0);
-    }
-    request_frame();
 }
 
 static void input_scroll(int dx, int dy)
