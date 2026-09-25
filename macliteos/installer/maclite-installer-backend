@@ -102,25 +102,79 @@ case "$TARGET" in /dev/*) TARGET=${TARGET#/dev/} ;; esac
 case "$TARGET" in ''|.|..|*[!A-Za-z0-9._-]*) fail "invalid target disk identifier" ;; esac
 
 DEV="/dev/$TARGET"
-[ "$DRY_RUN" = 1 ] || [ -b "$DEV" ] || fail "target block device does not exist: $DEV"
-[ "$DRY_RUN" = 1 ] || [ -e "/sys/block/$TARGET" ] || fail "target is not a whole block disk: $DEV"
-case "$TARGET" in loop*|ram*|sr*|dm-*|md*|zram*) fail "refusing non-physical installation target: $DEV" ;; esac
+
+is_forbidden_virtual_disk() {
+  case "$1" in
+    loop*|ram*|zram*|dm-*|md*|sr*|fd*|nbd*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+read_disk_size_bytes() {
+  name="$1"
+  [ -r "/sys/block/$name/size" ] || return 1
+  sectors=$(cat "/sys/block/$name/size" 2>/dev/null || echo 0)
+  case "$sectors" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$sectors" -gt 0 ] || return 1
+  echo $((sectors * 512))
+}
+
+whole_disk_from_source() {
+  src="$1"
+  case "$src" in /dev/*) ;; *) return 1 ;; esac
+  name=${src#/dev/}
+  if is_forbidden_virtual_disk "$name"; then
+    case "$name" in
+      loop*)
+        backing=$(cat "/sys/class/block/$name/loop/backing_file" 2>/dev/null || true)
+        [ -n "$backing" ] || return 1
+        backing_source=$(findmnt -n -o SOURCE -T "$backing" 2>/dev/null || true)
+        [ -n "$backing_source" ] || return 1
+        whole_disk_from_source "$backing_source"
+        return $?
+        ;;
+      *) return 1 ;;
+    esac
+  fi
+  if [ -e "/sys/class/block/$name/partition" ]; then
+    parent=$(lsblk -ndo PKNAME "/dev/$name" 2>/dev/null || true)
+    [ -n "$parent" ] || return 1
+    whole_disk_from_source "/dev/$parent"
+    return $?
+  fi
+  echo "$name"
+}
+
+validate_physical_target() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  [ -b "$DEV" ] || fail "target block device does not exist: $DEV"
+  [ -d "/sys/block/$TARGET" ] || fail "target is not a whole block disk: $DEV"
+  is_forbidden_virtual_disk "$TARGET" && fail "refusing virtual/optical installation target: $DEV"
+  [ ! -e "/sys/block/$TARGET/partition" ] || fail "refusing partition as installation target: $DEV"
+  [ -e "/sys/block/$TARGET/device" ] || fail "target has no physical sysfs device identity: $DEV"
+  size_bytes=$(read_disk_size_bytes "$TARGET" || true)
+  [ -n "$size_bytes" ] && [ "$size_bytes" -gt 0 ] || fail "target has no reliable non-zero capacity: $DEV"
+  if command -v stat >/dev/null 2>&1; then
+    file_type=$(stat -c %F "$DEV" 2>/dev/null || true)
+    [ "$file_type" = "block special" ] || fail "target is not a block device: $DEV"
+  fi
+}
+
+validate_physical_target
 
 BOOT_DISK=""
-for mp in /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
+for mp in /run/live /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
   [ -d "$mp" ] || continue
   src=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
   [ -n "$src" ] || continue
-  case "$src" in
-    /dev/*)
-      b=${src#/dev/}
-      b=$(printf '%s' "$b" | sed -E 's/p?[0-9]+$//')
-      [ -e "/sys/block/$b" ] && { BOOT_DISK=$b; break; }
-      ;;
-  esac
+  b=$(whole_disk_from_source "$src" 2>/dev/null || true)
+  if [ -n "$b" ] && [ -e "/sys/block/$b" ]; then
+    BOOT_DISK="$b"
+    break
+  fi
 done
 
-[ -z "$BOOT_DISK" ] || [ "$TARGET" != "$BOOT_DISK" ] || fail "refusing to install to active live USB: $DEV"
+[ -z "$BOOT_DISK" ] || [ "$TARGET" != "$BOOT_DISK" ] || fail "refusing to install to active live installation media: $DEV"
 if [ "$DRY_RUN" = 0 ]; then
   if lsblk -nrpo NAME,MOUNTPOINT "$DEV" | awk '$2 != "" {print $1}' | grep -q .; then
     fail "target disk or one of its partitions is mounted: $DEV"
@@ -151,6 +205,8 @@ safe_mktemp_dir() {
 MODEL=$(cat "/sys/block/$TARGET/device/model" 2>/dev/null || echo "unknown")
 SERIAL=$(cat "/sys/block/$TARGET/device/serial" 2>/dev/null || echo "unknown")
 SECTORS=$(cat "/sys/block/$TARGET/size" 2>/dev/null || echo 0)
+case "$SECTORS" in ''|*[!0-9]*) fail "target capacity is not a valid sysfs sector count" ;; esac
+[ "$SECTORS" -gt 0 ] || fail "target reports zero capacity"
 SIZE_GB=$((SECTORS * 512 / 1000 / 1000 / 1000))
 echo "SELECTED DISK: /dev/$TARGET"
 echo "MODEL: $MODEL"
@@ -163,7 +219,7 @@ echo "LIVE MEDIA: ${BOOT_DISK:-not detected}"
 MIN_SECTORS=10485760
 [ "$DRY_RUN" = 1 ] || [ "$SECTORS" -ge "$MIN_SECTORS" ] || fail "target disk is too small for the G1OS partition layout (minimum 5 GiB)"
 
-need mount; need umount; need blkid
+need mount; need umount; need blkid; need findmnt; need lsblk
 
 read_block_tag() {
   dev="$1"
