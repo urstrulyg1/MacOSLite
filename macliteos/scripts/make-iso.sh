@@ -2,7 +2,7 @@
 # Assemble a fresh, self-contained G1OS ISO and independently verify it.
 set -eu
 cd "$(dirname "$0")/.."
-VERIFY=0
+VERIFY=1
 for arg in "$@"; do
   case "$arg" in
     --verify) VERIFY=1 ;;
