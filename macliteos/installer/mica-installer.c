@@ -947,7 +947,7 @@ static void input(mica_win *w, const msg_input *in)
             mica_quit(G, 0);
             return;
         }
-        if (in->key == 0xff0d || in->key == '\\n') {
+        if (in->key == 0xff0d || in->key == '\n') {
             if (STAGE == STAGE_WELCOME) {
                 STAGE = STAGE_SELECT;
                 probe_disks();
