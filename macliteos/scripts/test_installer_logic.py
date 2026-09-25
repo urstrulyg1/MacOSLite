@@ -5,6 +5,7 @@ Verifies USB boot device filtering, internal disk selection,
 GPT partition calculation, UUID boot binding, preflight checks, and safety gates.
 """
 import sys
+import pathlib
 
 def test_storage_candidate_policy():
     # Installer targets must be real, whole, non-zero physical disks. These are
@@ -365,6 +366,18 @@ def test_installer_error_buttons_and_recovery():
     print("PASS: Installer error screen buttons (Retry, Repair, View Details) action dispatch and visual feedback")
 
 
+def test_iso_assembly_artifact_paths():
+    """Verify scripts/make-iso.sh normalizes artifact paths to absolute and prevents relative path lookup failure during runtime extraction."""
+    make_iso = pathlib.Path("scripts/make-iso.sh").read_text()
+
+    assert 'KERNEL="${G1OS_KERNEL:-out/vmlinuz-maclite}"' in make_iso, "make-iso.sh must honor G1OS_KERNEL"
+    assert 'INITRD="${G1OS_INITRD:-out/initrd-maclite.img}"' in make_iso, "make-iso.sh must honor G1OS_INITRD"
+    assert 'case "$INITRD" in /*) ;; *) INITRD="$PWD/$INITRD" ;; esac' in make_iso, "make-iso.sh must resolve INITRD to absolute path"
+    assert 'case "$KERNEL" in /*) ;; *) KERNEL="$PWD/$KERNEL" ;; esac' in make_iso, "make-iso.sh must resolve KERNEL to absolute path"
+
+    print("PASS: ISO assembly boot artifact path normalization and extraction integrity")
+
+
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
@@ -386,6 +399,7 @@ def main():
     test_runtime_dependencies()
     test_kernel_lifecycle_and_verification()
     test_installer_error_buttons_and_recovery()
+    test_iso_assembly_artifact_paths()
     print("All G1OS installer logic tests PASSED.\n")
     return 0
 

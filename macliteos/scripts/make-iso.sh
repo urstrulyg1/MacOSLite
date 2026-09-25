@@ -23,10 +23,14 @@ if [ "$VERIFY" = 1 ]; then
   for tool in unsquashfs file; do need "$tool"; done
 fi
 
-KERNEL="out/vmlinuz-maclite"
-INITRD="out/initrd-maclite.img"
-KERNEL_MANIFEST="out/g1os-kernel-manifest.txt"
-INITRD_MANIFEST="out/g1os-initrd-manifest.txt"
+KERNEL="${G1OS_KERNEL:-out/vmlinuz-maclite}"
+INITRD="${G1OS_INITRD:-out/initrd-maclite.img}"
+KERNEL_MANIFEST="${G1OS_KERNEL_MANIFEST:-out/g1os-kernel-manifest.txt}"
+INITRD_MANIFEST="${G1OS_INITRD_MANIFEST:-out/g1os-initrd-manifest.txt}"
+case "$KERNEL" in /*) ;; *) KERNEL="$PWD/$KERNEL" ;; esac
+case "$INITRD" in /*) ;; *) INITRD="$PWD/$INITRD" ;; esac
+case "$KERNEL_MANIFEST" in /*) ;; *) KERNEL_MANIFEST="$PWD/$KERNEL_MANIFEST" ;; esac
+case "$INITRD_MANIFEST" in /*) ;; *) INITRD_MANIFEST="$PWD/$INITRD_MANIFEST" ;; esac
 [ -s "$KERNEL" ] || { echo "ERROR: authoritative G1OS kernel artifact missing: $KERNEL" >&2; exit 3; }
 [ -s "$INITRD" ] || { echo "ERROR: authoritative G1OS initramfs artifact missing: $INITRD" >&2; exit 3; }
 [ -s "$KERNEL_MANIFEST" ] || { echo "ERROR: authoritative G1OS kernel manifest missing: $KERNEL_MANIFEST" >&2; exit 3; }
