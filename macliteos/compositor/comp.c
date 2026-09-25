@@ -1219,6 +1219,7 @@ static void input_event_fd(void *ud, uint32_t events)
 
     struct input_event ev[32];
     int pending_dx = 0, pending_dy = 0, pending_wheel = 0, pending_hwheel = 0;
+    bool sync_dropped = false;
     for (;;) {
         ssize_t n = read(d->fd, ev, sizeof ev);
         if (n < 0) {
@@ -1235,7 +1236,15 @@ static void input_event_fd(void *ud, uint32_t events)
         for (size_t i = 0; i < count; i++) {
             struct input_event *e = &ev[i];
             if (e->type == EV_SYN && e->code == SYN_DROPPED) {
+                /* evdev requires ignoring the remainder of this packet until
+                 * SYN_REPORT after an overrun, then resynchronizing state. */
                 pending_dx = pending_dy = pending_wheel = pending_hwheel = 0;
+                sync_dropped = true;
+                continue;
+            }
+            if (sync_dropped) {
+                if (e->type == EV_SYN && e->code == SYN_REPORT)
+                    sync_dropped = false;
                 continue;
             }
             if (e->type == EV_REL) {
