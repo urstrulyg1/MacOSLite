@@ -107,7 +107,7 @@ emit "Kernel command line: $CMDLINE"
 SAFE=0
 case " $CMDLINE " in *nomodeset*|*radeon.modeset=0*|*maclite.gl=off*) SAFE=1 ;; esac
 if [ "$SAFE" = 1 ]; then
-    status OK "Safe Graphics selected (EFI framebuffer / software compositor)"
+    status OK "Safe Graphics selected (software compositor; KMS preferred, fbdev fallback)"
 else
     status OK "Normal Graphics selected (Radeon KMS requested)"
 fi
@@ -163,7 +163,6 @@ if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
     status OK "Installed root filesystem verified"
     silence_graphical_console
     BACKEND=auto
-    [ "$SAFE" = 1 ] && BACKEND=fbdev
     status OK "Starting installed G1OS compositor ($BACKEND)"
     exec chroot /mnt /usr/bin/mica-comp --session --backend "$BACKEND"
 fi
@@ -205,7 +204,7 @@ export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64:/run/maclite-base/lib:/ru
 [ -x /usr/bin/g1os-failure-ui ] || fatal "graphical failure UI is missing"
 [ -x /usr/bin/maclite-installer-backend ] || fatal "installer backend is missing"
 BACKEND=auto
-if [ "$SAFE" = 1 ]; then BACKEND=fbdev; export MICA_GL=off; fi
+if [ "$SAFE" = 1 ]; then export MICA_GL=off; fi
 status OK "Graphical installer runtime present"
 silence_graphical_console
 status RUNNING "Starting compositor ($BACKEND)"
