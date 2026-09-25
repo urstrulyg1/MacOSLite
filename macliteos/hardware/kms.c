@@ -306,42 +306,18 @@ void ml_display_commit(ml_display *d, const uint32_t *src, const ml_rect *damage
     int src_pitch = d->w;
     int dst_pitch = d->kind == ML_DISP_KMS ? d->pitch / 4 : ((fb_priv *)d->priv)->line_length / 4;
 
-    if (d->kind == ML_DISP_KMS) {
-        /*
-         * KMS has two scanout buffers, but the compositor's damage list is
-         * frame-relative. After a flip completes, the buffer being recycled
-         * can be one or more frames behind the compositor surface. Copying
-         * only the latest cursor rectangle into that stale buffer therefore
-         * leaves old cursor images behind.
-         *
-         * Keep the KMS path deliberately buffer-age independent: once the
-         * previous flip has completed, copy the complete compositor surface
-         * into the recycled scanout buffer before presenting it. This costs
-         * one sequential framebuffer copy per present, but guarantees that
-         * every pixel (including the old cursor position) is current on the
-         * physical iMac Radeon path.
-         *
-         * The fbdev path retains damage-only copies because it writes directly
-         * to the persistent scanout framebuffer and has no buffer recycling.
-         */
-        for (int y = 0; y < d->h; y++)
-            memcpy(dst + (size_t)y * dst_pitch,
-                   src + (size_t)y * src_pitch,
-                   (size_t)d->w * 4);
-    } else {
-        for (int i = 0; i < n; i++) {
-            ml_rect r = damage[i];
-            if (r.x < 0) { r.w += r.x; r.x = 0; }
-            if (r.y < 0) { r.h += r.y; r.y = 0; }
-            if (r.x + r.w > d->w) r.w = d->w - r.x;
-            if (r.y + r.h > d->h) r.h = d->h - r.y;
-            if (r.w <= 0 || r.h <= 0) continue;
-            for (int y = 0; y < r.h; y++)
-                memcpy(dst + (size_t)(r.y + y) * dst_pitch + r.x,
-                       src + (size_t)(r.y + y) * src_pitch + r.x,
-                       (size_t)r.w * 4);
-        }
-    }
+    /*
+     * Keep both the KMS and FBDEV paths deliberately buffer-age and damage
+     * independent: copy the complete compositor surface into the scanout
+     * buffer before presenting it. This costs one sequential framebuffer copy
+     * per present (<1ms), but guarantees that every pixel (including old cursor
+     * positions) is clean and current on physical iMac hardware, EFI framebuffers,
+     * and Radeon KMS.
+     */
+    for (int y = 0; y < d->h; y++)
+        memcpy(dst + (size_t)y * dst_pitch,
+               src + (size_t)y * src_pitch,
+               (size_t)d->w * 4);
     if (d->kind == ML_DISP_KMS) {
         kms_priv *k = d->priv;
         struct ml_drm_mode_crtc_page_flip pf = {

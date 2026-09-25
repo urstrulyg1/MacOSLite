@@ -11,7 +11,13 @@ echo
 BOOT_DISK=""
 for mp in /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
   [ -d "$mp" ] || continue
-  DEV=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
+  DEV=""
+  if command -v findmnt >/dev/null 2>&1; then
+    DEV=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
+  fi
+  if [ -z "$DEV" ] && [ -r /proc/mounts ]; then
+    DEV=$(awk -v m="$mp" '$2 == m {print $1; exit}' /proc/mounts 2>/dev/null || true)
+  fi
   [ -n "$DEV" ] || continue
   case "$DEV" in
     /dev/*)
@@ -22,7 +28,9 @@ for mp in /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
   esac
 done
 
-lsblk -d -o NAME,SIZE,MODEL,TRAN,RM
+if command -v lsblk >/dev/null 2>&1; then
+  lsblk -d -o NAME,SIZE,MODEL,TRAN,RM
+fi
 [ -n "$BOOT_DISK" ] && echo "LIVE USB PROTECTED: /dev/$BOOT_DISK"
 
 echo

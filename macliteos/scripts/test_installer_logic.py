@@ -378,6 +378,32 @@ def test_iso_assembly_artifact_paths():
     print("PASS: ISO assembly boot artifact path normalization and extraction integrity")
 
 
+def test_findmnt_resilience_and_cursor_blit_integrity():
+    """Verify backend does not hard-depend on findmnt/lsblk and raster blit coordinates are non-doubled."""
+    backend_src = pathlib.Path("installer/maclite-installer-backend").read_text()
+    rootfs_backend = pathlib.Path("rootfs/usr/bin/maclite-installer-backend").read_text()
+    raster_src = pathlib.Path("core/src/raster.c").read_text()
+    kms_src = pathlib.Path("hardware/kms.c").read_text()
+
+    # 1. No hard dependency on findmnt or lsblk
+    assert "need findmnt" not in backend_src, "Backend must not hard-require findmnt"
+    assert "need lsblk" not in backend_src, "Backend must not hard-require lsblk"
+    assert backend_src == rootfs_backend, "Rootfs backend must match installer backend"
+
+    # 2. Fallbacks for mount querying
+    assert "/proc/mounts" in backend_src, "Backend must contain /proc/mounts fallback"
+
+    # 3. Raster blit destination calculation must not double coordinates
+    assert "ml_rect dstrect = ml_rect_make(dx, dy, sr.w, sr.h);" in raster_src, \
+        "ml_blit must place sr at (dx, dy) without adding sr.x/sr.y"
+
+    # 4. KMS display commit must refresh full frame
+    assert "memcpy(dst + (size_t)y * dst_pitch," in kms_src, \
+        "Display commit must refresh full framebuffer scanout"
+
+    print("PASS: findmnt/lsblk runtime resilience and raster cursor blit integrity")
+
+
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
@@ -400,6 +426,7 @@ def main():
     test_kernel_lifecycle_and_verification()
     test_installer_error_buttons_and_recovery()
     test_iso_assembly_artifact_paths()
+    test_findmnt_resilience_and_cursor_blit_integrity()
     print("All G1OS installer logic tests PASSED.\n")
     return 0
 

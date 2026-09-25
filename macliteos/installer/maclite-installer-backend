@@ -172,7 +172,13 @@ whole_disk_from_source() {
       loop*)
         backing=$(cat "/sys/class/block/$name/loop/backing_file" 2>/dev/null || true)
         [ -n "$backing" ] || return 1
-        backing_source=$(findmnt -n -o SOURCE -T "$backing" 2>/dev/null || true)
+        backing_source=""
+        if command -v findmnt >/dev/null 2>&1; then
+          backing_source=$(findmnt -n -o SOURCE -T "$backing" 2>/dev/null || true)
+        fi
+        if [ -z "$backing_source" ] && [ -r /proc/mounts ]; then
+          backing_source=$(awk -v b="$backing" 'index(b, $2) == 1 { if (length($2) > maxlen) { maxlen = length($2); src = $1 } } END { print src }' /proc/mounts 2>/dev/null || true)
+        fi
         [ -n "$backing_source" ] || return 1
         whole_disk_from_source "$backing_source"
         return $?
@@ -181,7 +187,13 @@ whole_disk_from_source() {
     esac
   fi
   if [ -e "/sys/class/block/$name/partition" ]; then
-    parent=$(lsblk -ndo PKNAME "/dev/$name" 2>/dev/null || true)
+    parent=""
+    if command -v lsblk >/dev/null 2>&1; then
+      parent=$(lsblk -ndo PKNAME "/dev/$name" 2>/dev/null || true)
+    fi
+    if [ -z "$parent" ]; then
+      parent=$(printf '%s' "$name" | sed -E 's/p?[0-9]+$//')
+    fi
     [ -n "$parent" ] || return 1
     whole_disk_from_source "/dev/$parent"
     return $?
@@ -211,7 +223,13 @@ validate_physical_target
 BOOT_DISK=""
 for mp in /run/live /run/maclite-base /run/maclite-live /cdrom /mnt/live; do
   [ -d "$mp" ] || continue
-  src=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
+  src=""
+  if command -v findmnt >/dev/null 2>&1; then
+    src=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
+  fi
+  if [ -z "$src" ] && [ -r /proc/mounts ]; then
+    src=$(awk -v m="$mp" '$2 == m {print $1; exit}' /proc/mounts 2>/dev/null || true)
+  fi
   [ -n "$src" ] || continue
   b=$(whole_disk_from_source "$src" 2>/dev/null || true)
   if [ -n "$b" ] && [ -e "/sys/block/$b" ]; then
@@ -222,7 +240,13 @@ done
 
 [ -z "$BOOT_DISK" ] || [ "$TARGET" != "$BOOT_DISK" ] || fail "refusing to install to active live installation media: $DEV"
 if [ "$DRY_RUN" = 0 ]; then
-  if lsblk -nrpo NAME,MOUNTPOINT "$DEV" | awk '$2 != "" {print $1}' | grep -q .; then
+  mounted_parts=""
+  if command -v lsblk >/dev/null 2>&1; then
+    mounted_parts=$(lsblk -nrpo NAME,MOUNTPOINT "$DEV" 2>/dev/null | awk '$2 != "" {print $1}' || true)
+  elif [ -r /proc/mounts ]; then
+    mounted_parts=$(awk -v d="$DEV" '$1 ~ ("^" d) {print $1}' /proc/mounts 2>/dev/null || true)
+  fi
+  if [ -n "$mounted_parts" ]; then
     fail "target disk or one of its partitions is mounted: $DEV"
   fi
 fi
@@ -265,7 +289,7 @@ echo "LIVE MEDIA: ${BOOT_DISK:-not detected}"
 MIN_SECTORS=10485760
 [ "$DRY_RUN" = 1 ] || [ "$SECTORS" -ge "$MIN_SECTORS" ] || fail "target disk is too small for the G1OS partition layout (minimum 5 GiB)"
 
-need mount; need umount; need blkid; need findmnt; need lsblk
+need mount; need umount; need blkid
 
 read_block_tag() {
   dev="$1"
@@ -499,7 +523,13 @@ EOF
   step 6 70 "Installing Apple EFI fallback bootloader and UUID-bound boot configuration"
 fi
 
-if ! findmnt -n -T "$BOOT_MNT" >/dev/null 2>&1; then
+is_boot_mounted=0
+if command -v findmnt >/dev/null 2>&1; then
+  findmnt -n -T "$BOOT_MNT" >/dev/null 2>&1 && is_boot_mounted=1
+elif [ -r /proc/mounts ]; then
+  grep -qs "[[:space:]]$BOOT_MNT[[:space:]]" /proc/mounts && is_boot_mounted=1
+fi
+if [ "$is_boot_mounted" = 0 ]; then
   run mount "$DEV_BOOT" "$BOOT_MNT"
 fi
 mkdir -p "$BOOT_MNT/EFI/BOOT" "$BOOT_MNT/boot/grub"

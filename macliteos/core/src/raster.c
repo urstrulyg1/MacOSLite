@@ -416,15 +416,15 @@ void ml_blit(ml_ctx *c, const ml_surface *src, ml_rect sr, int dx, int dy, uint8
 {
     sr = ml_rect_intersect(sr, ml_rect_make(0, 0, src->w, src->h));
     if (ml_rect_empty(sr)) return;
-    ml_rect dstrect = ml_rect_make(dx + sr.x, dy + sr.y, sr.w, sr.h);
+    ml_rect dstrect = ml_rect_make(dx, dy, sr.w, sr.h);
     ml_rect area = ml_rect_intersect(dstrect, c->clip);
     if (ml_rect_empty(area)) return;
     ml_surface *d = c->dst;
     for (int y = area.y; y < area.y + area.h; y++) {
         uint32_t *drow = ml_surface_row(d, y);
-        const uint32_t *srow = src->px + (size_t)(y - dy) * src->stride;
+        const uint32_t *srow = src->px + (size_t)(sr.y + (y - dy)) * src->stride;
         for (int x = area.x; x < area.x + area.w; x++) {
-            uint32_t sc = srow[x - dx];
+            uint32_t sc = srow[sr.x + (x - dx)];
             uint32_t a = ((sc >> 24) * opacity) / 255;
             drow[x] = a >= 255 ? sc : blend_px(sc, drow[x], a);
         }
@@ -439,7 +439,7 @@ void ml_blit_scaled(ml_ctx *c, const ml_surface *src, ml_rect dst, ml_rect sr, u
     sr = ml_rect_intersect(sr, ml_rect_make(0, 0, src->w, src->h));
     dst = ml_rect_intersect(dst, c->clip);
     if (ml_rect_empty(sr) || ml_rect_empty(dst)) return;
-    if (sr.w == dst.w && sr.h == dst.h) { ml_blit(c, src, sr, dst.x - sr.x, dst.y - sr.y, opacity); return; }
+    if (sr.w == dst.w && sr.h == dst.h) { ml_blit(c, src, sr, dst.x, dst.y, opacity); return; }
     ml_surface *d = c->dst;
     double fx = (double)sr.w / dst.w, fy = (double)sr.h / dst.h;
     for (int y = dst.y; y < dst.y + dst.h; y++) {

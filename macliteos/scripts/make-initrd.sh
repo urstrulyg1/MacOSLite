@@ -88,6 +88,16 @@ while read -r pat; do
     [ "$found" = 1 ] || { echo "ERROR: initrd.list entry has no matching source: $pat" >&2; exit 4; }
 done < boot/initrd.list
 
+for extra_tool in findmnt lsblk; do
+    for tool_path in "/usr/bin/$extra_tool" "/bin/$extra_tool"; do
+        if [ -x "$tool_path" ] && [ ! -e "$W/usr/bin/$extra_tool" ] && [ ! -e "$W/bin/$extra_tool" ]; then
+            cp -a "$tool_path" "$W/usr/bin/$extra_tool"
+            chmod 0755 "$W/usr/bin/$extra_tool"
+            break
+        fi
+    done
+done
+
 cp -a "$MODULES/lib/modules/." "$W/lib/modules/"
 if [ -n "${G1OS_FIRMWARE_DIR:-}" ]; then
     [ -d "$G1OS_FIRMWARE_DIR" ] || { echo "ERROR: G1OS_FIRMWARE_DIR is not a directory" >&2; exit 5; }
