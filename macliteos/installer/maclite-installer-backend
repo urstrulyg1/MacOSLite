@@ -288,10 +288,17 @@ done
 
 KERNEL=""
 INITRD=""
-for p in /boot/vmlinuz-maclite /run/maclite-live/boot/vmlinuz-maclite /boot/vmlinuz-g1os; do [ -s "$p" ] && { KERNEL=$p; break; }; done
-for p in /boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img /boot/initrd-g1os.img; do [ -s "$p" ] && { INITRD=$p; break; }; done
-[ -n "$KERNEL" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS kernel image not found"
-[ -n "$INITRD" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS initramfs not found"
+# The installer runs from the initramfs/live environment. The real kernel and
+# initramfs are on the mounted ISO at /run/live/boot; /boot in the initramfs
+# is not the ISO boot directory and may legitimately be empty.
+for p in /run/live/boot/vmlinuz-maclite /run/maclite-live/boot/vmlinuz-maclite /boot/vmlinuz-maclite /run/live/boot/vmlinuz-g1os /boot/vmlinuz-g1os; do
+  if [ -s "$p" ]; then KERNEL=$p; break; fi
+done
+for p in /run/live/boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img /boot/initrd-maclite.img /run/live/boot/initrd-g1os.img /boot/initrd-g1os.img; do
+  if [ -s "$p" ]; then INITRD=$p; break; fi
+done
+[ -n "$KERNEL" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS kernel image not found on mounted live media (/run/live/boot)"
+[ -n "$INITRD" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS initramfs not found on mounted live media (/run/live/boot)"
 
 emit_state "PREPARING"
 save_state "RUNNING" "PREPARING" 10 "Validated target disk, live media, base system, kernel and initramfs"
