@@ -293,7 +293,7 @@ BOOT_MANIFEST="/run/live/boot/g1os-boot-manifest.txt"
 # G1OS kernel is the exact kernel staged in the ISO /boot directory. Resolve
 # only from the mounted live media; never fall back to the running kernel.
 if [ "$DRY_RUN" = 0 ]; then
-  findmnt -rn -T /run/live >/dev/null 2>&1 || fail "live G1OS media is not mounted at /run/live"
+  grep -q ' /run/live ' /proc/self/mountinfo || fail "live G1OS media is not mounted at /run/live"
   [ -s "$BOOT_MANIFEST" ] || fail "G1OS boot manifest missing from live media: $BOOT_MANIFEST"
   [ -s /run/live/boot/vmlinuz-maclite ] || fail "real G1OS kernel image not found in ISO payload: /run/live/boot/vmlinuz-maclite"
   [ -s /run/live/boot/initrd-maclite.img ] || fail "real G1OS initramfs not found in ISO payload: /run/live/boot/initrd-maclite.img"
