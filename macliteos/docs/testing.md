@@ -12,17 +12,20 @@ upgrades a row because the code looks right.
 ## Run everything
 
     ./configure && make -j4 all
-    sh scripts/run-tests.sh              # 24 rows; --quick, --no-fixtures also work
+    sh scripts/run-tests.sh              # 33 rows; --quick, --no-fixtures also work
 
 Artifacts: `out/test-summary.tsv` (one row per check), `out/logs/*.log`
 (each row's full output), `out/session_*.png` / `out/settings_*.png`
 (screenshots the sessions assert on).
 
-## The 24 rows (all PASS on this host, `Result: PASS`)
+## The 33 rows (all PASS on this host, `Result: PASS`)
 
 | row | tier | what it proves |
 |---|---|---|
 | `test_render` `test_units` `test_idle` `test_leak` | SANDBOX | region/raster/cache/easing correctness; 0.1 ms CPU and **1 wakeup** in 1500 ms idle; RSS returns after 300 window cycles |
+| `test_cursor_damage` `test_cursor_render` | SANDBOX | the pointer's damage bounds provably contain its measured ink at every position, corner, clamp and resize; a miniature compositor driven exactly like the real one stays byte-identical to a full repaint through slow moves, rapid bursts, overlapping UI, repeated redraws, scene changes and the KMS/fbdev scanout copy |
+| `cursor-trails` | HOST | `mica-comp`'s **live** framebuffer equals a full repaint, in both normal (`--mode beautiful`) and Safe Graphics (`--mode performance`, `MICA_GL=off`) modes, after `tests/scripts/cursor.script` — and the compositor never had to invoke its cursor-restore repair, i.e. the damage tracking was complete on its own |
+| `installer-logic` | HOST | installer/initrd/ISO source invariants, including the cursor blit fix |
 | `test_hardware:imac11_2` `:imac11_3` `:virtual` `:bare` | FIXTURE | the detector reads four different machines correctly, including the fallbacks |
 | `honesty:gpu` | SANDBOX | `maclite-gpu` may not exit 0 without a verified renderer (exit 3 here → PASS) |
 | `honesty:brightness` | SANDBOX | a write against fixture files is refused (`BL_SET_NOT_TESTED`), never "verified" |
@@ -30,7 +33,7 @@ Artifacts: `out/test-summary.tsv` (one row per check), `out/logs/*.log`
 | `honesty:net-fixture` | SANDBOX | this host's address never leaks into a fixture report |
 | `honesty:decode` | SANDBOX | nothing decoded is never PASS (`maclite-video-test` exits 3 here) |
 | `honesty:backend` | SANDBOX | `--backend kms` with no card exits non-zero instead of silently presenting through headless |
-| `session:demo` `:interact` `:dockhide` `:menuclick` `:cc` `:hardware` `:settings` | SANDBOX | real headless sessions: render loop, IPC, input, workspace switch, minimize/dock autohide, menu action, control centre, hardware report UI, Settings > Displays (four screenshots each, checked by the runner) |
+| `session:cursor` `:demo` `:interact` `:dockhide` `:menuclick` `:cc` `:hardware` `:settings` | SANDBOX | real headless sessions: render loop, IPC, input, workspace switch, minimize/dock autohide, menu action, control centre, hardware report UI, Settings > Displays (four screenshots each, checked by the runner) |
 | `ui-benchmark` | SANDBOX | frame cost table (docs/performance.md) |
 | `maclite-memory` | SANDBOX | live RSS/PSS of a real session |
 | `maclite-performance` | SANDBOX | idle CPU busy % over 5 s |
@@ -42,6 +45,20 @@ Artifacts: `out/test-summary.tsv` (one row per check), `out/logs/*.log`
 required checks that did **not** pass, so a green-looking report cannot hide an
 unverified row. The runner exits non-zero if any row fails; `SKIP` rows are
 printed as `SKIP (NOT TESTED)`, never as PASS.
+
+## The cursor-trail bug (why `cursor-trails` exists)
+
+A screenshot-based check cannot see it. `shot <file>` re-renders the *whole*
+screen into a fresh surface, so a stale pointer left in the framebuffer is
+repainted over and the capture looks perfect — which is exactly how the bug
+survived: every screenshot was clean while G1OS showed a trail of cursors. The
+only reliable detector is `--shot`, which dumps the framebuffer the compositor
+actually presented, compared against a full repaint of the same final state.
+
+Restoring the two-line bug (invalidate only the rectangle the pointer moved
+*to*) reproduces it exactly: **37 leftover 14x20 pointer blobs** in the live
+framebuffer after `tests/scripts/cursor.script`, 0 in the reference. Both the
+unit tests and `cursor-trails` fail on that mutation and pass on the fix.
 
 ## Bugs the fixture matrix caught (i.e. why it exists)
 

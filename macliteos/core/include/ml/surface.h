@@ -23,6 +23,12 @@ ml_surface *ml_surface_wrap(uint32_t *px, int w, int h, int stride);
 void ml_surface_free(ml_surface *s);
 bool ml_surface_resize(ml_surface *s, int w, int h);
 void ml_surface_clear(ml_surface *s, ml_color c);
+/* Force every pixel to alpha 255. Use this for a *base* layer (the wallpaper)
+ * that a damage-only compositor re-blits on every repaint: a base layer that
+ * is even slightly translucent is not idempotent, so repainting the same
+ * damage region twice drifts the pixels — and every pixel the pointer used to
+ * cover is restored by exactly such a repaint. */
+void ml_surface_make_opaque(ml_surface *s);
 void ml_surface_damage(ml_surface *s, ml_rect r);
 void ml_surface_damage_all(ml_surface *s);
 bool ml_surface_take_damage(ml_surface *s, ml_region *out);  /* true if non-empty */

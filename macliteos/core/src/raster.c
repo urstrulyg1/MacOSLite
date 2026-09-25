@@ -16,17 +16,45 @@ static void path_reserve(ml_path *p, size_t extra)
     p->p = ml_realloc(p->p, cap * sizeof *p->p);
     p->cap = cap;
 }
-static void sub_reserve(ml_path *p)
+static void path_bbox(const ml_path *p, double *x0, double *y0, double *x1, double *y1);
+static void sub_reserve_for(ml_path *p, size_t extra);
+
+static void sub_reserve_for(ml_path *p, size_t extra)
 {
-    if (p->nsub + 1 <= p->capsub) return;
+    if (p->nsub + extra <= p->capsub) return;
     size_t cap = p->capsub ? p->capsub * 2 : 8;
+    while (cap < p->nsub + extra) cap *= 2;
     p->sub = ml_realloc(p->sub, cap * sizeof *p->sub);
     p->subclosed = ml_realloc(p->subclosed, cap * sizeof *p->subclosed);
     p->capsub = cap;
 }
+static void sub_reserve(ml_path *p)
+{
+    sub_reserve_for(p, 1);
+}
 void ml_path_init(ml_path *p) { memset(p, 0, sizeof *p); }
 void ml_path_free(ml_path *p) { ml_free(p->p); ml_free(p->sub); ml_free(p->subclosed); memset(p, 0, sizeof *p); }
 void ml_path_reset(ml_path *p) { p->n = 0; p->nsub = 0; }
+void ml_path_copy(ml_path *dst, const ml_path *src)
+{
+    if (!dst || !src) return;
+    ml_path_free(dst);
+    if (src->n) {
+        path_reserve(dst, src->n);
+        memcpy(dst->p, src->p, src->n * sizeof *dst->p);
+        dst->n = src->n;
+    }
+    if (src->nsub) {
+        sub_reserve_for(dst, src->nsub);
+        memcpy(dst->sub, src->sub, src->nsub * sizeof *dst->sub);
+        memcpy(dst->subclosed, src->subclosed, src->nsub * sizeof *dst->subclosed);
+        dst->nsub = src->nsub;
+    }
+}
+void ml_path_bbox(const ml_path *p, double *x0, double *y0, double *x1, double *y1)
+{
+    path_bbox(p, x0, y0, x1, y1);
+}
 void ml_path_move(ml_path *p, double x, double y)
 {
     sub_reserve(p);
@@ -425,6 +453,29 @@ void ml_blit(ml_ctx *c, const ml_surface *src, ml_rect sr, int dx, int dy, uint8
         const uint32_t *srow = src->px + (size_t)(sr.y + (y - dy)) * src->stride;
         for (int x = area.x; x < area.x + area.w; x++) {
             uint32_t sc = srow[sr.x + (x - dx)];
+            uint32_t a = ((sc >> 24) * opacity) / 255;
+            drow[x] = a >= 255 ? sc : blend_px(sc, drow[x], a);
+        }
+    }
+    S.pixels_blended += (uint64_t)area.w * area.h;
+    S.draw_calls++;
+    ml_surface_damage(d, area);
+}
+
+void ml_blit_scrolled(ml_ctx *c, const ml_surface *src, int offset_x, int offset_y,
+                      uint8_t opacity)
+{
+    if (!c || !src || src->w <= 0 || src->h <= 0) return;
+    ml_rect area = c->clip;
+    if (ml_rect_empty(area)) return;
+    ml_surface *d = c->dst;
+    for (int y = area.y; y < area.y + area.h; y++) {
+        uint32_t *drow = ml_surface_row(d, y);
+        int sy = ML_CLAMP(y - offset_y, 0, src->h - 1);
+        const uint32_t *srow = src->px + (size_t)sy * src->stride;
+        for (int x = area.x; x < area.x + area.w; x++) {
+            int sx = ML_CLAMP(x - offset_x, 0, src->w - 1);
+            uint32_t sc = srow[sx];
             uint32_t a = ((sc >> 24) * opacity) / 255;
             drow[x] = a >= 255 ? sc : blend_px(sc, drow[x], a);
         }
