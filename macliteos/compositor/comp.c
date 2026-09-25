@@ -36,6 +36,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 #define DECO_H 30
