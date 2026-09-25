@@ -527,7 +527,7 @@ is_boot_mounted=0
 if command -v findmnt >/dev/null 2>&1; then
   findmnt -n -T "$BOOT_MNT" >/dev/null 2>&1 && is_boot_mounted=1
 elif [ -r /proc/mounts ]; then
-  grep -qs "[[:space:]]$BOOT_MNT[[:space:]]" /proc/mounts && is_boot_mounted=1
+  grep -qs "[[:space:]]${BOOT_MNT}[[:space:]]" /proc/mounts && is_boot_mounted=1
 fi
 if [ "$is_boot_mounted" = 0 ]; then
   run mount "$DEV_BOOT" "$BOOT_MNT"

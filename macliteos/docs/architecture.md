@@ -42,6 +42,66 @@ CONFIGURE, FRAME, WIN_STATE, EVENT, PONG, STATS.
 - No blur, no particles, no animated wallpaper. Shadows are precomputed
   gradients; glows are cubic-falloff radials.
 
+### The pointer is a composited layer, and its damage has two sides
+
+The pointer is not a window and not a hardware sprite: it is composited into
+`C.fb` by the same pass as everything else, then the whole buffer is pushed to
+scanout. That makes one rule load-bearing:
+
+> **Every pointer move invalidates the rectangle it moved *from* as well as the
+> one it moved *to*.** Damage-only scanout cannot know the pointer moved unless
+> it is told to repaint where it used to be.
+
+Miss the old rectangle and the previous pointer stays in the framebuffer
+forever: on G1OS that was the reported "cursor trails / multiple cursors", and
+it only got worse the longer the pointer moved, because each present left
+another remnant behind. Nothing else in the pipeline can recover from it — the
+wallpaper blit, the window pass and the notification pass all repaint only the
+rects they are given, so a stale cursor in an un-repainted rect simply survives.
+
+Three invariants now hold, and each has a test that fails without it:
+
+1. **The damage bounds are derived from the sprite, never hand-written.**
+   `ml_cursor_sprite_set()` rasterizes the sprite at five sub-pixel offsets and
+   measures the exact set of pixels that differ from the background
+   (`measure_ink()` in core/src/cursor.c), so `ml_cursor_damage()` /
+   `ml_cursor_damage_at()` return a box that provably contains every pixel the
+   pointer can touch — plus a margin for antialiasing. The old constant
+   `(x-4, y-4, 24, 28)` happened to cover the default arrow and would silently
+   stop covering it the moment the sprite changed.
+2. **The pointer is composited exactly once per frame, over the union of its
+   own damage clipped to what the frame repaints.** The cursor's stroke is
+   translucent (`ml_rgba(20,22,30,200)`), so painting it twice over the same
+   pixels blends it twice and darkens it — a "ghost cursor" that is a different
+   bug with the same symptom. `present_region()` therefore paints the scene for
+   every clip, then composites the pointer a single time.
+3. **The compositor checks its own work.** `present()` tracks where the
+   framebuffer currently shows the pointer and requires the frame's damage
+   region to cover *both* that box and the box the pointer occupies now: miss
+   the first and the previous cursor survives as a ghost, miss the second and
+   the frame erases the pointer and draws nothing. Either way the rect is added
+   and a warning is logged, so the guarantee holds even if a future caller
+   forgets rule 1 — and the warning says which half was forgotten.
+
+Screen edges are handled by clamping every damage rect to the screen: ink that
+falls outside the framebuffer is never rasterized, so it never needs
+restoring. Resizes (`ml_cursor_set_screen`) and warps refresh the same state.
+
+Regression coverage, all wired into `scripts/run-tests.sh`:
+
+- `out/test_cursor_damage` — the damage algebra: bounds vs a ground-truth
+  rasterizer, both sides of a move, corners, off-screen clamping, resizes,
+  custom sprites, region simplify completeness.
+- `out/test_cursor_render` — a miniature compositor driven exactly like the
+  real one, comparing the framebuffer byte for byte against a full repaint
+  after every frame: slow moves, rapid bursts, edges/corners, overlapping UI,
+  repeated redraws, scene changes, the KMS/fbdev scanout copy, and each of the
+  three ways a caller can build a damage region that misses half the pointer's
+  motion.
+- `python3 scripts/test_cursor_trails.py` — the same comparison against the
+  live framebuffer `mica-comp` actually presented. A plain `shot` re-renders
+  the whole screen, so it *cannot* see this bug; only `--shot` can.
+
 ## Input, menus and hotkeys
 
 Pointer/keyboard events route through the compositor to exactly one window per

@@ -74,13 +74,21 @@ echo "MacLiteOS test suite — $(uname -s) $(uname -m), $(date -u '+%Y-%m-%dT%H:
 echo
 
 # ---------------------------------------------------------------- unit tests --
-for t in test_render test_units test_idle test_leak; do
+for t in test_render test_units test_idle test_leak test_cursor_damage test_cursor_render; do
     [ -x "out/$t" ] || { skip "$t" SANDBOX "not built"; continue; }
     row "$t" SANDBOX "out/$t"
 done
 
 if command -v python3 >/dev/null 2>&1 && [ -f scripts/test_installer_logic.py ]; then
     row installer-logic HOST python3 scripts/test_installer_logic.py
+fi
+# The cursor-trail regression is the only check that looks at the *live*
+# framebuffer the compositor actually presented, so it is the only one that can
+# see a pointer remnant a damage bug leaves behind. It needs both new unit
+# tests' understanding and the real binary, and it drives the incremental
+# damage path (a plain `shot` re-renders the whole screen and hides the bug).
+if command -v python3 >/dev/null 2>&1 && [ -f scripts/test_cursor_trails.py ]; then
+    row cursor-trails HOST python3 scripts/test_cursor_trails.py
 fi
 # The fixture trees are the regression harness for the detection code: they
 # reproduce a known machine (iMac11,2 / iMac11,3), a VM, and a bare host, and
@@ -332,7 +340,7 @@ EOF
 if [ "$QUICK" = 1 ]; then
     skip "session:*" SANDBOX "--quick"
 else
-    for s in demo interact dockhide menuclick cc hardware settings; do
+    for s in cursor demo interact dockhide menuclick cc hardware settings; do
         if [ -f "tests/scripts/$s.script" ]; then
             session "$s"
         else

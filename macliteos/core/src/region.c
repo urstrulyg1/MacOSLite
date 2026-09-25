@@ -18,6 +18,7 @@ size_t ml_region_count(const ml_region *g) { return g->n; }
 void ml_region_copy(ml_region *dst, const ml_region *src)
 {
     ml_region_clear(dst);
+    if (!src->n) return;               /* memcpy(NULL, NULL, 0) is UB */
     grow(dst, src->n);
     memcpy(dst->r, src->r, src->n * sizeof(ml_rect));
     dst->n = src->n;
@@ -48,6 +49,39 @@ bool ml_region_intersects_rect(const ml_region *g, ml_rect r)
     for (size_t i = 0; i < g->n; i++)
         if (ml_rect_intersects(g->r[i], r)) return true;
     return false;
+}
+
+#define ML_COVER_MAX_IV 64
+
+bool ml_region_covers_rect(const ml_region *g, ml_rect r)
+{
+    if (!g || ml_rect_empty(r)) return true;
+    int right = ml_rect_right(r);
+    for (int y = r.y; y < ml_rect_bottom(r); y++) {
+        int x0[ML_COVER_MAX_IV], x1[ML_COVER_MAX_IV], n = 0;
+        for (size_t i = 0; i < g->n && n < ML_COVER_MAX_IV; i++) {
+            ml_rect h = ml_rect_intersect(g->r[i], ml_rect_make(r.x, y, r.w, 1));
+            if (ml_rect_empty(h)) continue;
+            x0[n] = h.x;
+            x1[n] = ml_rect_right(h);
+            n++;
+        }
+        if (!n) return false;
+        if (n >= ML_COVER_MAX_IV) continue;   /* too fragmented to decide cheaply */
+        for (int i = 1; i < n; i++) {         /* insertion sort by x0 */
+            int a = x0[i], b = x1[i], j = i;
+            while (j > 0 && x0[j - 1] > a) { x0[j] = x0[j - 1]; x1[j] = x1[j - 1]; j--; }
+            x0[j] = a; x1[j] = b;
+        }
+        int reach = r.x;
+        for (int i = 0; i < n; i++) {
+            if (x0[i] > reach) return false;  /* a gap on this scanline */
+            if (x1[i] > reach) reach = x1[i];
+            if (reach >= right) break;
+        }
+        if (reach < right) return false;
+    }
+    return true;
 }
 
 void ml_region_add(ml_region *g, ml_rect r)
@@ -135,37 +169,61 @@ static bool can_merge(ml_rect a, ml_rect b, ml_rect *out)
     return false;
 }
 
+/* One full sweep: merge every pair that can be merged, drop every rect that is
+ * contained in another. Returns the number of rects removed. */
+static size_t simplify_pass(ml_region *g)
+{
+    size_t removed = 0;
+    for (size_t i = 0; i < g->n; i++) {
+        for (size_t j = i + 1; j < g->n; ) {
+            ml_rect out;
+            if (can_merge(g->r[i], g->r[j], &out)) {
+                g->r[i] = out;
+                ml_region_remove_at(g, j);
+                removed++;
+                continue;               /* j now holds the next rect */
+            }
+            if (ml_rect_contains_rect(g->r[i], g->r[j])) {
+                ml_region_remove_at(g, j);
+                removed++;
+                continue;
+            }
+            if (ml_rect_contains_rect(g->r[j], g->r[i])) {
+                g->r[i] = g->r[j];
+                ml_region_remove_at(g, j);
+                removed++;
+                continue;
+            }
+            if (ml_rect_intersects(g->r[i], g->r[j])) {
+                /* overlapping clips double-paint everything under them;
+                 * one bounding rect repaints a little extra but once. */
+                ml_rect a = g->r[i], b = g->r[j];
+                int x0 = ML_MIN(a.x, b.x), y0 = ML_MIN(a.y, b.y);
+                int x1 = ML_MAX(ml_rect_right(a), ml_rect_right(b));
+                int y1 = ML_MAX(ml_rect_bottom(a), ml_rect_bottom(b));
+                g->r[i] = ml_rect_make(x0, y0, x1 - x0, y1 - y0);
+                ml_region_remove_at(g, j);
+                removed++;
+                continue;
+            }
+            j++;
+        }
+    }
+    return removed;
+}
+
 void ml_region_simplify(ml_region *g)
 {
-    bool merged = true;
-    int guard = 0;
-    while (merged && guard++ < 64) {
-        merged = false;
-        for (size_t i = 0; i < g->n && !merged; i++)
-            for (size_t j = i + 1; j < g->n && !merged; j++) {
-                ml_rect out;
-                if (can_merge(g->r[i], g->r[j], &out)) {
-                    g->r[i] = out;
-                    ml_region_remove_at(g, j);
-                    merged = true;
-                } else if (ml_rect_contains_rect(g->r[i], g->r[j])) {
-                    /* j adds nothing: painting it would repaint i's pixels */
-                    ml_region_remove_at(g, j);
-                    merged = true;
-                } else if (ml_rect_contains_rect(g->r[j], g->r[i])) {
-                    g->r[i] = g->r[j];
-                    ml_region_remove_at(g, j);
-                    merged = true;
-                } else if (ml_rect_intersects(g->r[i], g->r[j])) {
-                    /* overlapping clips double-paint everything under them;
-                     * one bounding rect repaints a little extra but once. */
-                    ml_rect a = g->r[i], b = g->r[j];
-                    int x0 = ML_MIN(a.x, b.x), y0 = ML_MIN(a.y, b.y);
-                    int x1 = ML_MAX(a.x + a.w, b.x + b.w), y1 = ML_MAX(a.y + a.h, b.y + b.h);
-                    g->r[i] = ml_rect_make(x0, y0, x1 - x0, y1 - y0);
-                    ml_region_remove_at(g, j);
-                    merged = true;
-                }
-            }
+    if (!g || g->n < 2) return;
+    /* Bound the work by the list length: a region that is pairwise disjoint
+     * needs at most n-1 merges, and every sweep either removes a rect or ends
+     * the loop. The previous implementation merged exactly *one* pair per sweep
+     * and gave up after 64 sweeps, so a burst of pointer movement (120 moves
+     * -> 240 damage rects) left 176 overlapping rects behind and the cursor was
+     * rasterized once per overlapping rect on every frame. */
+    size_t guard = g->n + 2;
+    while (guard--) {
+        if (simplify_pass(g) == 0) break;
+        if (g->n < 2) break;
     }
 }
