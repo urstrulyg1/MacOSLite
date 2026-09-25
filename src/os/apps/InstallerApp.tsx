@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   AlertTriangle, CheckCircle2, XCircle, RotateCw, ShieldCheck, ChevronRight,
   ChevronDown, Terminal, Lock, ArrowLeft, Check, Info, Sliders,
-  Wifi, Globe, DownloadCloud, HardDrive, Cpu, Clock, Network, RefreshCw,
+  Wifi, DownloadCloud, HardDrive,
 } from "../icons/glyphs";
 import { useOS } from "../os";
 import { G1Icon } from "../icons/IconSystem";
@@ -177,7 +177,6 @@ export default function InstallerApp() {
   const [selectedNetwork, setSelectedNetwork] = useState<WifiNetwork>(AVAILABLE_NETWORKS[0]);
   const [wifiPassword, setWifiPassword] = useState("AppleAirport2010!");
   const [showPassword, setShowPassword] = useState(false);
-  const [networkValidationStep, setNetworkValidationStep] = useState(0);
   const [networkValidationSteps, setNetworkValidationSteps] = useState([
     { label: "Wi-Fi link state (wlan0)", status: "pending", detail: "Broadcom BCM43224 802.11a/b/g/n" },
     { label: "DHCP IP configuration", status: "pending", detail: "Requesting lease via udhcpc" },
@@ -188,8 +187,8 @@ export default function InstallerApp() {
 
   // Package Download State
   const [downloadProgress, setDownloadProgress] = useState(0);
-  const [downloadSpeed, setDownloadSpeed] = useState("24.8 MB/s");
-  const [downloadEta, setDownloadEta] = useState("12s");
+  const downloadSpeed = "24.8 MB/s";
+  const downloadEta = "12s";
   const [downloadTransferred, setDownloadTransferred] = useState("0 MB / 420 MB");
   const [downloadPhase, setDownloadPhase] = useState("Fetching base-system-v1.0.squashfs...");
 

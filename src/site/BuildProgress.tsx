@@ -44,13 +44,7 @@ function statusLabel(status: string, conclusion: string | null) {
   }
   if (status === "queued") return "Queued";
   if (status === "in_progress") return "In progress";
-  return status.replaceAll("_", " ");
-}
-
-function stepState(step: Step) {
-  if (step.status === "completed") return step.conclusion === "success" ? "done" : "failed";
-  if (step.status === "in_progress") return "active";
-  return "pending";
+  return status.replace(/_/g, " ");
 }
 
 export function BuildProgress() {

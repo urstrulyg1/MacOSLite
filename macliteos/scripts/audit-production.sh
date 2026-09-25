@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2016
 # Static production-readiness audit. This does not modify disks or boot media.
 set -eu
 cd "$(dirname "$0")/.."
@@ -16,7 +17,6 @@ for f in \
   need_file "$f"
 done
 
-# shellcheck disable=SC2016
 if grep -F '/usr/bin/mica-comp --backend "$BACKEND"' boot/g1os-init >/dev/null; then
   pass "live installer starts compositor without desktop --session"
 else
