@@ -27,7 +27,7 @@ cp "$BUSYBOX" "$W/bin/busybox"
 chmod 0755 "$W/bin/busybox"
 "$W/bin/busybox" --install -s "$W/bin" 2>/dev/null || true
 for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chroot \
-              fdisk losetup dd partprobe sync awk sleep dmesg ls cp mv rm touch \
+              fdisk losetup dd partprobe blockdev sync awk sleep dmesg ls cp mv rm touch \
               mktemp mkfs.vfat mkdosfs mkfs.ext2 mkfs.ext4 mke2fs find which head tail wc tr cut \
               sort uniq uname ip ifconfig ping udhcpc wget reboot poweroff halt env expr dirname basename \
               readlink realpath date id ps kill setsid cttyhack; do
@@ -37,7 +37,7 @@ done
 
 # Do not let a missing BusyBox applet become a runtime-only boot failure.
 for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chroot \
-              fdisk losetup dd partprobe sync awk sleep dmesg ls cp mv rm touch \
+              fdisk losetup dd partprobe blockdev sync awk sleep dmesg ls cp mv rm touch \
               mktemp mkfs.vfat mkdosfs mkfs.ext2 mkfs.ext4 mke2fs find which head tail wc tr cut \
               sort uniq uname ip ifconfig ping udhcpc wget reboot poweroff halt env expr dirname basename \
               readlink realpath date id ps kill setsid cttyhack; do
