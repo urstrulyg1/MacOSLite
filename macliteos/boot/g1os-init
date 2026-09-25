@@ -10,6 +10,7 @@ mkdir -p /run /run/live /run/maclite-base /run/g1os /tmp/macliteos-0
 : > "$LOG"
 : > "$STATE"
 export XDG_RUNTIME_DIR=/tmp/macliteos-0
+GRAPHICAL_CONSOLE_QUIET=0
 
 now_ms() {
     awk '{print int($1 * 1000)}' /proc/uptime 2>/dev/null || echo 0
@@ -17,7 +18,7 @@ now_ms() {
 emit() {
     msg="$*"
     printf '%s | %s\n' "$(now_ms)" "$msg" >> "$LOG"
-    if [ -e /dev/console ]; then printf '%s\n' "$msg" >/dev/console 2>/dev/null || true; fi
+    if [ "$GRAPHICAL_CONSOLE_QUIET" -eq 0 ] && [ -e /dev/console ]; then printf '%s\n' "$msg" >/dev/console 2>/dev/null || true; fi
     if [ -e /dev/ttyS0 ]; then printf '%s\n' "$msg" >/dev/ttyS0 2>/dev/null || true; fi
 }
 status() {
@@ -47,6 +48,7 @@ fatal() {
 }
 
 silence_graphical_console() {
+    GRAPHICAL_CONSOLE_QUIET=1
     # Keep diagnostics in /run/g1os-boot.log, but do not let kernel printk/fbcon
     # text paint over the graphical installer once the compositor takes over.
     if [ -w /proc/sys/kernel/printk ]; then
