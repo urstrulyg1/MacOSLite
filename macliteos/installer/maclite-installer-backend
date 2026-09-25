@@ -174,7 +174,7 @@ read_block_tag() {
   value=""
   attempt=1
   while [ "$attempt" -le 10 ]; do
-    value=$(blkid -c /dev/null -s "$tag" -o value "$dev" 2>/dev/null || true)
+    value=$(blkid -s "$tag" -o value "$dev" 2>/dev/null || true)
     if [ -n "$value" ]; then
       printf '%s\n' "$value"
       return 0
@@ -233,7 +233,7 @@ for p in /boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img /boo
 emit_state "PREPARING"
 save_state "RUNNING" "PREPARING" 10 "Validated target disk, live media, base system, kernel and initramfs"
 step 1 10 "Validated target disk, live media, base system, kernel and initramfs"
-step 2 20 "Unmounting target partitions"
+step 2 20 "Confirming target partitions are not mounted"
 
 emit_state "INSTALLING"
 save_state "RUNNING" "INSTALLING" 30 "Partitioning target disk"
