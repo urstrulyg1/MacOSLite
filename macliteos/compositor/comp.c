@@ -1137,6 +1137,15 @@ static void input_close_device(int idx)
 {
     if (idx < 0 || idx >= MAX_INPUT_DEVICES || INPUT_DEVS[idx].fd < 0) return;
     int fd = INPUT_DEVS[idx].fd;
+    /* If a mouse/receiver disappears while a button is held, synthesize
+     * releases so a window cannot remain permanently stuck in drag/resize
+     * state after USB hot-unplug. */
+    if (INPUT_DEVS[idx].pointer) {
+        for (int b = 0; b < 3; b++)
+            if (C.btn[b]) input_button(b, false);
+        C.drag_win = NULL;
+        C.resize_win = NULL;
+    }
     if (INPUT_DEVS[idx].src) {
         ml_source_destroy(INPUT_DEVS[idx].src);
         INPUT_DEVS[idx].src = NULL;
@@ -1423,16 +1432,16 @@ static void script_run_line(const char *line)
         else if (!strcmp(last, "escape")) k = 0xff1b;
         else if (!strcmp(last, "up")) k = 0xff52;
         else if (!strcmp(last, "down")) k = 0xff54;
-        else if (!strcmp(last, "left")) k = 0xff53;
-        else if (!strcmp(last, "right")) k = 0xff51;
+        else if (!strcmp(last, "left")) k = 0xff51;
+        else if (!strcmp(last, "right")) k = 0xff53;
         else if (!strcmp(last, "space")) k = ' ';
         else if (!strcmp(last, "backspace")) k = 0xff08;
         else if (last[0]) k = (uint32_t)(unsigned char)last[0];
         if (k) input_key(k, mods);
     } else if (!strcmp(cmd, "rclick")) {
         if (n >= 3) input_move(atoi(a), atoi(b));
-        input_button(2, true);
-        input_button(2, false);
+        input_button(1, true);
+        input_button(1, false);
     } else if (!strcmp(cmd, "down")) {
         input_button(0, true);
     } else if (!strcmp(cmd, "up")) {
