@@ -148,6 +148,7 @@ static void activate_continue(void)
     if (STAGE == STAGE_WELCOME) {
         STAGE = STAGE_SELECT;
         TARGET_DISK_IDX = -1;
+        persist_installer_state("welcome_to_select");
         CONFIRMED_ERASE = false;
         probe_disks();
         add_log("UI: Continue -> disk selection (%d candidates)", N_DISKS);
@@ -171,6 +172,7 @@ static void activate_continue(void)
                 d->devnode, (unsigned long long)d->size_bytes);
         STAGE = STAGE_CONFIRM;
         CONFIRMED_ERASE = false;
+        persist_installer_state("select_to_confirm");
         draw();
         return;
     }
@@ -181,12 +183,14 @@ static void activate_back(void)
     if (STAGE == STAGE_CONFIRM) {
         STAGE = STAGE_SELECT;
         CONFIRMED_ERASE = false;
+        persist_installer_state("confirm_to_select");
         add_log("UI: Back -> disk selection");
         draw();
     } else if (STAGE == STAGE_SELECT) {
         STAGE = STAGE_WELCOME;
         TARGET_DISK_IDX = -1;
         CONFIRMED_ERASE = false;
+        persist_installer_state("select_to_welcome");
         add_log("UI: Back -> welcome");
         draw();
     }
@@ -204,6 +208,21 @@ static uint64_t now_ms(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
+}
+
+static void persist_installer_state(const char *event)
+{
+    const char *path = "/run/g1os-installer-state";
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    char buf[512];
+    int n = snprintf(buf, sizeof buf,
+                     "{\"stage\":%d,\"target_index\":%d,\"target\":\"%s\",\"event\":\"%s\"}\n",
+                     STAGE, TARGET_DISK_IDX,
+                     (TARGET_DISK_IDX >= 0 && TARGET_DISK_IDX < N_DISKS) ? DISKS[TARGET_DISK_IDX].devnode : "",
+                     event ? event : "");
+    if (n > 0) (void)write(fd, buf, (size_t)n);
+    close(fd);
 }
 
 static void add_log(const char *fmt, ...)
