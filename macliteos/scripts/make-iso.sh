@@ -79,8 +79,17 @@ chmod +x "$ST/base/usr/share/maca-lite/scripts/hardware-check.sh"
 INITRD_RUNTIME=$(mktemp -d)
 cleanup_initrd_runtime() { chmod -R u+rwx "$INITRD_RUNTIME" 2>/dev/null || true; rm -rf "$INITRD_RUNTIME" 2>/dev/null || true; }
 trap cleanup_initrd_runtime EXIT HUP INT TERM
-if ! (cd "$INITRD_RUNTIME" && gzip -dc "$INITRD" | cpio -idm --no-absolute-filenames >/dev/null 2>&1); then
+if [ ! -f "$INITRD" ] || [ ! -s "$INITRD" ]; then
+  echo "ERROR: exact initramfs artifact disappeared before live-base assembly: $INITRD" >&2
+  ls -la out/initrd-maclite* 2>/dev/null || true
+  exit 4
+fi
+# Feed the exact artifact through stdin so gzip cannot perform filename
+# fallback (for example, appending .gz to a missing path). This makes the
+# assembly contract deterministic and fails closed if the artifact changes.
+if ! (cd "$INITRD_RUNTIME" && gzip -cd < "$INITRD" | cpio -idm --no-absolute-filenames >/dev/null 2>&1); then
   echo "ERROR: cannot extract the exact initrd runtime while assembling the live base" >&2
+  file "$INITRD" >&2 || true
   exit 4
 fi
 for libdir in lib lib64 usr/lib usr/lib64; do
