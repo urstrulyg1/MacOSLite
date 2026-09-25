@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <time.h>
 #include <stdarg.h>
+#include <limits.h>
 
 #define WIN_W 720
 #define WIN_H 520
