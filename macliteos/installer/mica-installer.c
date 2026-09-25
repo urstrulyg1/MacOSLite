@@ -122,6 +122,15 @@ static verify_check_item SUMMARY_CHECKS[10] = {
 
 static void add_log(const char *fmt, ...);
 
+static void draw(void);
+static void input(mica_win *w, const msg_input *in);
+static bool start_backend(bool repair_flag);
+static void set_failure(const char *message);
+static bool revalidate_target_disk(const disk_info *d);
+static void probe_disks(void);
+static void persist_installer_state(const char *event);
+static void add_log(const char *fmt, ...);
+
 static bool rect_contains_inclusive(int x, int y, int rx, int ry, int rw, int rh)
 {
     return x >= rx && x <= rx + rw && y >= ry && y <= ry + rh;
