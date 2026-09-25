@@ -197,6 +197,34 @@ static int test_uuid_boot_binding(void)
     return 0;
 }
 
+static int test_kernel_manifest_binding(void)
+{
+    TEST("Real G1OS kernel/initramfs manifest binding");
+
+    const char *manifest =
+        "G1OS_BOOT_MANIFEST=1\n"
+        "build_id=20260925T000000Z-test\n"
+        "kernel_filename=vmlinuz-maclite\n"
+        "kernel_install_filename=vmlinuz-g1os\n"
+        "kernel_sha256=0123456789abcdef\n"
+        "kernel_size=12764160\n"
+        "kernel_arch=x86_64\n"
+        "initrd_filename=initrd-maclite.img\n"
+        "initrd_install_filename=initrd-g1os.img\n"
+        "initrd_sha256=fedcba9876543210\n"
+        "initrd_size=9240318\n";
+
+    if (!strstr(manifest, "G1OS_BOOT_MANIFEST=1")) FAIL("Missing manifest magic");
+    if (!strstr(manifest, "kernel_install_filename=vmlinuz-g1os")) FAIL("Final kernel filename is not bound");
+    if (!strstr(manifest, "initrd_install_filename=initrd-g1os.img")) FAIL("Final initramfs filename is not bound");
+    if (!strstr(manifest, "kernel_arch=x86_64")) FAIL("Kernel architecture is not recorded");
+    if (!strstr(manifest, "kernel_sha256=") || !strstr(manifest, "initrd_sha256=")) FAIL("Checksums are not recorded");
+    if (!strstr(manifest, "build_id=")) FAIL("Build ID is not recorded");
+
+    PASS();
+    return 0;
+}
+
 static int test_preflight_verification(void)
 {
     TEST("Offline pre-flight verification pass");
@@ -415,6 +443,7 @@ int main(void)
     if (test_partition_geometry() != 0) return 1;
     if (test_confirmation_state_machine() != 0) return 1;
     if (test_uuid_boot_binding() != 0) return 1;
+    if (test_kernel_manifest_binding() != 0) return 1;
     if (test_preflight_verification() != 0) return 1;
     if (test_verification_state_transitions() != 0) return 1;
     if (test_bootloader_failure_blocks_completion() != 0) return 1;
