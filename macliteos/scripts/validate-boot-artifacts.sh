@@ -82,6 +82,12 @@ if [ -s "$ISO" ]; then
     chmod -R u+rwx "$TMP/iso" 2>/dev/null || true
     [ -s "$TMP/iso/boot/initrd-maclite.img" ] || fail "extracted ISO initramfs missing"
     [ -s "$TMP/iso/boot/vmlinuz-maclite" ] || fail "extracted ISO kernel missing"
+    [ -s "$TMP/iso/boot/g1os-boot-manifest.txt" ] || fail "extracted ISO G1OS boot manifest missing"
+    grep -F 'G1OS_BOOT_MANIFEST=1' "$TMP/iso/boot/g1os-boot-manifest.txt" >/dev/null || fail "invalid G1OS boot manifest"
+    manifest_kernel_sha=$(sed -n 's/^kernel_sha256=//p' "$TMP/iso/boot/g1os-boot-manifest.txt")
+    manifest_initrd_sha=$(sed -n 's/^initrd_sha256=//p' "$TMP/iso/boot/g1os-boot-manifest.txt")
+    [ "$(sha256sum "$TMP/iso/boot/vmlinuz-maclite" | awk '{print $1}')" = "$manifest_kernel_sha" ] || fail "ISO kernel checksum does not match G1OS boot manifest"
+    [ "$(sha256sum "$TMP/iso/boot/initrd-maclite.img" | awk '{print $1}')" = "$manifest_initrd_sha" ] || fail "ISO initramfs checksum does not match G1OS boot manifest"
     [ -s "$TMP/iso/live/maclite-base.sqfs" ] || fail "extracted ISO SquashFS missing"
     unsquashfs -s "$TMP/iso/live/maclite-base.sqfs" >/dev/null || fail "SquashFS is invalid"
     for required in usr/bin/mica-comp usr/bin/mica-installer usr/share/maca-lite/runtime-provenance.sha256; do
