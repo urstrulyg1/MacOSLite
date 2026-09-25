@@ -457,8 +457,6 @@ fi
 if ! findmnt -n -T "$BOOT_MNT" >/dev/null 2>&1; then
   run mount "$DEV_BOOT" "$BOOT_MNT"
 fi
-step 6 70 "Installing Apple EFI fallback bootloader and UUID-bound boot configuration"
-run mount "$DEV_BOOT" "$BOOT_MNT"
 mkdir -p "$BOOT_MNT/EFI/BOOT" "$BOOT_MNT/boot/grub"
 if [ "$DRY_RUN" = 0 ]; then
   if command -v grub-mkimage >/dev/null 2>&1; then
