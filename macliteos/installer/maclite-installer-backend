@@ -288,17 +288,35 @@ done
 
 KERNEL=""
 INITRD=""
-# The installer runs from the initramfs/live environment. The real kernel and
-# initramfs are on the mounted ISO at /run/live/boot; /boot in the initramfs
-# is not the ISO boot directory and may legitimately be empty.
-for p in /run/live/boot/vmlinuz-maclite /run/maclite-live/boot/vmlinuz-maclite /boot/vmlinuz-maclite /run/live/boot/vmlinuz-g1os /boot/vmlinuz-g1os; do
-  if [ -s "$p" ]; then KERNEL=$p; break; fi
-done
-for p in /run/live/boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img /boot/initrd-maclite.img /run/live/boot/initrd-g1os.img /boot/initrd-g1os.img; do
-  if [ -s "$p" ]; then INITRD=$p; break; fi
-done
-[ -n "$KERNEL" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS kernel image not found on mounted live media (/run/live/boot)"
-[ -n "$INITRD" ] || [ "$DRY_RUN" = 1 ] || fail "real G1OS initramfs not found on mounted live media (/run/live/boot)"
+BOOT_MANIFEST="/run/live/boot/g1os-boot-manifest.txt"
+# The installer kernel/initramfs are transient live-boot artifacts. The final
+# G1OS kernel is the exact kernel staged in the ISO /boot directory. Resolve
+# only from the mounted live media; never fall back to the running kernel.
+if [ "$DRY_RUN" = 0 ]; then
+  findmnt -rn -T /run/live >/dev/null 2>&1 || fail "live G1OS media is not mounted at /run/live"
+  [ -s "$BOOT_MANIFEST" ] || fail "G1OS boot manifest missing from live media: $BOOT_MANIFEST"
+  [ -s /run/live/boot/vmlinuz-maclite ] || fail "real G1OS kernel image not found in ISO payload: /run/live/boot/vmlinuz-maclite"
+  [ -s /run/live/boot/initrd-maclite.img ] || fail "real G1OS initramfs not found in ISO payload: /run/live/boot/initrd-maclite.img"
+fi
+KERNEL=/run/live/boot/vmlinuz-maclite
+INITRD=/run/live/boot/initrd-maclite.img
+if [ "$DRY_RUN" = 0 ]; then
+  MANIFEST_MAGIC=$(sed -n 's/^G1OS_BOOT_MANIFEST=//p' "$BOOT_MANIFEST")
+  EXPECTED_BUILD_ID=$(sed -n 's/^build_id=//p' "$BOOT_MANIFEST")
+  EXPECTED_KERNEL_SHA=$(sed -n 's/^kernel_sha256=//p' "$BOOT_MANIFEST")
+  EXPECTED_INITRD_SHA=$(sed -n 's/^initrd_sha256=//p' "$BOOT_MANIFEST")
+  EXPECTED_KERNEL_SIZE=$(sed -n 's/^kernel_size=//p' "$BOOT_MANIFEST")
+  EXPECTED_INITRD_SIZE=$(sed -n 's/^initrd_size=//p' "$BOOT_MANIFEST")
+  EXPECTED_ARCH=$(sed -n 's/^kernel_arch=//p' "$BOOT_MANIFEST")
+  [ "$MANIFEST_MAGIC" = "1" ] || fail "invalid G1OS boot manifest"
+  [ -n "$EXPECTED_BUILD_ID" ] && [ -n "$EXPECTED_KERNEL_SHA" ] && [ -n "$EXPECTED_INITRD_SHA" ] || fail "incomplete G1OS boot manifest"
+  [ "$EXPECTED_ARCH" = "x86_64" ] || fail "unsupported G1OS kernel architecture in boot manifest: $EXPECTED_ARCH"
+  [ "$(wc -c < "$KERNEL" | tr -d ' ')" = "$EXPECTED_KERNEL_SIZE" ] || fail "G1OS kernel size does not match build manifest"
+  [ "$(wc -c < "$INITRD" | tr -d ' ')" = "$EXPECTED_INITRD_SIZE" ] || fail "G1OS initramfs size does not match build manifest"
+  [ "$(sha256sum "$KERNEL" | cut -d' ' -f1)" = "$EXPECTED_KERNEL_SHA" ] || fail "G1OS kernel checksum does not match build manifest"
+  [ "$(sha256sum "$INITRD" | cut -d' ' -f1)" = "$EXPECTED_INITRD_SHA" ] || fail "G1OS initramfs checksum does not match build manifest"
+  file "$KERNEL" | grep -Eiq 'Linux kernel|boot executable|PE32' || fail "G1OS kernel is not a recognized x86 bootable kernel image"
+fi
 
 emit_state "PREPARING"
 save_state "RUNNING" "PREPARING" 10 "Validated target disk, live media, base system, kernel and initramfs"
@@ -482,6 +500,7 @@ EOF
 run cp "$BOOT_MNT/EFI/BOOT/grub.cfg" "$BOOT_MNT/boot/grub/grub.cfg"
 if [ -n "$KERNEL" ]; then run cp "$KERNEL" "$BOOT_MNT/boot/vmlinuz-g1os"; fi
 if [ -n "$INITRD" ]; then run cp "$INITRD" "$BOOT_MNT/boot/initrd-g1os.img"; fi
+if [ -s "$BOOT_MANIFEST" ]; then run cp "$BOOT_MANIFEST" "$BOOT_MNT/boot/g1os-boot-manifest.txt"; fi
 printf 'G1OS' > "$BOOT_MNT/.disk_label"
 run sync
 
@@ -551,10 +570,31 @@ if [ "$DRY_RUN" = 0 ]; then
 fi
 
 # 4. Verify Kernel & Initramfs
-verify_check 4 86 "Kernel" "PASS" "vmlinuz-g1os and initrd-g1os.img readable and referenced correctly"
+verify_check 4 86 "Kernel" "PASS" "real G1OS kernel, matching initramfs, architecture and build provenance"
 if [ "$DRY_RUN" = 0 ]; then
-  [ -s "$VERIFY_BOOT/boot/vmlinuz-g1os" ] || fail "Verification FAIL: Kernel image vmlinuz-g1os missing or empty"
-  [ -s "$VERIFY_BOOT/boot/initrd-g1os.img" ] || fail "Verification FAIL: Initramfs initrd-g1os.img missing or empty"
+  [ -s "$VERIFY_BOOT/boot/vmlinuz-g1os" ] || fail "Verification FAIL: real G1OS kernel vmlinuz-g1os missing or empty"
+  [ -s "$VERIFY_BOOT/boot/initrd-g1os.img" ] || fail "Verification FAIL: real G1OS initramfs initrd-g1os.img missing or empty"
+  [ -s "$VERIFY_BOOT/boot/g1os-boot-manifest.txt" ] || fail "Verification FAIL: installed G1OS boot manifest missing"
+  grep -F "G1OS_BOOT_MANIFEST=1" "$VERIFY_BOOT/boot/g1os-boot-manifest.txt" >/dev/null || fail "Verification FAIL: installed boot manifest invalid"
+  INSTALLED_KERNEL_SHA=$(sha256sum "$VERIFY_BOOT/boot/vmlinuz-g1os" | cut -d' ' -f1)
+  INSTALLED_INITRD_SHA=$(sha256sum "$VERIFY_BOOT/boot/initrd-g1os.img" | cut -d' ' -f1)
+  MANIFEST_KERNEL_SHA=$(sed -n 's/^kernel_sha256=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  MANIFEST_INITRD_SHA=$(sed -n 's/^initrd_sha256=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  MANIFEST_BUILD_ID=$(sed -n 's/^build_id=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  [ -n "$MANIFEST_BUILD_ID" ] || fail "Verification FAIL: installed boot manifest has no build ID"
+  [ "$INSTALLED_KERNEL_SHA" = "$MANIFEST_KERNEL_SHA" ] || fail "Verification FAIL: installed kernel checksum does not match ISO build manifest"
+  [ "$INSTALLED_INITRD_SHA" = "$MANIFEST_INITRD_SHA" ] || fail "Verification FAIL: installed initramfs checksum does not match ISO build manifest"
+  file "$VERIFY_BOOT/boot/vmlinuz-g1os" | grep -Eiq 'Linux kernel|boot executable|PE32' || fail "Verification FAIL: installed kernel is not a recognized bootable kernel image"
+  GRUB_CFG="$VERIFY_BOOT/EFI/BOOT/grub.cfg"
+  grep -F "linux /boot/vmlinuz-g1os" "$GRUB_CFG" >/dev/null || fail "Verification FAIL: bootloader does not reference the installed G1OS kernel"
+  grep -F "initrd /boot/initrd-g1os.img" "$GRUB_CFG" >/dev/null || fail "Verification FAIL: bootloader does not reference the installed G1OS initramfs"
+  KERNEL_PATH_IN_MANIFEST=$(sed -n 's/^kernel_install_filename=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  INITRD_PATH_IN_MANIFEST=$(sed -n 's/^initrd_install_filename=//p' "$VERIFY_BOOT/boot/g1os-boot-manifest.txt")
+  [ "$KERNEL_PATH_IN_MANIFEST" = "vmlinuz-g1os" ] || fail "Verification FAIL: kernel install filename provenance mismatch"
+  [ "$INITRD_PATH_IN_MANIFEST" = "initrd-g1os.img" ] || fail "Verification FAIL: initramfs install filename provenance mismatch"
+  echo "KERNEL: path=/boot/vmlinuz-g1os size=$(wc -c < "$VERIFY_BOOT/boot/vmlinuz-g1os" | tr -d ' ') architecture=x86_64 build_id=$MANIFEST_BUILD_ID checksum=$INSTALLED_KERNEL_SHA"
+  echo "INITRAMFS: path=/boot/initrd-g1os.img size=$(wc -c < "$VERIFY_BOOT/boot/initrd-g1os.img" | tr -d ' ') checksum=$INSTALLED_INITRD_SHA"
+  echo "BOOTLOADER: path=/EFI/BOOT/grub.cfg kernel=/boot/vmlinuz-g1os initramfs=/boot/initrd-g1os.img"
 fi
 
 # 5. Verify Drivers (Distinguish REQUIRED, OPTIONAL, UNSUPPORTED)
