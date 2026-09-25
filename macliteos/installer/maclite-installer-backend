@@ -309,7 +309,9 @@ if [ "$DRY_RUN" = 0 ]; then
   EXPECTED_INITRD_SIZE=$(sed -n 's/^initrd_size=//p' "$BOOT_MANIFEST")
   EXPECTED_ARCH=$(sed -n 's/^kernel_arch=//p' "$BOOT_MANIFEST")
   [ "$MANIFEST_MAGIC" = "1" ] || fail "invalid G1OS boot manifest"
-  [ -n "$EXPECTED_BUILD_ID" ] && [ -n "$EXPECTED_KERNEL_SHA" ] && [ -n "$EXPECTED_INITRD_SHA" ] || fail "incomplete G1OS boot manifest"
+  if [ -z "$EXPECTED_BUILD_ID" ] || [ -z "$EXPECTED_KERNEL_SHA" ] || [ -z "$EXPECTED_INITRD_SHA" ]; then
+    fail "incomplete G1OS boot manifest"
+  fi
   [ "$EXPECTED_ARCH" = "x86_64" ] || fail "unsupported G1OS kernel architecture in boot manifest: $EXPECTED_ARCH"
   [ "$(wc -c < "$KERNEL" | tr -d ' ')" = "$EXPECTED_KERNEL_SIZE" ] || fail "G1OS kernel size does not match build manifest"
   [ "$(wc -c < "$INITRD" | tr -d ' ')" = "$EXPECTED_INITRD_SIZE" ] || fail "G1OS initramfs size does not match build manifest"
