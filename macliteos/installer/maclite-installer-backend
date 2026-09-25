@@ -260,7 +260,7 @@ else
       run parted -s "$DEV" mkpart MACLITE_DATA ext4 257MiB 4353MiB
       run parted -s "$DEV" mkpart MACLITE_BASE ext4 4353MiB 100%
     else
-      run sh -c 'printf "%s\\n" "g" "n" "1" "" "+256M" "t" "1" "n" "2" "" "+4G" "t" "2" "20" "n" "3" "" "" "t" "3" "20" "w" | fdisk "$1"' sh "$DEV"
+      run sh -c 'printf "%s\\n" "g" "n" "1" "" "+256M" "t" "1" "1" "n" "2" "" "+4G" "t" "2" "20" "n" "3" "" "" "t" "3" "20" "w" | fdisk "$1"' sh "$DEV"
     fi
     if command -v partprobe >/dev/null 2>&1; then
       run partprobe "$DEV"
