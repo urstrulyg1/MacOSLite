@@ -23,12 +23,31 @@ if [ "$VERIFY" = 1 ]; then
   for tool in unsquashfs file; do need "$tool"; done
 fi
 
-KERNEL="${G1OS_KERNEL:-}"
-INITRD="${G1OS_INITRD:-}"
-[ -n "$KERNEL" ] || for p in out/vmlinuz-maclite /boot/vmlinuz-maclite /run/maclite-live/boot/vmlinuz-maclite /Volumes/G1OS/boot/vmlinuz-maclite releases/vmlinuz-maclite ../releases/vmlinuz-maclite; do [ -s "$p" ] && { KERNEL=$p; break; }; done
-[ -n "$INITRD" ] || for p in out/initrd-maclite.img /boot/initrd-maclite.img /run/maclite-live/boot/initrd-maclite.img /Volumes/G1OS/boot/initrd-maclite.img releases/initrd-maclite.img ../releases/initrd-maclite.img; do [ -s "$p" ] && { INITRD=$p; break; }; done
-[ -n "$KERNEL" ] || { echo "ERROR: no real G1OS kernel image supplied (set G1OS_KERNEL)" >&2; exit 3; }
-[ -n "$INITRD" ] || { echo "ERROR: no real G1OS initramfs supplied (set G1OS_INITRD)" >&2; exit 3; }
+KERNEL="out/vmlinuz-maclite"
+INITRD="out/initrd-maclite.img"
+KERNEL_MANIFEST="out/g1os-kernel-manifest.txt"
+INITRD_MANIFEST="out/g1os-initrd-manifest.txt"
+[ -s "$KERNEL" ] || { echo "ERROR: authoritative G1OS kernel artifact missing: $KERNEL" >&2; exit 3; }
+[ -s "$INITRD" ] || { echo "ERROR: authoritative G1OS initramfs artifact missing: $INITRD" >&2; exit 3; }
+[ -s "$KERNEL_MANIFEST" ] || { echo "ERROR: authoritative G1OS kernel manifest missing: $KERNEL_MANIFEST" >&2; exit 3; }
+[ -s "$INITRD_MANIFEST" ] || { echo "ERROR: authoritative G1OS initramfs manifest missing: $INITRD_MANIFEST" >&2; exit 3; }
+KERNEL_MANIFEST_MAGIC=$(sed -n 's/^G1OS_KERNEL_MANIFEST=//p' "$KERNEL_MANIFEST")
+INITRD_MANIFEST_MAGIC=$(sed -n 's/^G1OS_INITRD_MANIFEST=//p' "$INITRD_MANIFEST")
+[ "$KERNEL_MANIFEST_MAGIC" = "1" ] || { echo "ERROR: invalid G1OS kernel manifest" >&2; exit 3; }
+[ "$INITRD_MANIFEST_MAGIC" = "1" ] || { echo "ERROR: invalid G1OS initramfs manifest" >&2; exit 3; }
+EXPECTED_KERNEL_SHA=$(sed -n 's/^artifact_sha256=//p' "$KERNEL_MANIFEST")
+EXPECTED_KERNEL_SIZE=$(sed -n 's/^artifact_size=//p' "$KERNEL_MANIFEST")
+EXPECTED_KERNEL_ARCH=$(sed -n 's/^artifact_arch=//p' "$KERNEL_MANIFEST")
+EXPECTED_KERNEL_FORMAT=$(sed -n 's/^artifact_format=//p' "$KERNEL_MANIFEST")
+EXPECTED_INITRD_SHA=$(sed -n 's/^artifact_sha256=//p' "$INITRD_MANIFEST")
+EXPECTED_INITRD_SIZE=$(sed -n 's/^artifact_size=//p' "$INITRD_MANIFEST")
+[ "$EXPECTED_KERNEL_ARCH" = "x86_64" ] || { echo "ERROR: kernel manifest architecture is not x86_64" >&2; exit 3; }
+[ "$EXPECTED_KERNEL_FORMAT" = "x86_64-bzImage" ] || { echo "ERROR: kernel manifest format is not x86_64-bzImage" >&2; exit 3; }
+[ "$(wc -c < "$KERNEL" | tr -d ' ')" = "$EXPECTED_KERNEL_SIZE" ] || { echo "ERROR: kernel artifact size differs from authoritative manifest" >&2; exit 3; }
+[ "$(sha256sum "$KERNEL" | cut -d' ' -f1)" = "$EXPECTED_KERNEL_SHA" ] || { echo "ERROR: kernel artifact checksum differs from authoritative manifest" >&2; exit 3; }
+[ "$(wc -c < "$INITRD" | tr -d ' ')" = "$EXPECTED_INITRD_SIZE" ] || { echo "ERROR: initramfs artifact size differs from authoritative manifest" >&2; exit 3; }
+[ "$(sha256sum "$INITRD" | cut -d' ' -f1)" = "$EXPECTED_INITRD_SHA" ] || { echo "ERROR: initramfs artifact checksum differs from authoritative manifest" >&2; exit 3; }
+[ "$(dd if="$KERNEL" bs=1 skip=514 count=4 2>/dev/null | grep -aFc 'HdrS' || true)" -eq 1 ] || { echo "ERROR: authoritative kernel is not a valid x86 bzImage" >&2; exit 3; }
 
 # Required runtime binaries MUST come from the current build output. Never
 # silently replace a fresh binary with a tracked/rootfs copy later in staging.
@@ -113,12 +132,14 @@ G1OS_BOOT_MANIFEST=1
 build_id=$BUILD_ID
 kernel_filename=$KERNEL_BASENAME
 kernel_install_filename=vmlinuz-g1os
+kernel_manifest_filename=g1os-kernel-manifest.txt
 kernel_sha256=$KERNEL_SHA256
 kernel_size=$KERNEL_SIZE
 kernel_arch=x86_64
 kernel_version=$KERNEL_VERSION
 initrd_filename=$INITRD_BASENAME
 initrd_install_filename=initrd-g1os.img
+initrd_manifest_filename=g1os-initrd-manifest.txt
 initrd_sha256=$INITRD_SHA256
 initrd_size=$INITRD_SIZE
 EOF
@@ -135,6 +156,8 @@ EOF
 mksquashfs "$ST/base" "$ST/live/maclite-base.sqfs" -comp zstd -Xcompression-level 12 -no-progress
 cp "$KERNEL" "$ST/boot/vmlinuz-maclite"
 cp "$INITRD" "$ST/boot/initrd-maclite.img"
+cp "$KERNEL_MANIFEST" "$ST/boot/g1os-kernel-manifest.txt"
+cp "$INITRD_MANIFEST" "$ST/boot/g1os-initrd-manifest.txt"
 
 cp boot/grub-efi.cfg "$ST/boot/grub.cfg"
 mkdir -p "$ST/EFI/BOOT" "$ST/boot/grub"
@@ -187,7 +210,7 @@ if [ "$VERIFY" = 1 ]; then
   echo "== independent ISO verification"
   sha256sum -c out/G1OS.iso.sha256 >/dev/null || { echo "VERIFY = FAIL: ISO checksum mismatch" >&2; exit 8; }
   xorriso -indev out/G1OS.iso -find / -exec report_lba > out/iso-file-list.txt 2>/dev/null || { echo "VERIFY = FAIL: cannot inspect ISO file list" >&2; exit 9; }
-  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/g1os-boot-manifest.txt boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI .g1os-build-id; do
+  for required in boot/vmlinuz-maclite boot/initrd-maclite.img boot/g1os-kernel-manifest.txt boot/g1os-initrd-manifest.txt boot/g1os-boot-manifest.txt boot/bootx64.efi boot/grub.cfg live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI .g1os-build-id; do
     grep -Fi "$required" out/iso-file-list.txt >/dev/null || { echo "VERIFY = FAIL: ISO missing $required" >&2; exit 10; }
   done
   EXTRACT=$(mktemp -d)
@@ -198,7 +221,11 @@ if [ "$VERIFY" = 1 ]; then
   [ -s "$EXTRACT/boot/initrd-maclite.img" ] || { echo "VERIFY = FAIL: extracted initramfs empty" >&2; exit 12; }
   [ -s "$EXTRACT/boot/g1os-boot-manifest.txt" ] || { echo "VERIFY = FAIL: boot manifest missing" >&2; exit 12; }
   grep -F "G1OS_BOOT_MANIFEST=1" "$EXTRACT/boot/g1os-boot-manifest.txt" >/dev/null || { echo "VERIFY = FAIL: invalid boot manifest" >&2; exit 13; }
-  grep -F "build_id=$BUILD_ID" "$EXTRACT/boot/g1os-boot-manifest.txt" >/dev/null || { echo "VERIFY = FAIL: boot manifest build ID mismatch" >&2; exit 13; }
+  grep -F "build_id=$BUILD_ID" "$EXTRACT/boot/g1os-boot-manifest.txt" >/dev/null
+  grep -F "G1OS_KERNEL_MANIFEST=1" "$EXTRACT/boot/g1os-kernel-manifest.txt" >/dev/null || { echo "VERIFY = FAIL: kernel artifact manifest missing" >&2; exit 13; }
+  grep -F "G1OS_INITRD_MANIFEST=1" "$EXTRACT/boot/g1os-initrd-manifest.txt" >/dev/null || { echo "VERIFY = FAIL: initramfs artifact manifest missing" >&2; exit 13; }
+  grep -F "artifact_sha256=$EXPECTED_KERNEL_SHA" "$EXTRACT/boot/g1os-kernel-manifest.txt" >/dev/null || { echo "VERIFY = FAIL: kernel artifact manifest checksum mismatch" >&2; exit 13; }
+  grep -F "artifact_sha256=$EXPECTED_INITRD_SHA" "$EXTRACT/boot/g1os-initrd-manifest.txt" >/dev/null || { echo "VERIFY = FAIL: initramfs artifact manifest checksum mismatch" >&2; exit 13; } || { echo "VERIFY = FAIL: boot manifest build ID mismatch" >&2; exit 13; }
   manifest_kernel_sha=$(sed -n 's/^kernel_sha256=//p' "$EXTRACT/boot/g1os-boot-manifest.txt")
   manifest_initrd_sha=$(sed -n 's/^initrd_sha256=//p' "$EXTRACT/boot/g1os-boot-manifest.txt")
   [ "$manifest_kernel_sha" = "$KERNEL_SHA256" ] || { echo "VERIFY = FAIL: boot manifest kernel checksum mismatch" >&2; exit 13; }
