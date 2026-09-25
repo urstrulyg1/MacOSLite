@@ -195,6 +195,9 @@ static void activate_back(void)
 static void draw(void);
 static void input(mica_win *w, const msg_input *in);
 static bool start_backend(bool repair_flag);
+static void set_failure(const char *message);
+static bool revalidate_target_disk(const disk_info *d);
+static void probe_disks(void);
 
 static uint64_t now_ms(void)
 {
