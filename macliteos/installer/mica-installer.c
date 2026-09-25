@@ -80,6 +80,8 @@ static bool CONFIRMED_ERASE = false;
 static bool SHOW_DETAILS = false;
 static bool TEST_MODE = false;
 static bool BUTTON_PRESSED = false;
+static bool BACK_BUTTON_PRESSED = false;
+static bool AUX_BUTTON_PRESSED = false;
 static int BUTTON_PRESSED_X = -1, BUTTON_PRESSED_Y = -1;
 
 /* Authoritative backend state. */
@@ -1044,6 +1046,21 @@ static void draw(void)
     mica_win_commit(WIN);
 }
 
+static bool disk_row_hit(int x, int y, int *idx)
+{
+    if (STAGE != STAGE_SELECT) return false;
+    int w = WIN && WIN->surf ? WIN->surf->w : WIN_W;
+    (void)w;
+    int row_y = 158;
+    for (int i = 0; i < N_DISKS; i++, row_y += 72) {
+        if (rect_contains_inclusive(x, y, 48, row_y, w - 96, 62)) {
+            if (idx) *idx = i;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void input(mica_win *w, const msg_input *in)
 {
     if (!in || w != WIN) return;
@@ -1058,9 +1075,11 @@ static void input(mica_win *w, const msg_input *in)
             mica_quit(G, 0);
             return;
         }
+
         if (in->key == 0xff0d || in->key == '\n' || in->key == ' ') {
             if (STAGE == STAGE_CONFIRM && in->key == ' ') {
                 CONFIRMED_ERASE = !CONFIRMED_ERASE;
+                persist_installer_state(CONFIRMED_ERASE ? "erase_confirmed" : "erase_unconfirmed");
                 draw();
             } else if (in->key == ' ' || in->key == 0xff0d) {
                 activate_continue();
@@ -1070,48 +1089,158 @@ static void input(mica_win *w, const msg_input *in)
     }
 
     if (in->kind == IN_DOWN && in->button == 1) {
-        BUTTON_PRESSED = continue_button_hit(in->x, in->y);
-        BUTTON_PRESSED_X = in->x;
-        BUTTON_PRESSED_Y = in->y;
-        if (BUTTON_PRESSED)
+        BUTTON_PRESSED = false;
+        BACK_BUTTON_PRESSED = false;
+        AUX_BUTTON_PRESSED = false;
+
+        if (continue_button_hit(in->x, in->y)) {
+            BUTTON_PRESSED = true;
+            BUTTON_PRESSED_X = in->x;
+            BUTTON_PRESSED_Y = in->y;
             add_log("UI: Continue DOWN local=%d,%d stage=%d", in->x, in->y, STAGE);
-        else if (back_button_hit(in->x, in->y))
+        } else if (back_button_hit(in->x, in->y)) {
+            BACK_BUTTON_PRESSED = true;
             add_log("UI: Back DOWN local=%d,%d stage=%d", in->x, in->y, STAGE);
+        } else if (STAGE == STAGE_SELECT) {
+            int idx = -1;
+            if (disk_row_hit(in->x, in->y, &idx)) {
+                if (idx >= 0 && idx < N_DISKS && !DISKS[idx].is_usb_boot) {
+                    if (revalidate_target_disk(&DISKS[idx])) {
+                        TARGET_DISK_IDX = idx;
+                        for (int i = 0; i < N_DISKS; i++) DISKS[i].is_target = i == idx;
+                        CONFIRMED_ERASE = false;
+                        persist_installer_state("disk_selected");
+                        add_log("UI: disk selected %s capacity=%llu", DISKS[idx].devnode,
+                                (unsigned long long)DISKS[idx].size_bytes);
+                    } else {
+                        add_log("UI: disk selection blocked: %s unavailable", DISKS[idx].devnode);
+                        TARGET_DISK_IDX = -1;
+                        set_failure("The selected disk is no longer available or cannot be reliably identified.");
+                        probe_disks();
+                        return;
+                    }
+                } else {
+                    add_log("UI: protected live media click ignored: %s", DISKS[idx].devnode);
+                }
+                draw();
+                return;
+            }
+        } else if (STAGE == STAGE_CONFIRM) {
+            int h = WIN && WIN->surf ? WIN->surf->h : WIN_H;
+            if (rect_contains_inclusive(in->x, in->y, 52, 280, 28, 32)) {
+                AUX_BUTTON_PRESSED = true;
+                CONFIRMED_ERASE = !CONFIRMED_ERASE;
+                persist_installer_state(CONFIRMED_ERASE ? "erase_confirmed" : "erase_unconfirmed");
+                draw();
+                return;
+            }
+        } else if (STAGE == STAGE_INSTALLING || STAGE == STAGE_VERIFYING) {
+            if (rect_contains_inclusive(in->x, in->y, 48, 356, (WIN && WIN->surf ? WIN->surf->w : WIN_W) - 96, 28)) {
+                SHOW_DETAILS = !SHOW_DETAILS;
+                draw();
+                return;
+            }
+        } else if (STAGE == STAGE_SUMMARY) {
+            if (rect_contains_inclusive(in->x, in->y, 48, 350, (WIN && WIN->surf ? WIN->surf->w : WIN_W) - 96, 26)) {
+                SHOW_DETAILS = !SHOW_DETAILS;
+                draw();
+                return;
+            }
+        } else if (STAGE == STAGE_COMPLETE) {
+            int cx = (WIN && WIN->surf ? WIN->surf->w : WIN_W) / 2;
+            if (rect_contains_inclusive(in->x, in->y, cx - 112, 314, 224, 42)) {
+                AUX_BUTTON_PRESSED = true;
+                draw();
+                return;
+            }
+        } else if (STAGE == STAGE_ERROR) {
+            int cx = (WIN && WIN->surf ? WIN->surf->w : WIN_W) / 2;
+            if (rect_contains_inclusive(in->x, in->y, cx - 150, 420, 90, 36)) {
+                AUX_BUTTON_PRESSED = true;
+                draw();
+                return;
+            }
+            if (rect_contains_inclusive(in->x, in->y, cx - 45, 420, 95, 36)) {
+                AUX_BUTTON_PRESSED = true;
+                draw();
+                return;
+            }
+            if (rect_contains_inclusive(in->x, in->y, cx + 65, 420, 105, 36)) {
+                SHOW_DETAILS = !SHOW_DETAILS;
+                draw();
+                return;
+            }
+        }
         draw();
         return;
     }
 
     if (in->kind == IN_UP && in->button == 1) {
-        bool was_pressed = BUTTON_PRESSED;
+        bool was_continue = BUTTON_PRESSED;
+        bool was_back = BACK_BUTTON_PRESSED;
+        bool was_aux = AUX_BUTTON_PRESSED;
         BUTTON_PRESSED = false;
-        /* Activate on release when the pointer is still within the same button
-         * region. A small movement is fine; the compositor guarantees this UP
-         * is delivered to the press-captured window. */
-        if (was_pressed && continue_button_hit(in->x, in->y)) {
+        BACK_BUTTON_PRESSED = false;
+        AUX_BUTTON_PRESSED = false;
+
+        if (was_continue && continue_button_hit(in->x, in->y)) {
             add_log("UI: Continue UP/hit local=%d,%d -> activate", in->x, in->y);
             activate_continue();
-        } else if (back_button_hit(in->x, in->y)) {
+            return;
+        }
+        if (was_back && back_button_hit(in->x, in->y)) {
             add_log("UI: Back UP/hit local=%d,%d -> activate", in->x, in->y);
             activate_back();
-        } else {
-            draw();
+            return;
         }
-        return;
-    }
 
-    if (in->kind == IN_MOVE && BUTTON_PRESSED) {
-        /* Keep pressed state while the pointer remains within a forgiving
-         * button boundary; the release is still captured by the compositor. */
+        if (was_aux) {
+            if (STAGE == STAGE_CONFIRM) {
+                if (CONFIRMED_ERASE) {
+                    add_log("UI: Erase & Install activated target=%d", TARGET_DISK_IDX);
+                    start_backend(false);
+                }
+            } else if (STAGE == STAGE_COMPLETE) {
+                int cx = (WIN && WIN->surf ? WIN->surf->w : WIN_W) / 2;
+                if (rect_contains_inclusive(in->x, in->y, cx - 112, 314, 224, 42) &&
+                    BACKEND_VERIFIED && INSTALL_PROGRESS >= 100) {
+                    add_log("RESTART: user requested reboot after verified installation.");
+                    if (!TEST_MODE)
+                        system("reboot 2>/dev/null || systemctl reboot 2>/dev/null || shutdown -r now 2>/dev/null");
+                    mica_quit(G, 0);
+                }
+            } else if (STAGE == STAGE_ERROR) {
+                int cx = (WIN && WIN->surf ? WIN->surf->w : WIN_W) / 2;
+                if (rect_contains_inclusive(in->x, in->y, cx - 150, 420, 90, 36)) {
+                    stop_backend(true);
+                    BACKEND_FAILED = false;
+                    start_backend(false);
+                } else if (rect_contains_inclusive(in->x, in->y, cx - 45, 420, 95, 36)) {
+                    stop_backend(true);
+                    BACKEND_FAILED = false;
+                    start_backend(true);
+                }
+            }
+            draw();
+            return;
+        }
         draw();
         return;
     }
 
-    if (in->kind != IN_DOWN && in->kind != IN_CLICK) return;
+    if (in->kind == IN_MOVE && (BUTTON_PRESSED || BACK_BUTTON_PRESSED || AUX_BUTTON_PRESSED)) {
+        draw();
+        return;
+    }
 
-    /* Compatibility with scripted/older compositor clients that emit IN_CLICK. */
-    if (in->kind == IN_CLICK && in->button == 1 && continue_button_hit(in->x, in->y)) {
-        add_log("UI: legacy IN_CLICK -> Continue activation");
-        activate_continue();
+    /* Compatibility with older compositor/script clients that send IN_CLICK. */
+    if (in->kind == IN_CLICK && in->button == 1) {
+        if (continue_button_hit(in->x, in->y)) {
+            add_log("UI: legacy IN_CLICK -> Continue activation");
+            activate_continue();
+        } else if (back_button_hit(in->x, in->y)) {
+            activate_back();
+        }
     }
 }
 
