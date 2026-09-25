@@ -943,13 +943,29 @@ static void input(mica_win *w, const msg_input *in)
 {
     (void)w;
     if (in->kind == IN_KEY) {
-        if ((in->key == 0xff1b || in->key == 'q') && STAGE != STAGE_INSTALLING && STAGE != STAGE_VERIFYING)
+        if ((in->key == 0xff1b || in->key == 'q') && STAGE != STAGE_INSTALLING && STAGE != STAGE_VERIFYING) {
             mica_quit(G, 0);
+            return;
+        }
+        if (in->key == 0xff0d || in->key == '\\n') {
+            if (STAGE == STAGE_WELCOME) {
+                STAGE = STAGE_SELECT;
+                probe_disks();
+                draw();
+            } else if (STAGE == STAGE_SELECT && TARGET_DISK_IDX >= 0) {
+                STAGE = STAGE_CONFIRM;
+                draw();
+            } else if (STAGE == STAGE_CONFIRM && CONFIRMED_ERASE) {
+                start_backend(false);
+            }
+        }
         return;
     }
     if (in->kind != IN_DOWN && in->kind != IN_CLICK) return;
     int x = in->x, y = in->y;
-    int cx = WIN_W / 2;
+    int ww = WIN && WIN->surf ? WIN->surf->w : WIN_W;
+    int wh = WIN && WIN->surf ? WIN->surf->h : WIN_H;
+    int cx = ww / 2;
 
     if (STAGE == STAGE_WELCOME) {
         if (x >= cx - 82 && x <= cx + 82 && y >= 262 && y <= 304) {
@@ -960,7 +976,7 @@ static void input(mica_win *w, const msg_input *in)
     } else if (STAGE == STAGE_SELECT) {
         int dy = 158;
         for (int i = 0; i < N_DISKS; i++) {
-            if (x >= 48 && x <= WIN_W - 48 && y >= dy && y <= dy + 62 && !DISKS[i].is_usb_boot) {
+            if (x >= 48 && x <= ww - 48 && y >= dy && y <= dy + 62 && !DISKS[i].is_usb_boot) {
                 TARGET_DISK_IDX = i;
                 for (int j = 0; j < N_DISKS; j++) DISKS[j].is_target = j == i;
                 CONFIRMED_ERASE = false;
@@ -969,17 +985,17 @@ static void input(mica_win *w, const msg_input *in)
             }
             dy += 72;
         }
-        if (x >= WIN_W - 156 && x <= WIN_W - 48 && y >= WIN_H - 68 && y <= WIN_H - 32 && TARGET_DISK_IDX >= 0) {
+        if (x >= WIN_W - 156 && x <= ww - 48 && y >= wh - 68 && y <= wh - 32 && TARGET_DISK_IDX >= 0) {
             STAGE = STAGE_CONFIRM;
             draw();
         }
     } else if (STAGE == STAGE_CONFIRM) {
-        if (x >= 48 && x <= WIN_W - 48 && y >= 280 && y <= 320) {
+        if (x >= 48 && x <= ww - 48 && y >= 280 && y <= 320) {
             CONFIRMED_ERASE = !CONFIRMED_ERASE;
             draw();
             return;
         }
-        if (x >= WIN_W - 238 && x <= WIN_W - 48 && y >= WIN_H - 68 && y <= WIN_H - 32 && CONFIRMED_ERASE)
+        if (x >= ww - 238 && x <= ww - 48 && y >= WIN_H - 68 && y <= WIN_H - 32 && CONFIRMED_ERASE)
             start_backend(false);
     } else if (STAGE == STAGE_INSTALLING || STAGE == STAGE_VERIFYING) {
         if (x >= 48 && x <= WIN_W - 48 && y >= 356 && y <= 384) {
