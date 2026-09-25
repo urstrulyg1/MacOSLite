@@ -71,6 +71,8 @@ jobs:
           test -s out/G1OS.iso
           test -s out/G1OS.iso.sha256
           test -s out/iso-manifest.txt
+          test -s out/iso-file-list.txt
+          grep -F "boot/g1os-boot-manifest.txt" out/iso-file-list.txt >/dev/null
 
       - name: Boot ISO under real UEFI QEMU and require graphical installer readiness
         working-directory: macliteos
