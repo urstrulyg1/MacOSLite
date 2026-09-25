@@ -205,7 +205,7 @@ static const char *transport_name(const char *name)
     if (strstr(link, "/ata")) return "SATA";
     if (strstr(link, "/virtio")) return "VirtIO";
     if (strstr(link, "/firewire")) return "FireWire";
-    return "Internal";
+    return "Physical";
 }
 
 static const char *whole_disk_from_source(const char *src)
@@ -790,10 +790,11 @@ static void draw(void)
             ml_draw_text(&c, fb, 108, y + 25, d->model, 13, ml_rgb(242, 245, 252));
             char detail[160];
             double gb = (double)d->size_bytes / 1e9;
-            snprintf(detail, sizeof detail, "%s · %.1f GB · %s", d->devnode, gb,
-                     d->is_usb_boot ? "Protected live media" :
-                     d->is_removable ? "Removable disk" :
-                     "Internal disk");
+            const char *transport = transport_name(d->name);
+            const char *kind = d->is_usb_boot ? "Protected live media" :
+                               d->is_removable ? transport :
+                               transport;
+            snprintf(detail, sizeof detail, "%s · %.1f GB · %s", d->devnode, gb, kind);
             ml_draw_text(&c, f, 108, y + 45, detail, 11, d->is_usb_boot ? ml_rgb(240, 185, 105) : ml_rgb(160, 170, 190));
             y += 72;
         }
