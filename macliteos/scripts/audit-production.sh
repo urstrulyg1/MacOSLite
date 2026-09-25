@@ -37,6 +37,11 @@ if grep -F 'g1os-failure-ui' boot/g1os-init >/dev/null; then
 else
   fail "startup failure diagnostic UI missing"
 fi
+if grep -F 'mount "$DATA_DEV" /mnt/var/data' boot/g1os-init >/dev/null; then
+  pass "installed boot mounts the persistent data partition"
+else
+  fail "installed boot does not mount the persistent data partition"
+fi
 
 if grep -F 'video=efifb' boot/grub-efi.cfg >/dev/null; then pass "Safe Graphics preserves EFI framebuffer"; else fail "Safe Graphics disables/omits EFI framebuffer"; fi
 if grep -F 'nomodeset' boot/grub-efi.cfg >/dev/null; then pass "Safe Graphics requests conservative GPU mode"; else fail "Safe Graphics command line missing"; fi
