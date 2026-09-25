@@ -160,6 +160,38 @@ echo "LIVE MEDIA: ${BOOT_DISK:-not detected}"
 
 need mount; need umount; need blkid
 
+read_block_tag() {
+  dev="$1"
+  tag="$2"
+  if [ "$DRY_RUN" = 1 ]; then
+    case "$tag" in
+      UUID) echo "DRYRUN-${dev#*/dev/}-UUID" ;;
+      PARTUUID) echo "DRYRUN-${dev#*/dev/}-PARTUUID" ;;
+      *) fail "unsupported block tag requested: $tag" ;;
+    esac
+    return 0
+  fi
+  value=""
+  attempt=1
+  while [ "$attempt" -le 10 ]; do
+    value=$(blkid -c /dev/null -s "$tag" -o value "$dev" 2>/dev/null || true)
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  fail "cannot read $tag from $dev after partition/filesystem creation"
+}
+
+require_partition_nodes() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  for part in "$DEV_BOOT" "$DEV_DATA" "$DEV_BASE"; do
+    [ -b "$part" ] || fail "expected target partition did not appear after partition-table update: $part"
+  done
+}
+
 # Detect partitioning utility
 PART_TOOL=""
 if command -v sgdisk >/dev/null 2>&1; then
@@ -202,23 +234,16 @@ emit_state "PREPARING"
 save_state "RUNNING" "PREPARING" 10 "Validated target disk, live media, base system, kernel and initramfs"
 step 1 10 "Validated target disk, live media, base system, kernel and initramfs"
 step 2 20 "Unmounting target partitions"
-if [ "$DRY_RUN" = 0 ]; then
-  # Unmount partitions on target if mounted
-  for p in "${DEV}"* "${DEV_BOOT}" "${DEV_DATA}" "${DEV_BASE}"; do
-    if [ -b "$p" ]; then
-      umount "$p" 2>/dev/null || true
-    fi
-  done
-fi
 
 emit_state "INSTALLING"
 save_state "RUNNING" "INSTALLING" 30 "Partitioning target disk"
 if [ "$REPAIR_MODE" = 1 ]; then
   step 3 30 "Repair mode: preserving existing partitions on target"
-  BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT" 2>/dev/null || echo "78FA-C9B2")
-  DATA_UUID=$(blkid -s UUID -o value "$DEV_DATA" 2>/dev/null || echo "4a12b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c")
-  BASE_UUID=$(blkid -s UUID -o value "$DEV_BASE" 2>/dev/null || echo "e78d910a-3142-4f81-9b16-5fa4e872c019")
-  BASE_PARTUUID=$(blkid -s PARTUUID -o value "$DEV_BASE" 2>/dev/null || echo "9b165fa4-e872-c019-3142-e78d910a4f81")
+  require_partition_nodes
+  BOOT_UUID=$(read_block_tag "$DEV_BOOT" UUID)
+  DATA_UUID=$(read_block_tag "$DEV_DATA" UUID)
+  BASE_UUID=$(read_block_tag "$DEV_BASE" UUID)
+  BASE_PARTUUID=$(read_block_tag "$DEV_BASE" PARTUUID)
   step 4 40 "Repair mode: retaining existing filesystem data"
 else
   step 3 30 "Repartitioning target with EFI, persistent data and root partitions ($PART_TOOL)"
@@ -235,11 +260,16 @@ else
       run parted -s "$DEV" mkpart MACLITE_DATA ext4 257MiB 4353MiB
       run parted -s "$DEV" mkpart MACLITE_BASE ext4 4353MiB 100%
     else
-      printf "g\nn\n1\n\n+256M\nt\n1\nn\n2\n\n+4G\nt\n2\n20\nn\n3\n\n\nt\n3\n20\nw\n" | fdisk "$DEV" 2>/dev/null || true
+      run sh -c 'printf "%s\\n" "g" "n" "1" "" "+256M" "t" "1" "n" "2" "" "+4G" "t" "2" "20" "n" "3" "" "" "t" "3" "20" "w" | fdisk "$1"' sh "$DEV"
     fi
     if command -v partprobe >/dev/null 2>&1; then
-      run partprobe "$DEV" 2>/dev/null || true
+      run partprobe "$DEV"
+    elif command -v blockdev >/dev/null 2>&1; then
+      run blockdev --rereadpt "$DEV"
+    else
+      fail "cannot refresh kernel partition table: neither partprobe nor blockdev is available"
     fi
+    require_partition_nodes
     sleep 1
   fi
 
@@ -259,10 +289,11 @@ else
       run mke2fs -t ext4 -F -L MACLITE_BASE "$DEV_BASE" 2>/dev/null || run mke2fs -F -L MACLITE_BASE "$DEV_BASE"
     fi
   fi
-  BOOT_UUID=$(blkid -s UUID -o value "$DEV_BOOT" 2>/dev/null || echo "78FA-C9B2")
-  DATA_UUID=$(blkid -s UUID -o value "$DEV_DATA" 2>/dev/null || echo "4a12b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c")
-  BASE_UUID=$(blkid -s UUID -o value "$DEV_BASE" 2>/dev/null || echo "e78d910a-3142-4f81-9b16-5fa4e872c019")
-  BASE_PARTUUID=$(blkid -s PARTUUID -o value "$DEV_BASE" 2>/dev/null || echo "9b165fa4-e872-c019-3142-e78d910a4f81")
+  require_partition_nodes
+  BOOT_UUID=$(read_block_tag "$DEV_BOOT" UUID)
+  DATA_UUID=$(read_block_tag "$DEV_DATA" UUID)
+  BASE_UUID=$(read_block_tag "$DEV_BASE" UUID)
+  BASE_PARTUUID=$(read_block_tag "$DEV_BASE" PARTUUID)
 fi
 
 step 5 55 "Installing the verified live base onto the target root filesystem"
