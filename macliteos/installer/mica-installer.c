@@ -142,29 +142,182 @@ static void add_log(const char *fmt, ...)
     }
 }
 
+static bool forbidden_virtual_name(const char *name)
+{
+    if (!name || !name[0]) return true;
+    return !strncmp(name, "loop", 4) || !strncmp(name, "ram", 3) ||
+           !strncmp(name, "zram", 4) || !strncmp(name, "dm-", 3) ||
+           !strncmp(name, "md", 2) || !strncmp(name, "sr", 2) ||
+           !strncmp(name, "fd", 2) || !strncmp(name, "nbd", 3);
+}
+
+static bool read_sysfs_size_bytes(const char *name, uint64_t *out)
+{
+    char path[256], buf[64];
+    snprintf(path, sizeof path, "/sys/block/%s/size", name);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return false;
+    buf[n] = 0;
+    char *end = NULL;
+    errno = 0;
+    unsigned long long sectors = strtoull(buf, &end, 10);
+    if (errno || end == buf || sectors == 0 || sectors > UINT64_MAX / 512ULL) return false;
+    *out = (uint64_t)sectors * 512ULL;
+    return *out != 0;
+}
+
+static bool sysfs_whole_physical_disk(const char *name, const char *devnode, uint64_t *size_bytes)
+{
+    struct stat st;
+    if (!name || !devnode || forbidden_virtual_name(name)) return false;
+    if (stat(devnode, &st) != 0 || !S_ISBLK(st.st_mode)) return false;
+
+    char partition[256];
+    snprintf(partition, sizeof partition, "/sys/block/%s/partition", name);
+    if (access(partition, F_OK) == 0) return false;
+
+    uint64_t bytes = 0;
+    if (!read_sysfs_size_bytes(name, &bytes)) return false;
+
+    char device_link[256], resolved[PATH_MAX];
+    snprintf(device_link, sizeof device_link, "/sys/block/%s/device", name);
+    if (realpath(device_link, resolved) == NULL) return false;
+
+    if (size_bytes) *size_bytes = bytes;
+    return true;
+}
+
+static const char *transport_name(const char *name)
+{
+    static char transport[16];
+    char link[PATH_MAX];
+    char device[256];
+    transport[0] = 0;
+    snprintf(device, sizeof device, "/sys/block/%s/device", name);
+    if (!realpath(device, link)) return "Unknown";
+    if (strstr(link, "/usb")) return "USB";
+    if (strstr(link, "/mmc")) return "SD/Card";
+    if (strstr(link, "/nvme")) return "NVMe";
+    if (strstr(link, "/ata")) return "SATA";
+    if (strstr(link, "/virtio")) return "VirtIO";
+    if (strstr(link, "/firewire")) return "FireWire";
+    return "Internal";
+}
+
+static const char *whole_disk_from_source(const char *src)
+{
+    static char result[64];
+    result[0] = 0;
+    if (!src || strncmp(src, "/dev/", 5) != 0) return NULL;
+
+    const char *base = src + 5;
+    if (forbidden_virtual_name(base)) {
+        if (strncmp(base, "loop", 4) == 0) {
+            char backing[PATH_MAX], loop_path[256], mountpoint[PATH_MAX];
+            snprintf(loop_path, sizeof loop_path, "/sys/class/block/%s/loop/backing_file", base);
+            int fd = open(loop_path, O_RDONLY | O_CLOEXEC);
+            if (fd >= 0) {
+                ssize_t n = read(fd, backing, sizeof(backing) - 1);
+                close(fd);
+                if (n > 0) {
+                    backing[n] = 0;
+                    while (n > 0 && (backing[n-1] == '\n' || backing[n-1] == '\r')) backing[--n] = 0;
+                    snprintf(mountpoint, sizeof mountpoint, "%s", backing);
+                    char *mp = realpath(mountpoint, NULL);
+                    if (mp) {
+                        char cmd[PATH_MAX + 64];
+                        snprintf(cmd, sizeof cmd, "findmnt -n -o SOURCE -T '%s' 2>/dev/null", mp);
+                        FILE *p = popen(cmd, "r");
+                        if (p) {
+                            char parent[128] = {0};
+                            if (fgets(parent, sizeof parent, p)) {
+                                char *nl = strpbrk(parent, "\r\n");
+                                if (nl) *nl = 0;
+                                pclose(p);
+                                const char *resolved_parent = whole_disk_from_source(parent);
+                                if (resolved_parent) {
+                                    snprintf(result, sizeof result, "%s", resolved_parent);
+                                    free(mp);
+                                    return result;
+                                }
+                            } else pclose(p);
+                        }
+                        free(mp);
+                    }
+                }
+            }
+        }
+        return NULL;
+    }
+
+    char part[256];
+    snprintf(part, sizeof part, "/sys/class/block/%s/partition", base);
+    if (access(part, F_OK) == 0) {
+        char pk[256];
+        snprintf(pk, sizeof pk, "/sys/class/block/%s/partition", base);
+        (void)pk;
+        char cmd[256];
+        snprintf(cmd, sizeof cmd, "lsblk -ndo PKNAME /dev/%s 2>/dev/null", base);
+        FILE *p = popen(cmd, "r");
+        if (!p) return NULL;
+        if (!fgets(result, sizeof result, p)) { pclose(p); result[0]=0; return NULL; }
+        pclose(p);
+        char *nl = strpbrk(result, "\r\n");
+        if (nl) *nl=0;
+        return result[0] ? result : NULL;
+    }
+    snprintf(result, sizeof result, "%s", base);
+    return result;
+}
+
 static bool is_device_live_boot(const char *name)
 {
+    if (!name || !name[0]) return false;
+    for (const char *mp = "/run/live"; mp; ) {
+        char source[128] = {0};
+        char cmd[256];
+        snprintf(cmd, sizeof cmd, "findmnt -n -o SOURCE '%s' 2>/dev/null", mp);
+        FILE *p = popen(cmd, "r");
+        if (p) {
+            if (fgets(source, sizeof source, p)) {
+                char *nl = strpbrk(source, "\r\n");
+                if (nl) *nl=0;
+            }
+            pclose(p);
+        }
+        const char *disk = whole_disk_from_source(source);
+        if (disk && !strcmp(disk, name)) return true;
+        break;
+    }
+
     FILE *f = fopen("/proc/mounts", "r");
     if (!f) return false;
     char line[512];
-    bool live = false;
     while (fgets(line, sizeof line, f)) {
-        if (strstr(line, name) &&
-            (strstr(line, "/run/maclite-base") || strstr(line, "/run/maclite-live") ||
-             strstr(line, "/cdrom") || strstr(line, "iso9660") || strstr(line, "squashfs"))) {
-            live = true;
-            break;
+        if (!strstr(line, "/run/maclite-base") && !strstr(line, "/run/maclite-live") &&
+            !strstr(line, "/cdrom") && !strstr(line, "/mnt/live")) continue;
+        char src[128] = {0}, mp[128] = {0};
+        if (sscanf(line, "%127s %127s", src, mp) == 2) {
+            const char *disk = whole_disk_from_source(src);
+            if (disk && !strcmp(disk, name)) { fclose(f); return true; }
         }
     }
     fclose(f);
+    return false;
+}
 
-    if (!live) {
-        char syspath[256], link[512] = {0};
-        snprintf(syspath, sizeof syspath, "/sys/block/%s", name);
-        ssize_t n = readlink(syspath, link, sizeof(link) - 1);
-        if (n > 0 && (strstr(link, "/usb") || strstr(link, "/USB"))) live = true;
-    }
-    return live;
+static bool revalidate_target_disk(const disk_info *d)
+{
+    if (!d || !d->name[0] || !d->devnode[0]) return false;
+    if (forbidden_virtual_name(d->name)) return false;
+    uint64_t bytes = 0;
+    if (!sysfs_whole_physical_disk(d->name, d->devnode, &bytes)) return false;
+    if (bytes != d->size_bytes || bytes == 0) return false;
+    if (is_device_live_boot(d->name)) return false;
+    return true;
 }
 
 static void probe_disks(void)
@@ -175,15 +328,24 @@ static void probe_disks(void)
     mica_storage_probe(&s);
 
     for (int i = 0; i < s.n && N_DISKS < 8; i++) {
-        if (!s.v[i].whole) continue;
+        if (!s.v[i].whole || forbidden_virtual_name(s.v[i].name)) continue;
         disk_info *d = &DISKS[N_DISKS];
         memset(d, 0, sizeof *d);
         snprintf(d->name, sizeof d->name, "%s", s.v[i].name);
         snprintf(d->devnode, sizeof d->devnode, "%s", s.v[i].devnode);
-        snprintf(d->model, sizeof d->model, "%s %s", s.v[i].vendor, s.v[i].model);
+
+        uint64_t authoritative_size = 0;
+        if (!sysfs_whole_physical_disk(d->name, d->devnode, &authoritative_size))
+            continue; /* cannot prove this is a real whole disk: never guess */
+        if (authoritative_size == 0) continue;
+
+        char vendor[48] = {0}, model[96] = {0};
+        snprintf(vendor, sizeof vendor, "%s", s.v[i].vendor);
+        snprintf(model, sizeof model, "%s", s.v[i].model);
+        snprintf(d->model, sizeof d->model, "%s %s", vendor, model);
         ml_str_trim(d->model);
-        if (!d->model[0]) snprintf(d->model, sizeof d->model, "Internal Drive (%s)", d->name);
-        d->size_bytes = s.v[i].size_bytes;
+        if (!d->model[0]) snprintf(d->model, sizeof d->model, "%s disk", transport_name(d->name));
+        d->size_bytes = authoritative_size;
         d->is_removable = s.v[i].removable;
         d->is_usb_boot = is_device_live_boot(d->name);
 
@@ -503,7 +665,14 @@ static void install_gui_tick(void *ud)
 
 static bool start_backend(bool repair_flag)
 {
+    /* Re-enumerate and revalidate immediately before the destructive backend is spawned.
+     * Device nodes can disappear/reappear between selection and installation. */
     if (TARGET_DISK_IDX < 0 || !CONFIRMED_ERASE) return false;
+    if (!revalidate_target_disk(&DISKS[TARGET_DISK_IDX])) {
+        set_failure("The selected disk changed, disappeared, became unavailable, or is the live installation media. Please rescan and select it again.");
+        probe_disks();
+        return false;
+    }
     const char *backend = backend_path();
     if (!backend) {
         set_failure("G1OS installer backend is not installed or executable.");
@@ -620,7 +789,10 @@ static void draw(void)
             ml_draw_text(&c, fb, 108, y + 25, d->model, 13, ml_rgb(242, 245, 252));
             char detail[160];
             double gb = (double)d->size_bytes / 1e9;
-            snprintf(detail, sizeof detail, "%s · %.1f GB · %s", d->devnode, gb, d->is_usb_boot ? "Protected live media" : (d->is_removable ? "Removable" : "Internal disk"));
+            snprintf(detail, sizeof detail, "%s · %.1f GB · %s", d->devnode, gb,
+                     d->is_usb_boot ? "Protected live media" :
+                     d->is_removable ? "Removable disk" :
+                     "Internal disk");
             ml_draw_text(&c, f, 108, y + 45, detail, 11, d->is_usb_boot ? ml_rgb(240, 185, 105) : ml_rgb(160, 170, 190));
             y += 72;
         }
