@@ -106,6 +106,22 @@ if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
     mount -t proc proc /mnt/proc || fatal "cannot mount /proc in installed root"
     mount -t sysfs sysfs /mnt/sys || fatal "cannot mount /sys in installed root"
     mount -t tmpfs -o mode=0755 tmpfs /mnt/run || fatal "cannot mount /run in installed root"
+
+    # The installed image uses a custom PID 1, so /etc/fstab is not consumed
+    # by a general-purpose init system. Mount the persistent data partition
+    # explicitly from the UUID written by the installer instead of silently
+    # running without it.
+    DATA_UUID=""
+    if [ -r /mnt/etc/fstab ]; then
+        DATA_UUID=$(awk '$2 == "/var/data" && $1 ~ /^UUID=/ {sub(/^UUID=/, "", $1); print $1; exit}' /mnt/etc/fstab 2>/dev/null || true)
+    fi
+    [ -n "$DATA_UUID" ] || fatal "installed /etc/fstab has no UUID for /var/data"
+    DATA_DEV=$(blkid -U "$DATA_UUID" 2>/dev/null || true)
+    [ -n "$DATA_DEV" ] && [ -b "$DATA_DEV" ] || fatal "persistent data partition UUID $DATA_UUID could not be resolved"
+    mkdir -p /mnt/var/data
+    mount "$DATA_DEV" /mnt/var/data || fatal "cannot mount persistent data partition $DATA_DEV"
+    status OK "Persistent data filesystem mounted: $DATA_DEV"
+
     status OK "Installed root filesystem verified"
     silence_graphical_console
     BACKEND=auto
