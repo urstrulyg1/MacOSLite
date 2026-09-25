@@ -35,6 +35,18 @@ for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chro
     ln -sf /bin/busybox "$W/sbin/$applet" 2>/dev/null || true
 done
 
+# Do not let a missing BusyBox applet become a runtime-only boot failure.
+for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chroot \
+              fdisk losetup dd partprobe sync awk sleep dmesg ls cp mv rm touch \
+              mktemp mkfs.vfat mkdosfs mkfs.ext2 mkfs.ext4 mke2fs find which head tail wc tr cut \
+              sort uniq uname ip ifconfig ping udhcpc wget reboot poweroff halt env expr dirname basename \
+              readlink realpath date id ps kill setsid cttyhack; do
+    [ -e "$W/bin/$applet" ] || [ -e "$W/sbin/$applet" ] || {
+        echo "ERROR: BusyBox applet missing from initramfs build: $applet" >&2
+        exit 3
+    }
+done
+
 while read -r pat; do
     case "$pat" in \#*|"") continue ;; esac
     found=0
