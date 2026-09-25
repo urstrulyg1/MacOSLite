@@ -780,7 +780,8 @@ static bool start_backend(bool repair_flag)
 {
     /* Re-enumerate and revalidate immediately before the destructive backend is spawned.
      * Device nodes can disappear/reappear between selection and installation. */
-    if (TARGET_DISK_IDX < 0 || !CONFIRMED_ERASE) return false;
+    if (TARGET_DISK_IDX < 0) return false;
+    if (!repair_flag && !CONFIRMED_ERASE) return false;
     if (!revalidate_target_disk(&DISKS[TARGET_DISK_IDX])) {
         set_failure("The selected disk changed, disappeared, became unavailable, or is the live installation media. Please rescan and select it again.");
         probe_disks();
@@ -1040,9 +1041,9 @@ static void draw(void)
         if (SHOW_DETAILS) {
             ml_rect logbox = ml_rect_make(52, 274, s->w - 104, 116);
             ml_fill_rounded(&c, logbox, 10, ml_rgba(5, 7, 10, 220));
-            int first = N_LOG_LINES > 6 ? N_LOG_LINES - 6 : 0;
+            int first = N_LOG_LINES > 8 ? N_LOG_LINES - 8 : 0;
             for (int i = first; i < N_LOG_LINES; i++)
-                ml_draw_text(&c, f, 64, 296 + (i - first) * 16, LOG_LINES[i], 9, ml_rgb(205, 155, 155));
+                ml_draw_text(&c, f, 60, 290 + (i - first) * 12, LOG_LINES[i], 8, ml_rgb(205, 155, 155));
         }
 
         /* Buttons: [Retry] [Repair] [View Details] */
