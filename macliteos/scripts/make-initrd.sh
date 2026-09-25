@@ -40,7 +40,7 @@ for applet in mount umount mkdir cat grep sed sh modprobe blkid switch_root chro
               fdisk losetup dd partprobe blockdev sync awk sleep dmesg ls cp mv rm touch \
               mktemp mkfs.vfat mkdosfs mkfs.ext2 mkfs.ext4 mke2fs find which head tail wc tr cut \
               sort uniq uname ip ifconfig ping udhcpc wget reboot poweroff halt env expr dirname basename \
-              readlink realpath date id ps kill setsid cttyhack; do
+              readlink realpath date id ps kill setsid cttyhack sha256sum; do
     [ -e "$W/bin/$applet" ] || [ -e "$W/sbin/$applet" ] || {
         echo "ERROR: BusyBox applet missing from initramfs build: $applet" >&2
         exit 3
