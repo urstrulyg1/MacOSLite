@@ -1,7 +1,8 @@
 G1OS ISO Build Manifest
-Build Date: 2026-09-24T17:19:12Z
+Build ID: 20260924T194358Z-397dddc5550da9ad
+Build Date: 2026-09-24T19:44:00Z
 Kernel: vmlinuz-maclite
 Initramfs: initrd-maclite.img
 Base: live/maclite-base.sqfs
 ISO: out/G1OS.iso
-SHA256: 1415abf4b480c21dfebe052093a99bda293034935663f9a65f295229e85ddec9  out/G1OS.iso
+SHA256: 94eedaa7131b8ea857f3c592695af2085ac2d5874ad2f1e7edf279c5589b42a7  out/G1OS.iso
