@@ -379,14 +379,22 @@ bool ml_display_wait(ml_display *d, int timeout_ms)
         while (off + (ssize_t)sizeof(struct ml_drm_event) <= n) {
             struct ml_drm_event *e = (struct ml_drm_event *)(buf + off);
             if (e->length < sizeof *e || off + e->length > n) break;
-            if (e->type == ML_DRM_EVENT_FLIP_COMPLETE || e->type == ML_DRM_EVENT_VBLANK) {
+            /*
+             * We request DRM_MODE_PAGE_FLIP_EVENT for every scanout flip.
+             * Only that completion event retires the pending buffer. Do not
+             * treat a generic vblank as a flip completion, and do not process
+             * another event after the pending flip has been retired: doing so
+             * could toggle the front index twice when multiple DRM events are
+             * returned by one read().
+             */
+            if (e->type == ML_DRM_EVENT_FLIP_COMPLETE) {
                 k->front ^= 1;
                 d->flips++;
                 k->flip_pending = false;
+                return true;
             }
             off += e->length;
         }
-        if (!k->flip_pending) return true;
     }
     return !k->flip_pending;
 }
