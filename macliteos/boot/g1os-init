@@ -175,7 +175,7 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
         umount /run/g1os-probe 2>/dev/null || true
         mkdir -p /run/g1os-probe
         if mount -o ro "$dev" /run/g1os-probe 2>/dev/null; then
-            if [ -s /run/g1os-probe/live/maclite-base.sqfs ] && [ -s /run/g1os-probe/boot/vmlinuz-maclite ] && [ -e /run/g1os-probe/EFI/BOOT/BOOTX64.EFI ]; then
+            if [ -s /run/g1os-probe/live/maclite-base.sqfs ] && [ -s /run/g1os-probe/boot/vmlinuz-maclite ] && [ -s /run/g1os-probe/boot/g1os-boot-manifest.txt ] && [ -e /run/g1os-probe/EFI/BOOT/BOOTX64.EFI ]; then
                 LIVE_DEV="$dev"
                 umount /run/g1os-probe 2>/dev/null || true
                 break 2
@@ -190,8 +190,12 @@ done
 status OK "Live installation media found: $LIVE_DEV"
 mount -o ro "$LIVE_DEV" /run/live || fatal "cannot mount live media $LIVE_DEV"
 [ -s /run/live/live/maclite-base.sqfs ] || fatal "live/maclite-base.sqfs is missing or empty"
+[ -s /run/live/boot/vmlinuz-maclite ] || fatal "real G1OS kernel artifact is missing from the mounted ISO"
+[ -s /run/live/boot/initrd-maclite.img ] || fatal "real G1OS initramfs artifact is missing from the mounted ISO"
+[ -s /run/live/boot/g1os-boot-manifest.txt ] || fatal "authoritative G1OS boot manifest is missing from the mounted ISO"
+grep -F "G1OS_BOOT_MANIFEST=1" /run/live/boot/g1os-boot-manifest.txt >/dev/null || fatal "authoritative G1OS boot manifest is invalid"
 [ -s /run/live/.g1os-build-id ] && status OK "Booting build ID: $(cat /run/live/.g1os-build-id)"
-status OK "Live SquashFS located"
+status OK "Live SquashFS located; authoritative kernel payload verified"
 mount -t squashfs -o ro,loop /run/live/live/maclite-base.sqfs /run/maclite-base || fatal "cannot mount live SquashFS (loop/squashfs path failed)"
 status OK "Live base filesystem mounted"
 if [ -d /run/maclite-base/etc ]; then cp -a /run/maclite-base/etc/. /etc/ || fatal "cannot import base /etc"; fi
