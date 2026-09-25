@@ -286,6 +286,21 @@ uint32_t *ml_display_pixels(ml_display *d)
 void ml_display_commit(ml_display *d, const uint32_t *src, const ml_rect *damage, int n)
 {
     if (d->kind == ML_DISP_HEADLESS || !src) return;
+
+    /* KMS uses two scanout buffers. The buffer that was just scanned out is
+     * only safe to recycle after the page-flip completion event. Without this
+     * synchronization, damage-only updates can be copied into a stale buffer
+     * that never received the previous frame, producing persistent cursor
+     * trails/ghost windows after mouse movement. DRM explicitly requires
+     * userspace to wait for flip completion before recycling the old buffer. */
+    if (d->kind == ML_DISP_KMS) {
+        kms_priv *k = d->priv;
+        if (k && k->flip_pending && !ml_display_wait(d, 100)) {
+            ML_WARN("KMS: timed out waiting for previous page flip; skipping frame commit");
+            return;
+        }
+    }
+
     uint32_t *dst = ml_display_pixels(d);
     if (!dst) return;
     int src_pitch = d->w;
