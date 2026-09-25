@@ -202,6 +202,7 @@ static bool start_backend(bool repair_flag);
 static void set_failure(const char *message);
 static bool revalidate_target_disk(const disk_info *d);
 static void probe_disks(void);
+static void persist_installer_state(const char *event);
 
 static uint64_t now_ms(void)
 {
