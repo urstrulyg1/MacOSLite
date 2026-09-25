@@ -338,7 +338,7 @@ fi
 
 mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log"
 cat > "$BASE_MNT/etc/fstab" <<EOF
-UUID=$BASE_UUID  /          ext4  ro,noatime,errors=remount-ro  0 1
+UUID=$BASE_UUID  /          ext4  rw,noatime,errors=remount-ro  0 1
 UUID=$DATA_UUID  /var/data  ext4  rw,noatime,errors=remount-ro  0 2
 UUID=$BOOT_UUID  /boot/efi  vfat  rw,umask=0077               0 1
 EOF
