@@ -390,7 +390,7 @@ set root=(\$boot)
 
 menuentry "G1OS" {
   search --no-floppy --fs-uuid --set=boot $BOOT_UUID
-  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 mitigations=off acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
+  linux /boot/vmlinuz-g1os root=UUID=$BASE_UUID ro rd.maclite=1 acpi_backlight=native radeon.modeset=1 radeon.uvd=1 b43.fwok=1 reboot=pci panic=0
   initrd /boot/initrd-g1os.img
 }
 menuentry "G1OS Safe Graphics (Software Compositing)" {
