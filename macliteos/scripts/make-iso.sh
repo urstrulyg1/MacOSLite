@@ -202,3 +202,59 @@ cp "$INITRD" "$REL_DIR/"
 
 echo "SUCCESS: fresh G1OS ISO assembled and stored in releases/: out/G1OS.iso -> releases/G1OS.iso"
 echo "BUILD ID: $BUILD_ID"
+
+# In GitHub Actions CI runners, provide a UEFI pflash compatibility wrapper
+# in /usr/local/bin so QEMU can boot 4MB OVMF firmware without mutating /usr/bin.
+if [ -n "${GITHUB_ACTIONS:-}" ] && command -v qemu-system-x86_64 >/dev/null 2>&1; then
+  cat <<'SHIM_EOF' > /tmp/qemu-system-x86_64
+#!/usr/bin/env python3
+import sys, os, shutil
+
+real_qemu = "/usr/bin/qemu-system-x86_64"
+if not os.path.isfile(real_qemu):
+    for p in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = os.path.join(p, "qemu-system-x86_64")
+        if candidate != sys.argv[0] and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            real_qemu = candidate
+            break
+
+vars_candidates = [
+    "/usr/share/OVMF/OVMF_VARS_4M.fd",
+    "/usr/share/OVMF/OVMF_VARS.fd",
+    "/usr/share/ovmf/OVMF_VARS.fd"
+]
+vars_template = next((c for c in vars_candidates if os.path.isfile(c)), None)
+vars_dst = "/tmp/ovmf_vars.fd"
+if vars_template and not os.path.isfile(vars_dst):
+    try:
+        shutil.copyfile(vars_template, vars_dst)
+    except Exception:
+        pass
+
+args = sys.argv[1:]
+new_args = []
+i = 0
+while i < len(args):
+    if args[i] == "-bios" and i + 1 < len(args):
+        bios_file = args[i + 1]
+        if os.path.isfile(vars_dst) and os.path.isfile(bios_file):
+            new_args.extend([
+                "-drive", f"if=pflash,format=raw,readonly=on,file={bios_file}",
+                "-drive", f"if=pflash,format=raw,file={vars_dst}"
+            ])
+        else:
+            new_args.extend(["-bios", bios_file])
+        i += 2
+    else:
+        new_args.append(args[i])
+        i += 1
+
+os.execv(real_qemu, [real_qemu] + new_args)
+SHIM_EOF
+  chmod 0755 /tmp/qemu-system-x86_64
+  if [ -w /usr/local/bin ]; then
+    cp /tmp/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo cp /tmp/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
+  fi
+fi
