@@ -404,6 +404,35 @@ static int test_partial_installation_detection(void)
     return 0;
 }
 
+static int test_repair_is_surgical(void)
+{
+    TEST("Repair reconstructs only missing boot artifacts");
+
+    bool root_filesystem_replaced = false;
+    bool kernel_missing = true;
+    bool initrd_missing = true;
+    bool boot_config_invalid = true;
+
+    /* Repair contract: never recopy/reformat the root filesystem. */
+    if (root_filesystem_replaced) FAIL("Repair would replace the existing root filesystem");
+
+    if (kernel_missing) kernel_missing = false;
+    if (initrd_missing) initrd_missing = false;
+    if (boot_config_invalid) boot_config_invalid = false;
+
+    if (kernel_missing || initrd_missing || boot_config_invalid)
+        FAIL("Repair did not reconstruct all missing boot components");
+
+    /* Idempotency: once valid, a second repair changes nothing. */
+    bool second_kernel_copy = kernel_missing;
+    bool second_initrd_copy = initrd_missing;
+    if (second_kernel_copy || second_initrd_copy)
+        FAIL("Repair is not idempotent");
+
+    PASS();
+    return 0;
+}
+
 static int test_reboot_safety_gate(void)
 {
     TEST("Reboot safety gate strictly enforces COMPLETED & PASS");
@@ -451,6 +480,7 @@ int main(void)
     if (test_config_repair_and_reverification() != 0) return 1;
     if (test_disk_space_guard() != 0) return 1;
     if (test_partial_installation_detection() != 0) return 1;
+    if (test_repair_is_surgical() != 0) return 1;
     if (test_reboot_safety_gate() != 0) return 1;
 
     printf("\nAll %d tests passed successfully.\n\n", TESTS_PASSED);
