@@ -158,7 +158,22 @@ chmod 0755 "$W/init"
 mkdir -p "$(dirname "$OUT")"
 ( cd "$W" && find . -print | cpio -o -H newc 2>/dev/null | gzip -9 > "$OUT" )
 [ -s "$OUT" ] || { echo "ERROR: initramfs output is empty" >&2; exit 6; }
-printf '%s  %s\n' "$(sha256sum "$OUT" | awk '{print $1}')" "$OUT" > "${OUT}.sha256"
+INITRD_SHA256=$(sha256sum "$OUT" | cut -d' ' -f1)
+INITRD_SIZE=$(wc -c < "$OUT" | tr -d ' ')
+KERNEL_SHA256=""
+if [ -s "$PWD/out/g1os-kernel-manifest.txt" ]; then
+  KERNEL_SHA256=$(sed -n 's/^artifact_sha256=//p' "$PWD/out/g1os-kernel-manifest.txt")
+fi
+cat > "$PWD/out/g1os-initrd-manifest.txt" <<EOF
+G1OS_INITRD_MANIFEST=1
+artifact_path=out/$(basename "$OUT")
+artifact_filename=$(basename "$OUT")
+artifact_format=gzip-cpio
+artifact_sha256=$INITRD_SHA256
+artifact_size=$INITRD_SIZE
+kernel_sha256=$KERNEL_SHA256
+EOF
+printf '%s  %s\n' "$INITRD_SHA256" "$OUT" > "${OUT}.sha256"
 echo "INITRAMFS STATUS: PASS"
 echo "INITRAMFS: $OUT"
 echo "INITRAMFS SHA256: $(cut -d' ' -f1 "${OUT}.sha256")"
