@@ -1126,7 +1126,6 @@ static void input(mica_win *w, const msg_input *in)
                 return;
             }
         } else if (STAGE == STAGE_CONFIRM) {
-            int h = WIN && WIN->surf ? WIN->surf->h : WIN_H;
             if (rect_contains_inclusive(in->x, in->y, 52, 280, 28, 32)) {
                 AUX_BUTTON_PRESSED = true;
                 CONFIRMED_ERASE = !CONFIRMED_ERASE;
