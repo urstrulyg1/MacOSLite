@@ -57,6 +57,7 @@ static bool read_all(int fd, void *p, size_t n)
 
 bool mlipc_send(int fd, uint32_t type, const void *payload, uint32_t len)
 {
+    if (len > MLIPC_MAX || (len && !payload)) return false;
     mlipc_hdr h = { type, len };
     if (!write_all(fd, &h, sizeof h)) return false;
     if (len && !write_all(fd, payload, len)) return false;
@@ -65,6 +66,7 @@ bool mlipc_send(int fd, uint32_t type, const void *payload, uint32_t len)
 
 bool mlipc_send_fd(int fd, uint32_t type, const void *payload, uint32_t len, int shm_fd)
 {
+    if (len > MLIPC_MAX || (len && !payload) || shm_fd < 0) return false;
     mlipc_hdr h = { type, len };
     struct iovec iov[2] = {
         { .iov_base = &h, .iov_len = sizeof h },
