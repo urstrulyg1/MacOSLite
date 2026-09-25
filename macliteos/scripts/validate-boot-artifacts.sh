@@ -75,7 +75,7 @@ if [ -s "$ISO" ]; then
     need unsquashfs
     sha256sum "$ISO" >/dev/null || fail "cannot hash ISO"
     xorriso -indev "$ISO" -find / -exec report_lba >"$TMP/iso-files" 2>/dev/null || fail "xorriso cannot inspect ISO"
-    for required in /boot/vmlinuz-maclite /boot/initrd-maclite.img /boot/grub.cfg /live/maclite-base.sqfs /EFI/BOOT/BOOTX64.EFI; do
+    for required in /boot/vmlinuz-maclite /boot/initrd-maclite.img /boot/g1os-boot-manifest.txt /boot/grub.cfg /live/maclite-base.sqfs /EFI/BOOT/BOOTX64.EFI; do
         grep -F "$required" "$TMP/iso-files" >/dev/null || fail "ISO missing required path: $required"
     done
     xorriso -osirrox on -indev "$ISO" -extract / "$TMP/iso" >/dev/null 2>&1 || fail "ISO extraction failed"
