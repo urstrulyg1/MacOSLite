@@ -46,6 +46,17 @@ fatal() {
     while :; do sleep 5; done
 }
 
+silence_graphical_console() {
+    # Keep diagnostics in /run/g1os-boot.log, but do not let kernel printk/fbcon
+    # text paint over the graphical installer once the compositor takes over.
+    if [ -w /proc/sys/kernel/printk ]; then
+        printf '%s\n' '1 4 1 7' >/proc/sys/kernel/printk 2>/dev/null || true
+    fi
+    if [ -e /dev/console ]; then
+        printf '\033[2J\033[H\033[?25l' >/dev/console 2>/dev/null || true
+    fi
+}
+
 mount -t proc proc /proc || fatal "cannot mount /proc"
 mount -t sysfs sysfs /sys || fatal "cannot mount /sys"
 if ! mount -t devtmpfs devtmpfs /dev 2>/dev/null; then
@@ -94,6 +105,7 @@ if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
     mount -t sysfs sysfs /mnt/sys || fatal "cannot mount /sys in installed root"
     mount -t tmpfs -o mode=0755 tmpfs /mnt/run || fatal "cannot mount /run in installed root"
     status OK "Installed root filesystem verified"
+    silence_graphical_console
     BACKEND=auto
     [ "$SAFE" = 1 ] && BACKEND=fbdev
     status OK "Starting installed G1OS compositor ($BACKEND)"
@@ -139,6 +151,7 @@ export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64:/run/maclite-base/lib:/ru
 BACKEND=auto
 if [ "$SAFE" = 1 ]; then BACKEND=fbdev; export MICA_GL=off; fi
 status OK "Graphical installer runtime present"
+silence_graphical_console
 status RUNNING "Starting compositor ($BACKEND)"
 MICA_LOG=/run/g1os/mica-comp.log
 export MICA_LOG
