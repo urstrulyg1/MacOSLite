@@ -51,6 +51,15 @@ void ml_surface_clear(ml_surface *s, ml_color c)
     }
     ml_surface_damage_all(s);
 }
+void ml_surface_make_opaque(ml_surface *s)
+{
+    if (!s) return;
+    for (int y = 0; y < s->h; y++) {
+        uint32_t *row = ml_surface_row(s, y);
+        for (int x = 0; x < s->w; x++) row[x] |= 0xFF000000u;
+    }
+    ml_surface_damage_all(s);
+}
 void ml_surface_damage(ml_surface *s, ml_rect r)
 {
     r = ml_rect_intersect(r, ml_rect_make(0, 0, s->w, s->h));

@@ -29,6 +29,12 @@ typedef struct {
 void ml_path_init(ml_path *p);
 void ml_path_free(ml_path *p);
 void ml_path_reset(ml_path *p);
+/* Deep copy: the destination is reset first, so an initialized (or freshly
+ * memset) path is a valid target. Used by the cursor sprite cache. */
+void ml_path_copy(ml_path *dst, const ml_path *src);
+/* Bounding box of every point in the path (control points included: callers
+ * that need the *ink* box must rasterize and measure). */
+void ml_path_bbox(const ml_path *p, double *x0, double *y0, double *x1, double *y1);
 void ml_path_move(ml_path *p, double x, double y);
 void ml_path_line(ml_path *p, double x, double y);
 void ml_path_quad(ml_path *p, double cx, double cy, double x, double y, int segments);
@@ -48,12 +54,32 @@ typedef struct {
 } ml_ctx;
 
 void ml_ctx_init(ml_ctx *c, ml_surface *dst, ml_rect clip);
+/* How far outside its rect a shadow painted by ml_draw_shadow() reaches.
+ * Callers that invalidate a rectangle because "something with a shadow moved"
+ * must add this margin, or the outer ring of the shadow is clipped by the
+ * damage rect and a stale ghost of it survives the repaint. */
+static inline int ml_shadow_margin(double blur)
+{
+    return (int)ceil(blur * 2.0) + 2;
+}
 void ml_fill_rect(ml_ctx *c, ml_rect r, ml_color col);
 void ml_fill_rounded(ml_ctx *c, ml_rect r, double radius, ml_color col);
 void ml_stroke_rounded(ml_ctx *c, ml_rect r, double radius, double width, ml_color col);
 void ml_fill_gradient(ml_ctx *c, ml_rect r, double radius, ml_color top, ml_color bottom);
 void ml_fill_gradient_diag(ml_ctx *c, ml_rect r, double radius, ml_color a, ml_color b);
 void ml_blit(ml_ctx *c, const ml_surface *src, ml_rect src_rect, int dx, int dy, uint8_t opacity);
+/* Blit `src` so that *every* pixel of ctx->clip is written, sampling the source
+ * at (x - offset_x, y - offset_y) with the coordinates clamped at the source
+ * edges.
+ *
+ * ml_blit() shrinks its destination when the requested source rectangle falls
+ * outside the source surface. For a damage-only compositor that is a trap: the
+ * pixels of the clip that fall outside the (shrunk) destination are never
+ * written, so they keep whatever the framebuffer held before — a stale slice of
+ * the previous frame, exactly the "ghost" class of bug. This variant always
+ * covers the whole clip. */
+void ml_blit_scrolled(ml_ctx *c, const ml_surface *src, int offset_x, int offset_y,
+                      uint8_t opacity);
 void ml_blit_scaled(ml_ctx *c, const ml_surface *src, ml_rect dst, ml_rect src_rect, uint8_t opacity);
 void ml_blit_coverage(ml_ctx *c, const uint8_t *cov, int cw, int ch, int dx, int dy, ml_color col);
 /* Bilinear blit of a rectangular region of a coverage buffer (stride-aware).

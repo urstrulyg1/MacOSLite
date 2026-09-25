@@ -1,0 +1,117 @@
+# cursor.script — pointer movement regression for the compositor's damage path.
+#
+# The failure this pins down (G1OS "cursor trails"): the pointer left a remnant
+# at every position it had been at, because the compositor only invalidated the
+# rectangle the pointer moved *to* and never the one it moved *from*.
+#
+# The script is deliberately boring: a `wait` after every `move` so each one
+# becomes its own present. Without the wait the moves coalesce into a single
+# damage region and the bug is invisible (the full-screen repaint at startup
+# also hides it, which is why the first line is `wait 300` and not a move).
+#
+# It exercises the three shapes the bug took: slow traversal, a burst of moves
+# between frames, and corners/edges where clamping matters.
+
+wait 300
+
+# --- slow traversal: every position must be fully restored -------------------
+move 40 40
+wait 120
+move 110 90
+wait 120
+move 180 150
+wait 120
+move 260 210
+wait 120
+move 340 260
+wait 120
+move 420 300
+wait 120
+move 500 340
+wait 120
+move 600 300
+wait 120
+move 700 240
+wait 120
+move 780 180
+wait 120
+move 860 120
+wait 120
+move 940 160
+wait 120
+move 1020 220
+wait 120
+move 1100 300
+wait 120
+
+# --- across the UI: menu bar, over windows, over the dock --------------------
+move 60 13
+wait 120
+move 200 13
+wait 120
+move 420 120
+wait 120
+move 640 200
+wait 120
+move 320 300
+wait 120
+move 640 420
+wait 120
+move 640 770
+wait 120
+
+# --- rapid burst: many moves inside a single frame ---------------------------
+move 700 700
+wait 120
+move 710 690
+wait 10
+move 720 680
+wait 10
+move 730 670
+wait 10
+move 740 660
+wait 10
+move 750 650
+wait 10
+move 760 640
+wait 10
+move 770 630
+wait 10
+move 780 620
+wait 10
+move 790 610
+wait 10
+move 800 600
+wait 120
+
+# --- edges and corners, including off-screen coordinates ---------------------
+move 0 0
+wait 120
+move 1279 0
+wait 120
+move 0 799
+wait 120
+move 1279 799
+wait 120
+move 0 400
+wait 120
+move 1279 400
+wait 120
+move 640 0
+wait 120
+move 640 799
+wait 120
+move 1 1
+wait 120
+move 1278 798
+wait 120
+
+# --- and back through the middle, where the remnants used to pile up ---------
+move 640 400
+wait 120
+move 640 100
+wait 120
+move 200 100
+wait 120
+
+quit

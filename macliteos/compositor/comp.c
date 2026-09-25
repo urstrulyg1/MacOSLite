@@ -18,6 +18,7 @@
 #include "ml/surface.h"
 #include "ml/region.h"
 #include "ml/raster.h"
+#include "ml/cursor.h"
 #include "ml/font.h"
 #include "ml/icon.h"
 #include "ml/anim.h"
@@ -43,6 +44,11 @@
 #define MAX_CLIENTS 32
 #define MAX_NOTIFS 3
 #define N_WS 4
+/* How far outside a window frame its drop shadow reaches. win_damage_all()
+ * must invalidate at least this much, otherwise the outer ring of the shadow is
+ * clipped by the damage rect and survives the repaint as a ghost. */
+#define WIN_SHADOW_BLUR 16
+#define WIN_SHADOW_MARGIN ml_shadow_margin(WIN_SHADOW_BLUR)
 
 typedef struct client {
     int fd;
@@ -126,7 +132,7 @@ static struct {
     uint64_t damage_last;
     ml_region damage;
     /* input */
-    int mx, my;
+    ml_cursor cur;           /* the pointer: sprite, position, damage bounds */
     bool btn[3];
     win_t *drag_win, *resize_win, *hover_win;
     win_t *pointer_capture[3];
@@ -232,6 +238,7 @@ static bool win_visible(win_t *w)
     return w->mapped && !w->closing && !w->minimized && w->opacity > 0.01
         && (w->ws == C.cur_ws || (w->flags & (WIN_F_TOPMOST | WIN_F_BOTTOM)));
 }
+static void cursor_init(void);
 static void do_launch(const char *cmdline);
 static void respawn(void *ud);
 static void respawn_deferred(void *ud);
@@ -258,6 +265,12 @@ static void build_wallpaper(void)
     ml_fill_radial_glow(&c, cp, C.screen_w * 0.75, C.screen_h * 0.42, ml_rgba(255, 172, 122, 64));
     ml_pointd cp2 = { C.screen_w * 0.26, C.screen_h * 0.14 };
     ml_fill_radial_glow(&c, cp2, C.screen_w * 0.7, C.screen_h * 0.5, ml_rgba(92, 106, 198, 30));
+    /* The wallpaper is the base layer every damage repaint starts from, so it
+     * must be fully opaque. Blending an almost-opaque pixel onto itself is not
+     * idempotent - Porter-Duff over creeps the alpha towards 255 a step at a
+     * time - and the pixels the pointer used to cover are restored by exactly
+     * such a repaint. Flattening it once here makes every restore bit-exact. */
+    ml_surface_make_opaque(C.wallpaper);
 }
 
 /* --------------------------------------------------------- decorations -- */
@@ -353,23 +366,27 @@ static void paint_notifications(ml_ctx *c, ml_rect clip)
     }
 }
 
-static ml_rect cursor_damage_rect(int x, int y)
+/* ---------------------------------------------------------------- pointer --
+ *
+ * The pointer is the one thing a damage-only compositor must never get wrong,
+ * so its geometry lives in ml/cursor.c: the sprite is rasterized once, its ink
+ * box is *measured*, and the damage rect handed back for any position is that
+ * measured box plus a margin, clamped to the screen. The compositor only has to
+ * invalidate the two rects ml_cursor_move() gives it — old and new — which is
+ * what makes "no stale cursor pixels" structural instead of a lucky constant.
+ */
+static void cursor_init(void)
 {
-    return ml_rect_make(x - 4, y - 4, 24, 28);
-}
-
-static void paint_cursor(ml_ctx *c, ml_rect clip)
-{
-    ml_rect cr = cursor_damage_rect(C.mx, C.my);
-    if (ml_rect_empty(ml_rect_intersect(cr, clip))) return;
-
-    ml_path p;
-    ml_path_init(&p);
-    ml_path_parse(&p, "M0,0 L0,16 L4.4,12.4 L7.2,18.4 L9.8,17.2 L7,11.4 L12.4,11 Z");
-    ml_draw_path_fill(c, &p, ml_rgb(250, 250, 252), C.mx, C.my, 1.0);
-    ml_draw_path_stroke(c, &p, 1.0, ml_rgba(20, 22, 30, 200), C.mx, C.my, 1.0);
-    ml_path_free(&p);
-    (void)clip;
+    ml_cursor_sprite sprite;
+    ml_cursor_sprite_default(&sprite);
+    ml_cursor_init(&C.cur, &sprite, C.screen_w, C.screen_h);
+    ml_cursor_sprite_free(&sprite);
+    ML_INFO("pointer: sprite ink=%d,%d %dx%d damage=%d,%d %dx%d (margin %d px)",
+            C.cur.sprite.ink.x, C.cur.sprite.ink.y,
+            C.cur.sprite.ink.w, C.cur.sprite.ink.h,
+            ml_cursor_damage(&C.cur).x, ml_cursor_damage(&C.cur).y,
+            ml_cursor_damage(&C.cur).w, ml_cursor_damage(&C.cur).h,
+            C.cur.sprite.margin);
 }
 
 /* Paint a damage region into dst. Used by present() for the live fb and by
@@ -380,21 +397,53 @@ static void present_region(ml_surface *dst, ml_region *dmg)
     win_t *order[64];
     int n = 0;
     for (win_t *w = C.z_front; w && n < 64; w = w->z_next) order[n++] = w;
+
+    /* Pass 1: the scene, clipped to each damage rect. ml_blit_scrolled() is
+     * used for the wallpaper so that *every* pixel of the clip is written —
+     * ml_blit() shrinks its destination when the scrolled source rectangle
+     * falls outside the wallpaper, and the uncovered slice of the clip would
+     * keep the previous frame's pixels (the workspace-slide ghost). */
     for (size_t i = 0; i < ml_region_count(dmg); i++) {
         ml_rect clip = dmg->r[i];
         ml_ctx c;
         ml_ctx_init(&c, dst, clip);
-        ml_blit(&c, C.wallpaper, ml_rect_make(clip.x - (int)C.ws_offset, clip.y, clip.w, clip.h),
-                clip.x, clip.y, 255);
+        ml_blit_scrolled(&c, C.wallpaper, (int)C.ws_offset, 0, 255);
         for (int k = n - 1; k >= 0; k--) {
             win_t *w = order[k];
             if (!win_visible(w)) continue;
             paint_window(&c, w, clip, (w->flags & (WIN_F_TOPMOST | WIN_F_BOTTOM)) ? 0 : (int)C.ws_offset);
         }
         paint_notifications(&c, clip);
-        paint_cursor(&c, clip);
+    }
+
+    /* Pass 2: the pointer, exactly once. Painting it inside the per-rect loop
+     * above drew it once for every damage rect that happened to overlap it —
+     * with an under-merged region that meant the sprite's translucent outline
+     * was composited eight times over in a single frame (measured), which is
+     * both wasted work and a visible darkening of the outline. The scene pass
+     * has already repainted every pixel of the union of the damage rects, so
+     * compositing the sprite once over the part of its own damage box that is
+     * actually damaged is both correct and cheaper. */
+    ml_rect reach = ml_cursor_damage(&C.cur);
+    ml_rect area = ml_rect_make(0, 0, 0, 0);
+    for (size_t i = 0; i < ml_region_count(dmg); i++) {
+        ml_rect hit = ml_rect_intersect(reach, dmg->r[i]);
+        if (!ml_rect_empty(hit)) area = ml_rect_union_bounds(area, hit);
+    }
+    if (!ml_rect_empty(area)) {
+        ml_ctx c;
+        ml_ctx_init(&c, dst, area);
+        ml_cursor_paint(&c, &C.cur, area);
     }
 }
+
+/* Where the framebuffer currently shows the pointer. present() will not finish
+ * a frame that fails to repaint this box: a cursor left behind in the
+ * framebuffer is the single most visible artifact a damage-only compositor can
+ * produce, so the invariant is *enforced* here (and repaired) instead of being
+ * trusted to the callers that report the damage. */
+static bool g_fb_has_cursor;
+static int g_fb_cursor_x, g_fb_cursor_y;
 
 static void present(void)
 {
@@ -416,8 +465,41 @@ static void present(void)
         have = true;
     }
 
+    /* Cursor restore guard. A damage-only frame is only correct if it repaints
+     * both ends of the pointer's motion:
+     *   - where the framebuffer currently shows the pointer, or that cursor
+     *     stays on screen as a ghost;
+     *   - where the pointer is now, or this frame erases it and draws nothing.
+     * Normally input_move() adds both. This is the belt-and-braces that makes
+     * the guarantee hold even when a future caller forgets one of them: the
+     * second check in particular is what stops a "restore-only" frame from
+     * wiping the pointer off the display entirely. */
+    {
+        ml_rect boxes[2];
+        int nboxes = 0;
+        if (g_fb_has_cursor)
+            boxes[nboxes++] = ml_cursor_damage_at(&C.cur, g_fb_cursor_x, g_fb_cursor_y);
+        boxes[nboxes++] = ml_cursor_damage(&C.cur);
+        for (int i = 0; i < nboxes; i++) {
+            if (ml_region_covers_rect(&dmg, boxes[i])) continue;
+            static int repairs;
+            if (repairs < 8) {
+                repairs++;
+                ML_WARN("cursor: damage region did not cover the %s pointer "
+                        "(%d,%d %dx%d); adding it (repair %d)",
+                        i == 0 ? "on-screen" : "current",
+                        boxes[i].x, boxes[i].y, boxes[i].w, boxes[i].h, repairs);
+            }
+            ml_region_add(&dmg, boxes[i]);
+        }
+    }
+
     ml_raster_reset_stats();
     present_region(C.fb, &dmg);
+    /* the framebuffer now shows the pointer exactly where it is */
+    g_fb_has_cursor = true;
+    g_fb_cursor_x = C.cur.x;
+    g_fb_cursor_y = C.cur.y;
     C.damage_last = (uint64_t)ml_region_area(&dmg);
     if (C.disp.kind != ML_DISP_HEADLESS)
         ml_display_commit(&C.disp, C.fb->px, dmg.r, ml_region_count(&dmg));
@@ -534,7 +616,12 @@ static void win_damage_all(win_t *w)
 {
     ml_rect f;
     win_frame(w, &f);
-    damage_add(ml_rect_make(f.x - 24, f.y - 24, f.w + 48, f.h + 48));
+    /* The margin must cover the drop shadow, not just the frame: a shadow
+     * painted with blur B reaches ml_shadow_margin(B) pixels outside the rect,
+     * and anything outside the damage rect is never repainted, so a short
+     * margin leaves a stale ghost ring behind a moving window. */
+    int m = WIN_SHADOW_MARGIN;
+    damage_add(ml_rect_make(f.x - m, f.y - m, f.w + 2 * m, f.h + 2 * m));
     request_frame();
 }
 
@@ -588,20 +675,26 @@ static void anim_tick(void *ud)
     (void)ud;
     double now = ml_now_s();
     ml_anim_tick(C.anim, now);
-    for (win_t *w = C.z_front; w; w = w->z_next) {
+    /* Snapshot the next pointer *before* anything can free `w`: the fade
+     * completion path calls win_release(), and reading w->z_next afterwards
+     * (which is what `continue` does) is a use-after-free that can walk the
+     * window list into garbage. */
+    for (win_t *w = C.z_front; w; ) {
+        win_t *next = w->z_next;
+        bool released = false;
         if (w->fade && ml_anim_ud(w->fade) == w) {
             double v = ml_anim_value(w->fade);
             if (w->closing) w->opacity = v;
             else { w->opacity = v; w->scale = 0.94 + 0.06 * v; }
             if (!ml_anim_active(w->fade)) {
-                if (w->closing) { win_release(w); continue; }
-                if (w->minimized) { w->opacity = 0; w->scale = 1; }
+                if (w->closing) { win_release(w); released = true; }
+                else if (w->minimized) { w->opacity = 0; w->scale = 1; }
                 else { w->opacity = 1; w->scale = 1; }
-                w->fade = NULL;
+                if (!released) w->fade = NULL;
             }
-            win_damage_all(w);
+            if (!released) win_damage_all(w);
         }
-        if (w->geom) {
+        if (!released && w->geom) {
             ml_rect r = ml_anim_rect_value(w->geom);
             if (!ml_rect_eq(r, w->cur)) {
                 win_damage_all(w);
@@ -616,6 +709,7 @@ static void anim_tick(void *ud)
                 win_send_configure(w);
             }
         }
+        w = next;
     }
     if (C.ws_anim) {
         C.ws_offset = ml_anim_value(C.ws_anim);
@@ -843,7 +937,15 @@ static void handle_client(void *ud, int fd, uint32_t type, const void *payload, 
         const msg_win_commit *m = payload;
         win_t *w = win_find(m->id);
         if (!w) break;
-        for (uint32_t i = 0; i < m->n; i++) {
+        /* m->n is client-supplied and the payload only carries 32 rects: trust
+         * it and a malformed commit reads past the end of the message. */
+        uint32_t n = m->n;
+        if (n > 32) {
+            ML_WARN("client %s committed %u damage rects (max 32); clamping",
+                    cl->name[0] ? cl->name : "?", n);
+            n = 32;
+        }
+        for (uint32_t i = 0; i < n; i++) {
             ml_rect r = ml_rect_make(m->rects[i * 4], m->rects[i * 4 + 1], m->rects[i * 4 + 2], m->rects[i * 4 + 3]);
             r.x += w->cur.x; r.y += w->cur.y;
             damage_add(r);
@@ -1023,24 +1125,31 @@ static void accept_client(void *ud, uint32_t events)
 /* --------------------------------------------------------- input source -- */
 static void input_move(int x, int y)
 {
-    int oldx = C.mx, oldy = C.my;
-    C.mx = ML_CLAMP(x, 0, C.screen_w - 1);
-    C.my = ML_CLAMP(y, 0, C.screen_h - 1);
-    /* Every pointer move invalidates both the old and new cursor bounds.
-     * This is mandatory for damage-only scanout and prevents stale pixels. */
-    damage_add(cursor_damage_rect(oldx, oldy));
-    damage_add(cursor_damage_rect(C.mx, C.my));
+    int oldx = C.cur.x, oldy = C.cur.y;
+    ml_rect old_dmg, new_dmg;
+    bool moved = ml_cursor_move(&C.cur, x, y, &old_dmg, &new_dmg);
+    /* Every pointer move invalidates both the old and the new cursor bounds.
+     * This is mandatory for damage-only scanout and prevents stale pixels.
+     * ml_cursor_move() derives both rects from the *measured* ink box of the
+     * sprite, so they always contain every pixel the pointer can touch — the
+     * bounds are no longer a hand-written constant that can drift away from
+     * the sprite. */
+    if (moved) {
+        damage_add(old_dmg);
+        damage_add(new_dmg);
+    }
+    (void)oldx; (void)oldy;
     if (C.drag_win) {
         win_damage_all(C.drag_win);
-        C.drag_win->cur.x += C.mx - oldx;
-        C.drag_win->cur.y += C.my - oldy;
+        C.drag_win->cur.x += C.cur.x - oldx;
+        C.drag_win->cur.y += C.cur.y - oldy;
         C.drag_win->tgt = C.drag_win->cur;
         win_damage_all(C.drag_win);
     } else if (C.resize_win) {
         win_t *w = C.resize_win;
         win_damage_all(w);
-        w->cur.w = ML_CLAMP(w->cur.w + (C.mx - oldx), 240, C.screen_w);
-        w->cur.h = ML_CLAMP(w->cur.h + (C.my - oldy), 160, C.screen_h);
+        w->cur.w = ML_CLAMP(w->cur.w + (C.cur.x - oldx), 240, C.screen_w);
+        w->cur.h = ML_CLAMP(w->cur.h + (C.cur.y - oldy), 160, C.screen_h);
         w->tgt = w->cur;
         win_send_configure(w);
         win_damage_all(w);
@@ -1049,15 +1158,15 @@ static void input_move(int x, int y)
         for (int b = 0; b < 3; b++)
             if (C.btn[b] && C.pointer_capture[b]) { captured = C.pointer_capture[b]; break; }
         if (captured) {
-            send_input(captured, IN_MOVE, C.mx, C.my, 0, 0, 0);
+            send_input(captured, IN_MOVE, C.cur.x, C.cur.y, 0, 0, 0);
         } else {
-            win_t *w = win_at(C.mx, C.my, NULL, NULL, NULL);
+            win_t *w = win_at(C.cur.x, C.cur.y, NULL, NULL, NULL);
             if (w != C.hover_win) {
-                if (C.hover_win) send_input(C.hover_win, IN_LEAVE, C.mx, C.my, 0, 0, 0);
-                if (w) send_input(w, IN_ENTER, C.mx, C.my, 0, 0, 0);
+                if (C.hover_win) send_input(C.hover_win, IN_LEAVE, C.cur.x, C.cur.y, 0, 0, 0);
+                if (w) send_input(w, IN_ENTER, C.cur.x, C.cur.y, 0, 0, 0);
                 C.hover_win = w;
             }
-            if (w) send_input(w, IN_MOVE, C.mx, C.my, 0, 0, 0);
+            if (w) send_input(w, IN_MOVE, C.cur.x, C.cur.y, 0, 0, 0);
         }
     }
     request_frame();
@@ -1099,7 +1208,7 @@ static void input_key(uint32_t key, uint32_t mods)
     win_t *w = C.z_front;
     for (; w; w = w->z_next)
         if (win_visible(w) && !(w->flags & WIN_F_NO_FOCUS)) break;
-    if (w) send_input(w, IN_KEY, C.mx, C.my, 0, key, mods);
+    if (w) send_input(w, IN_KEY, C.cur.x, C.cur.y, 0, key, mods);
 }
 
 static void input_button(int btn, bool down)
@@ -1108,32 +1217,32 @@ static void input_button(int btn, bool down)
     C.btn[btn] = down;
     if (down) {
         bool in_deco = false;
-        win_t *w = win_at(C.mx, C.my, NULL, NULL, &in_deco);
+        win_t *w = win_at(C.cur.x, C.cur.y, NULL, NULL, &in_deco);
         if (getenv("MICA_INPUT_DEBUG"))
             ML_INFO("input button DOWN: button=%d screen=%d,%d target=%s id=%u deco=%d",
-                    btn + 1, C.mx, C.my, w ? w->appid : "<none>", w ? w->id : 0, in_deco ? 1 : 0);
+                    btn + 1, C.cur.x, C.cur.y, w ? w->appid : "<none>", w ? w->id : 0, in_deco ? 1 : 0);
         if (!w) return;
         if (in_deco) {
-            int db = deco_button_at(w, C.mx, C.my);
+            int db = deco_button_at(w, C.cur.x, C.cur.y);
             if (db == 0) { win_close(w); return; }
             if (db == 1) { minimize_win(w); return; }
             if (db == 2) { toggle_maximize(w); return; }
             focus_win(w);
             C.drag_win = w;
-            C.drag_ox = C.mx - w->cur.x;
-            C.drag_oy = C.my - w->cur.y;
+            C.drag_ox = C.cur.x - w->cur.x;
+            C.drag_oy = C.cur.y - w->cur.y;
             C.pointer_capture[btn] = w;
             return;
         }
         focus_win(w);
         C.pointer_capture[btn] = w;
-        send_input(w, IN_DOWN, C.mx, C.my, (uint32_t)btn + 1, 0, 0);
+        send_input(w, IN_DOWN, C.cur.x, C.cur.y, (uint32_t)btn + 1, 0, 0);
     } else {
         win_t *w = C.pointer_capture[btn];
         if (getenv("MICA_INPUT_DEBUG"))
             ML_INFO("input button UP: button=%d screen=%d,%d captured=%s id=%u",
-                    btn + 1, C.mx, C.my, w ? w->appid : "<none>", w ? w->id : 0);
-        if (w) send_input(w, IN_UP, C.mx, C.my, (uint32_t)btn + 1, 0, 0);
+                    btn + 1, C.cur.x, C.cur.y, w ? w->appid : "<none>", w ? w->id : 0);
+        if (w) send_input(w, IN_UP, C.cur.x, C.cur.y, (uint32_t)btn + 1, 0, 0);
         C.pointer_capture[btn] = NULL;
         if (btn == 0) {
             C.drag_win = NULL;
@@ -1144,11 +1253,11 @@ static void input_button(int btn, bool down)
 
 static void input_scroll(int dx, int dy)
 {
-    win_t *w = win_at(C.mx, C.my, NULL, NULL, NULL);
+    win_t *w = win_at(C.cur.x, C.cur.y, NULL, NULL, NULL);
     if (!w || !w->cl) return;
     msg_input m = {
         .id = w->id, .kind = IN_SCROLL,
-        .x = C.mx - w->cur.x, .y = C.my - w->cur.y,
+        .x = C.cur.x - w->cur.x, .y = C.cur.y - w->cur.y,
         .dx = dx, .dy = dy, .time_ns = ml_now_ns()
     };
     mlipc_send(w->cl->fd, MS_INPUT, &m, sizeof m);
@@ -1392,7 +1501,7 @@ static void input_event_fd(void *ud, uint32_t events)
             }
             if (e->type == EV_SYN && e->code == SYN_REPORT) {
                 if (pending_dx || pending_dy)
-                    input_move(C.mx + pending_dx, C.my + pending_dy);
+                    input_move(C.cur.x + pending_dx, C.cur.y + pending_dy);
                 if (pending_wheel || pending_hwheel)
                     input_scroll(pending_hwheel, pending_wheel);
                 pending_dx = pending_dy = pending_wheel = pending_hwheel = 0;
@@ -1758,6 +1867,7 @@ int main(int argc, char **argv)
     C.anim = ml_anim_engine_new(256);
     C.fb = ml_surface_new(C.screen_w, C.screen_h);
     build_wallpaper();
+    cursor_init();
     ml_region_init(&C.damage);
     C.vsync = ml_loop_add_timer(C.loop, 0, false, frame_tick, NULL);
 

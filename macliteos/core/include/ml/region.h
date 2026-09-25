@@ -20,6 +20,12 @@ int64_t ml_region_area(const ml_region *g);          /* sum, may double count ov
 ml_rect ml_region_bounds(const ml_region *g);
 bool ml_region_contains(const ml_region *g, int x, int y);
 bool ml_region_intersects_rect(const ml_region *g, ml_rect r);
+/* True when the union of the region covers every pixel of `r`.
+ * This is the check a compositor needs before it trusts a damage-only frame:
+ * if the region does not cover something that is currently on screen, that
+ * something survives the repaint as a stale ghost. Allocation-free: the
+ * decision is made one scanline at a time with a fixed-size interval list. */
+bool ml_region_covers_rect(const ml_region *g, ml_rect r);
 
 static inline void ml_region_remove_at(ml_region *g, size_t i)
 {
