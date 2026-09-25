@@ -722,6 +722,51 @@ static void input_button(int btn, bool down)
     }
 }
 
+static void input_move(int x, int y)
+{
+    int oldx = C.mx, oldy = C.my;
+    C.mx = ML_CLAMP(x, 0, C.screen_w - 1);
+    C.my = ML_CLAMP(y, 0, C.screen_h - 1);
+    damage_add(ml_rect_make(oldx - 4, oldy - 4, 24, 28));
+    damage_add(ml_rect_make(C.mx - 4, C.my - 4, 24, 28));
+
+    if (C.drag_win) {
+        win_damage_all(C.drag_win);
+        C.drag_win->cur.x += C.mx - oldx;
+        C.drag_win->cur.y += C.my - oldy;
+        C.drag_win->tgt = C.drag_win->cur;
+        win_damage_all(C.drag_win);
+        return;
+    }
+    if (C.resize_win) {
+        win_t *w = C.resize_win;
+        win_damage_all(w);
+        w->cur.w = ML_CLAMP(w->cur.w + (C.mx - oldx), 240, C.screen_w);
+        w->cur.h = ML_CLAMP(w->cur.h + (C.my - oldy), 160, C.screen_h);
+        w->tgt = w->cur;
+        win_send_configure(w);
+        win_damage_all(w);
+        return;
+    }
+
+    win_t *captured = NULL;
+    for (int b = 0; b < 3; b++)
+        if (C.btn[b] && C.pointer_capture[b]) { captured = C.pointer_capture[b]; break; }
+
+    if (captured) {
+        send_input(captured, IN_MOVE, C.mx, C.my, 0, 0, 0);
+    } else {
+        win_t *w = win_at(C.mx, C.my, NULL, NULL, NULL);
+        if (w != C.hover_win) {
+            if (C.hover_win) send_input(C.hover_win, IN_LEAVE, C.mx, C.my, 0, 0, 0);
+            if (w) send_input(w, IN_ENTER, C.mx, C.my, 0, 0, 0);
+            C.hover_win = w;
+        }
+        if (w) send_input(w, IN_MOVE, C.mx, C.my, 0, 0, 0);
+    }
+    request_frame();
+}
+
 static void input_scroll(int dx, int dy)
 {
     win_t *w = win_at(C.mx, C.my, NULL, NULL, NULL);
