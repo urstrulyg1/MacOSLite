@@ -30,7 +30,7 @@ mica_client *mica_connect(const char *name)
     uint32_t len = 0;
     uint8_t buf[4096];
     uint32_t t = mlipc_recv(fd, buf, sizeof buf, &len, NULL);
-    if (t != MS_WELCOME || len < sizeof(msg_welcome)) { ml_free(c); return NULL; }
+    if (t != MS_WELCOME || len < sizeof(msg_welcome)) { close(fd); ml_free(c); return NULL; }
     memcpy(&c->info, buf, sizeof c->info);
     c->loop = ml_loop_new();
     mlipc_watch(c->loop, fd, handle_msg, c);
@@ -176,23 +176,39 @@ void mica_win_focus(mica_win *win)
 }
 void mica_win_resize(mica_win *win, int w, int h)
 {
+    if (!win || w <= 0 || h <= 0) return;
     if (w == win->w && h == win->h) return;
-    size_t bytes = (size_t)w * h * 4;
+    size_t bytes = (size_t)w * (size_t)h * 4;
+    if (w > INT32_MAX || h > INT32_MAX || bytes / 4 != (size_t)w * (size_t)h) return;
+
     int shm = ml_shm_create(bytes);
     if (shm < 0) return;
     uint32_t *px = ml_shm_map(shm, bytes);
     if (!px) { close(shm); return; }
-    munmap(win->surf->px, (size_t)win->w * win->h * 4);
-    close((int)(intptr_t)win->surf->backend_tex);
+
+    msg_win_resize m = { .id = win->id, .w = w, .h = h };
+    /* Do not destroy the old surface until the compositor has accepted the
+     * new fd. If the IPC send fails, the client keeps a coherent old surface
+     * instead of rendering into a buffer the compositor no longer knows. */
+    if (!mlipc_send_fd(win->c->fd, MC_WIN_RESIZE, &m, sizeof m, shm)) {
+        munmap(px, bytes);
+        close(shm);
+        return;
+    }
+
+    int old_shm = (int)(intptr_t)win->surf->backend_tex;
+    size_t old_bytes = (size_t)win->w * (size_t)win->h * 4;
+    munmap(win->surf->px, old_bytes);
+    if (old_shm >= 0) close(old_shm);
+
     win->surf->px = px;
     win->surf->backend_tex = (void *)(intptr_t)shm;
     win->w = w; win->h = h;
     win->surf->w = w; win->surf->h = h; win->surf->stride = w;
     win->surf->bytes = bytes;
     ml_surface_damage_all(win->surf);
-    msg_win_resize m = { .id = win->id, .w = w, .h = h };
-    mlipc_send_fd(win->c->fd, MC_WIN_RESIZE, &m, sizeof m, shm);
 }
+
 void mica_launch(mica_client *c, const char *cmdline)
 {
     msg_launch m = { 0 };
