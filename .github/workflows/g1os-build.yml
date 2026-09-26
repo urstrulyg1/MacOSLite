@@ -100,6 +100,47 @@ jobs:
           grep -F "boot/g1os-initrd-manifest.txt" out/iso-file-list.txt >/dev/null
           grep -F "boot/g1os-boot-manifest.txt" out/iso-file-list.txt >/dev/null
 
+      - name: Failure-injection and artifact integrity tests
+        working-directory: macliteos
+        run: |
+          set -eu
+          TMP="$PWD/out/ci-tamper"
+          rm -rf "$TMP"
+          mkdir -p "$TMP"
+
+          # The validator must reject a corrupted initramfs rather than silently
+          # accepting a damaged boot artifact.
+          cp out/initrd-maclite.img "$TMP/initrd-corrupt.img"
+          printf 'G1OS-CI-CORRUPTION' | dd of="$TMP/initrd-corrupt.img" bs=1 seek=64 conv=notrunc status=none
+          if sh scripts/validate-boot-artifacts.sh "$TMP/initrd-corrupt.img" >/dev/null 2>&1; then
+            echo "ERROR: corrupted initramfs was accepted." >&2
+            exit 1
+          fi
+          echo "PASS: corrupted initramfs rejected."
+
+          # ISO checksum must be independently verifiable.
+          sha256sum -c out/G1OS.iso.sha256 >/dev/null
+          echo "PASS: ISO checksum verified."
+
+          # The authoritative manifest must agree with the exact artifacts.
+          KERNEL_SHA="$(sha256sum out/vmlinuz-maclite | cut -d' ' -f1)"
+          INITRD_SHA="$(sha256sum out/initrd-maclite.img | cut -d' ' -f1)"
+          grep -F "artifact_sha256=$KERNEL_SHA" out/g1os-kernel-manifest.txt >/dev/null
+          grep -F "artifact_sha256=$INITRD_SHA" out/g1os-initrd-manifest.txt >/dev/null
+          echo "PASS: kernel/initramfs manifests match exact artifacts."
+
+          # Ensure the release image does not accidentally contain development
+          # staging trees or host-specific absolute paths.
+          if grep -F "/base/" out/iso-file-list.txt >/dev/null; then
+            echo "ERROR: ISO contains leaked /base staging tree." >&2
+            exit 1
+          fi
+          if grep -E '/(home|Users)/[^/]+/' out/iso-file-list.txt >/dev/null; then
+            echo "ERROR: ISO file list contains host-specific absolute paths." >&2
+            exit 1
+          fi
+          echo "PASS: ISO has no leaked staging/host paths."
+
       - name: Installation contract and destructive-operation safety audit
         working-directory: macliteos
         run: |
