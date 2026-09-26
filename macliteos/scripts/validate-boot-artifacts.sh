@@ -72,6 +72,13 @@ for dir in "$TMP/initrd"/usr/bin "$TMP/initrd"/sbin "$TMP/initrd"/bin; do
         check_elf "$exe"
     done
 done
+# Validate the complete shared-library closure, including dependencies of bundled libraries.
+for libdir in "$TMP/initrd"/lib "$TMP/initrd"/lib64 "$TMP/initrd"/usr/lib "$TMP/initrd"/usr/lib64; do
+    [ -d "$libdir" ] || continue
+    find "$libdir" -type f -print | while IFS= read -r lib; do
+        check_elf "$lib"
+    done
+done
 
 KERNEL=${G1OS_KERNEL:-$OUT/vmlinuz-maclite}
 [ -s "$KERNEL" ] || fail "kernel artifact missing: $KERNEL"
