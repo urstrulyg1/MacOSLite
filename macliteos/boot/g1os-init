@@ -278,7 +278,7 @@ export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64:/run/maclite-base/lib:/ru
 CI_INSTALL=0
 case " $CMDLINE " in *rd.maclite=ci-install*) CI_INSTALL=1 ;; esac
 CI_MARKER_DEV=""
-if command -v blkid >/dev/null 2>&1; then CI_MARKER_DEV=$(blkid -t LABEL=G1OS_CI -o device 2>/dev/null | head -n 1 || true); fi
+if command -v blkid >/dev/null 2>&1; then CI_MARKER_DEV=$(blkid -t LABEL=G1OS_CI -o device 2>/dev/null || true); fi
 [ -n "$CI_MARKER_DEV" ] && CI_INSTALL=1
 if [ "$CI_INSTALL" = 1 ]; then
         status OK "CI installation integration mode enabled"
