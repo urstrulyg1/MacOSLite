@@ -41,9 +41,9 @@ if [ -s "$ISO" ] && command -v unsquashfs >/dev/null 2>&1; then
     for p in "$TMP/iso/boot/vmlinuz-maclite" "$TMP/iso/boot/initrd-maclite.img" "$TMP/iso/boot/g1os-boot-manifest.txt" "$TMP/iso/EFI/BOOT/BOOTX64.EFI"; do
       if [ -s "$p" ]; then pass "ISO boot artifact present: $p"; else fail "ISO boot artifact missing/empty: $p"; fi
     done
-    unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/bin/mica-installer >/dev/null 2>&1 && pass "ISO contains mica-installer" || fail "ISO missing mica-installer"
-    unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/bin/maclite-installer-backend >/dev/null 2>&1 && pass "ISO contains installer backend" || fail "ISO missing installer backend"
-    unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/share/maca-lite/runtime-provenance.sha256 >/dev/null 2>&1 && pass "ISO contains runtime provenance" || fail "ISO missing runtime provenance"
+    if unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/bin/mica-installer >/dev/null 2>&1; then pass "ISO contains mica-installer"; else fail "ISO missing mica-installer"; fi
+    if unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/bin/maclite-installer-backend >/dev/null 2>&1; then pass "ISO contains installer backend"; else fail "ISO missing installer backend"; fi
+    if unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/share/maca-lite/runtime-provenance.sha256 >/dev/null 2>&1; then pass "ISO contains runtime provenance"; else fail "ISO missing runtime provenance"; fi
   else fail "could not extract ISO for installation-contract inspection"; fi
 fi
 # Exercise the complete backend state machine in dry-run mode. This performs
