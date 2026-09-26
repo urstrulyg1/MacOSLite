@@ -100,6 +100,12 @@ jobs:
           grep -F "boot/g1os-initrd-manifest.txt" out/iso-file-list.txt >/dev/null
           grep -F "boot/g1os-boot-manifest.txt" out/iso-file-list.txt >/dev/null
 
+      - name: Installation contract and destructive-operation safety audit
+        working-directory: macliteos
+        run: |
+          set -eu
+          sh scripts/audit-installation-contract.sh out/G1OS.iso
+
       - name: Boot ISO under real UEFI QEMU and require graphical installer readiness
         working-directory: macliteos
         run: |
