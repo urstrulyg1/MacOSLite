@@ -565,8 +565,19 @@ static void stop_backend(bool terminate)
         INSTALL_TIMER = NULL;
     }
     if (terminate && INSTALL_PID > 0) {
-        kill(INSTALL_PID, SIGTERM);
-        waitpid(INSTALL_PID, NULL, 0);
+        pid_t pid = INSTALL_PID;
+        (void)kill(pid, SIGTERM);
+        for (int i = 0; i < 20; i++) {
+            int status = 0;
+            pid_t r = waitpid(pid, &status, WNOHANG);
+            if (r == pid || (r < 0 && errno == ECHILD)) break;
+            if (r < 0 && errno != EINTR) break;
+            usleep(100000);
+        }
+        if (waitpid(pid, NULL, WNOHANG) == 0) {
+            (void)kill(pid, SIGKILL);
+            (void)waitpid(pid, NULL, 0);
+        }
     }
     if (INSTALL_FD >= 0) close(INSTALL_FD);
     INSTALL_FD = -1;
