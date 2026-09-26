@@ -88,14 +88,14 @@ while read -r pat; do
     [ "$found" = 1 ] || { echo "ERROR: initrd.list entry has no matching source: $pat" >&2; exit 4; }
 done < boot/initrd.list
 
-for opt_applet in mknod mdev partx sfdisk; do
+for opt_applet in mknod mdev partx sfdisk findfs blkid blockdev sync; do
     if "$W/bin/busybox" --list 2>/dev/null | grep -qx "$opt_applet"; then
         ln -sf /bin/busybox "$W/bin/$opt_applet" 2>/dev/null || true
         ln -sf /bin/busybox "$W/sbin/$opt_applet" 2>/dev/null || true
     fi
 done
 
-for extra_tool in findmnt lsblk sfdisk sgdisk parted partprobe udevadm mknod partx wipefs; do
+for extra_tool in findmnt lsblk sfdisk sgdisk parted partprobe udevadm mknod partx wipefs findfs blkid blockdev sync; do
     for tool_path in "/usr/sbin/$extra_tool" "/sbin/$extra_tool" "/usr/bin/$extra_tool" "/bin/$extra_tool"; do
         if [ -x "$tool_path" ] && [ ! -e "$W/usr/bin/$extra_tool" ] && [ ! -e "$W/bin/$extra_tool" ] && [ ! -e "$W/sbin/$extra_tool" ]; then
             dest_dir="$W/usr/bin"

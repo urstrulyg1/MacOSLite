@@ -82,6 +82,48 @@ def test_continue_state_machine():
     assert "selected disk is unavailable" in installer
     print("PASS: Continue/Back state transitions and invalid-target diagnostics")
 
+def test_summary_complete_state_machine():
+    import pathlib
+    installer = pathlib.Path("installer/mica-installer.c").read_text()
+
+    # Production hitbox must remain exactly aligned with the rendered Complete button.
+    assert "rect_contains_inclusive(x, y, cx - 100, h - 64, 200, 38)" in installer,         "Complete hitbox must remain aligned with the existing 200x38 SUMMARY button"
+
+    # The transition is a dedicated state-machine action, not a rendering workaround.
+    assert "static void activate_complete(void)" in installer
+    assert "STAGE = STAGE_COMPLETE;" in installer
+    assert 'persist_installer_state("summary_to_complete")' in installer
+
+    # Completion is fail-closed: only a fully verified, quiescent backend can transition.
+    assert "BACKEND_VERIFIED" in installer
+    assert "BACKEND_ACTIVE" in installer
+    assert "INSTALL_PID > 0" in installer
+    assert "INSTALL_PROGRESS < 100" in installer
+    assert "SUMMARY_CHECKS[i].passed" in installer
+
+    # A real physical click requires DOWN capture followed by matching UP dispatch.
+    assert "COMPLETE_BUTTON_PRESSED = true;" in installer
+    assert "bool was_complete = COMPLETE_BUTTON_PRESSED;" in installer
+    assert "if (was_complete && STAGE == STAGE_SUMMARY" in installer
+    assert "activate_complete();" in installer
+
+    down_start = installer.index("if (in->kind == IN_DOWN && in->button == 1)")
+    up_start = installer.index("if (in->kind == IN_UP && in->button == 1)")
+    down_path = installer[down_start:up_start]
+    assert "activate_complete();" not in down_path,         "SUMMARY Complete must never transition on mouse DOWN alone"
+
+    # Movement cannot activate the state transition; it only redraws pressed state.
+    move_start = installer.index("if (in->kind == IN_MOVE")
+    move_path = installer[move_start:]
+    assert "activate_complete();" not in move_path.split("/* Compatibility", 1)[0],         "Mouse movement must never activate Complete"
+
+    # The Complete button must be one-shot: its pressed state is cleared on UP,
+    # and the action itself requires STAGE_SUMMARY.
+    assert "COMPLETE_BUTTON_PRESSED = false;" in installer
+    assert "STAGE == STAGE_SUMMARY &&" in installer
+
+    print("PASS: SUMMARY Complete click regression: physical DOWN/UP -> STAGE_COMPLETE, with verification gate")
+
 
 def test_usb_protection():
     disks = [
@@ -420,6 +462,20 @@ def test_partition_node_resolution_resilience():
     print("PASS: partition node resolution resilience, sysfs discovery, and mknod fallback")
 
 
+def test_partitioning_fallback_and_repair_resilience():
+    """Verify backend has multi-tool partitioning fallback, wipes both disk headers, and falls back from unpartitioned repair."""
+    backend_src = pathlib.Path("installer/maclite-installer-backend").read_text()
+    rootfs_backend = pathlib.Path("rootfs/usr/bin/maclite-installer-backend").read_text()
+
+    assert backend_src == rootfs_backend, "Rootfs backend must match installer backend"
+    assert "sfdisk" in backend_src and "parted" in backend_src and "sgdisk" in backend_src, \
+        "Backend must support sfdisk, parted, and sgdisk fallback hierarchy"
+    assert "seek_sec=" in backend_src, "Backend must wipe secondary GPT header at end of disk"
+    assert "has_partitions=" in backend_src, "Backend repair mode must check whether partitions exist"
+    assert "REPAIR_MODE=0" in backend_src, "Backend repair mode must fall back to fresh partitioning if target is unpartitioned"
+    print("PASS: partitioning multi-tool fallback, dual-header wipe, and repair mode resilience")
+
+
 def test_iso_clean_staging_and_elf_scan():
     """Verify ISO does not leak base staging, and initrd scans all bin/sbin dirs."""
     make_iso = pathlib.Path("scripts/make-iso.sh").read_text()
@@ -440,6 +496,7 @@ def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
     test_continue_state_machine()
+    test_summary_complete_state_machine()
     test_usb_protection()
     test_storage_candidate_policy()
     test_console_handoff_architecture()
@@ -460,10 +517,12 @@ def main():
     test_iso_assembly_artifact_paths()
     test_findmnt_resilience_and_cursor_blit_integrity()
     test_partition_node_resolution_resilience()
+    test_partitioning_fallback_and_repair_resilience()
     test_iso_clean_staging_and_elf_scan()
     print("All G1OS installer logic tests PASSED.\n")
     return 0
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
