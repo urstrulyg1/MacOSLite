@@ -411,7 +411,7 @@ static bool is_device_live_boot(const char *name)
     if (!f) return false;
     char line[512];
     while (fgets(line, sizeof line, f)) {
-        if (!strstr(line, "/run/maclite-base") && !strstr(line, "/run/maclite-live") &&
+        if (!strstr(line, "/run/live") && !strstr(line, "/run/maclite-base") && !strstr(line, "/run/maclite-live") &&
             !strstr(line, "/cdrom") && !strstr(line, "/mnt/live")) continue;
         char src[128] = {0}, mp[128] = {0};
         if (sscanf(line, "%127s %127s", src, mp) == 2) {

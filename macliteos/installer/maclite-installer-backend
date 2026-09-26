@@ -305,7 +305,7 @@ read_block_tag() {
   value=""
   attempt=1
   while [ "$attempt" -le 10 ]; do
-    value=$(blkid -s "$tag" -o value "$dev" 2>/dev/null || true)
+    value=$(blkid -c /dev/null -s "$tag" -o value "$dev" 2>/dev/null || blkid -s "$tag" -o value "$dev" 2>/dev/null || true)
     if [ -n "$value" ]; then
       printf '%s\n' "$value"
       return 0
@@ -318,6 +318,50 @@ read_block_tag() {
 
 require_partition_nodes() {
   [ "$DRY_RUN" = 1 ] && return 0
+  sync
+  attempt=1
+  while [ "$attempt" -le 15 ]; do
+    all_present=1
+    for part in "$DEV_BOOT" "$DEV_DATA" "$DEV_BASE"; do
+      if [ ! -b "$part" ]; then
+        # Check if the kernel has the partition registered in sysfs
+        part_name=${part#/dev/}
+        dev_file="/sys/class/block/$part_name/dev"
+        [ -e "$dev_file" ] || dev_file="/sys/block/$TARGET/$part_name/dev"
+        if [ -r "$dev_file" ]; then
+          dev_num=$(cat "$dev_file" 2>/dev/null || true)
+          if [ -n "$dev_num" ]; then
+            maj=${dev_num%:*}
+            min=${dev_num#*:}
+            if command -v mknod >/dev/null 2>&1; then
+              rm -f "$part" 2>/dev/null || true
+              mknod "$part" b "$maj" "$min" 2>/dev/null || true
+              chmod 0660 "$part" 2>/dev/null || true
+            fi
+          fi
+        fi
+        if [ ! -b "$part" ]; then
+          all_present=0
+        fi
+      fi
+    done
+    if [ "$all_present" = 1 ]; then
+      return 0
+    fi
+    # If device nodes are delayed, trigger available rescan/settle mechanisms
+    if command -v udevadm >/dev/null 2>&1; then
+      udevadm settle --timeout=1 2>/dev/null || true
+    fi
+    if command -v mdev >/dev/null 2>&1; then
+      mdev -s 2>/dev/null || true
+    fi
+    if command -v partx >/dev/null 2>&1; then
+      partx -u "$DEV" 2>/dev/null || partx -a "$DEV" 2>/dev/null || true
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+
   for part in "$DEV_BOOT" "$DEV_DATA" "$DEV_BASE"; do
     [ -b "$part" ] || fail "expected target partition did not appear after partition-table update: $part"
   done
@@ -327,12 +371,14 @@ require_partition_nodes() {
 PART_TOOL=""
 if command -v sgdisk >/dev/null 2>&1; then
   PART_TOOL="sgdisk"
+elif command -v sfdisk >/dev/null 2>&1; then
+  PART_TOOL="sfdisk"
 elif command -v parted >/dev/null 2>&1; then
   PART_TOOL="parted"
 elif command -v fdisk >/dev/null 2>&1; then
   PART_TOOL="fdisk"
 fi
-[ -n "$PART_TOOL" ] || [ "$DRY_RUN" = 1 ] || fail "required partitioning tool missing (need sgdisk, parted, or fdisk)"
+[ -n "$PART_TOOL" ] || [ "$DRY_RUN" = 1 ] || fail "required partitioning tool missing (need sgdisk, sfdisk, parted, or fdisk)"
 
 # Detect filesystem formatters
 if ! command -v mkfs.vfat >/dev/null 2>&1 && ! command -v mkdosfs >/dev/null 2>&1; then
@@ -406,11 +452,27 @@ if [ "$REPAIR_MODE" = 1 ]; then
 else
   step 3 30 "Repartitioning target with EFI, persistent data and root partitions ($PART_TOOL)"
   if [ "$DRY_RUN" = 0 ]; then
+    for p in "${DEV}"* "${DEV}"p*; do
+      [ -b "$p" ] || continue
+      umount -f "$p" 2>/dev/null || true
+      if command -v swapoff >/dev/null 2>&1; then
+        swapoff "$p" 2>/dev/null || true
+      fi
+    done
+    if command -v wipefs >/dev/null 2>&1; then
+      wipefs -a "$DEV" 2>/dev/null || true
+    fi
+    dd if=/dev/zero of="$DEV" bs=1M count=4 conv=notrunc 2>/dev/null || true
+    sync
+
     if [ "$PART_TOOL" = "sgdisk" ]; then
       run sgdisk --zap-all "$DEV"
       run sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT "$DEV"
       run sgdisk -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA "$DEV"
       run sgdisk -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE "$DEV"
+    elif [ "$PART_TOOL" = "sfdisk" ]; then
+      run sh -c 'printf "label: gpt\n,256M,U\n,4G,L\n,,L\n" | sfdisk --wipe always --wipe-partitions always "$1"' sh "$DEV" 2>/dev/null || \
+      run sh -c 'printf "label: gpt\n,256M,U\n,4G,L\n,,L\n" | sfdisk "$1"' sh "$DEV"
     elif [ "$PART_TOOL" = "parted" ]; then
       run parted -s "$DEV" mklabel gpt
       run parted -s "$DEV" mkpart MACLITE_BOOT fat32 1MiB 257MiB
@@ -420,6 +482,7 @@ else
     else
       run sh -c 'printf "%s\\n" "g" "n" "1" "" "+256M" "t" "1" "1" "n" "2" "" "+4G" "t" "2" "20" "n" "3" "" "" "t" "3" "20" "w" | fdisk "$1"' sh "$DEV"
     fi
+    sync
     if command -v partprobe >/dev/null 2>&1; then
       run partprobe "$DEV"
     elif command -v blockdev >/dev/null 2>&1; then
@@ -427,8 +490,10 @@ else
     else
       fail "cannot refresh kernel partition table: neither partprobe nor blockdev is available"
     fi
+    if command -v udevadm >/dev/null 2>&1; then
+      udevadm settle --timeout=3 2>/dev/null || true
+    fi
     require_partition_nodes
-    sleep 1
   fi
 
   step 4 40 "Formatting fresh filesystems"
@@ -519,7 +584,7 @@ EOF
 
   rm -f "$BASE_MNT/.g1os_install_in_progress"
   run sync
-  run umount "$BASE_MNT"
+  umount "$BASE_MNT" 2>/dev/null || { sleep 1; umount -f "$BASE_MNT" 2>/dev/null; } || umount -l "$BASE_MNT" 2>/dev/null || fail "cannot unmount target base partition after installation"
   step 6 70 "Installing Apple EFI fallback bootloader and UUID-bound boot configuration"
 fi
 
@@ -539,9 +604,14 @@ if [ "$DRY_RUN" = 0 ]; then
       run grub-mkimage -O x86_64-efi -o "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" -p /boot/grub part_gpt part_msdos fat ext2 linux search search_fs_uuid normal
     else
       COPIED_LOADER=0
-      for cand in /run/live/EFI/BOOT/BOOTX64.EFI /run/live/boot/bootx64.efi /EFI/BOOT/BOOTX64.EFI /boot/bootx64.efi /run/live/EFI/BOOT/bootx64.efi; do
+      for cand in \
+        /run/live/EFI/BOOT/BOOTX64.EFI /run/live/EFI/BOOT/bootx64.efi \
+        /run/live/boot/bootx64.efi /run/live/boot/BOOTX64.EFI \
+        /run/maclite-base/boot/bootx64.efi /run/maclite-base/EFI/BOOT/BOOTX64.EFI \
+        /EFI/BOOT/BOOTX64.EFI /EFI/BOOT/bootx64.efi /boot/bootx64.efi /boot/BOOTX64.EFI; do
         if [ -s "$cand" ]; then
           run cp "$cand" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"
+          run cp "$cand" "$BOOT_MNT/EFI/BOOT/bootx64.efi" 2>/dev/null || true
           COPIED_LOADER=1
           break
         fi
@@ -618,7 +688,7 @@ run sync
 emit_state "FINALIZING"
 step 7 78 "Finalizing disk sync and preparing verification mounts"
 run sync
-run umount "$BOOT_MNT"
+umount "$BOOT_MNT" 2>/dev/null || { sleep 1; umount -f "$BOOT_MNT" 2>/dev/null; } || umount -l "$BOOT_MNT" 2>/dev/null || fail "cannot unmount target boot partition before verification"
 
 # ==============================================================================
 # MANDATORY FINAL VERIFICATION STAGE
@@ -796,9 +866,9 @@ fi
 # Unmount verification mounts cleanly
 if [ "$DRY_RUN" = 0 ]; then
   run sync
-  umount "$VERIFY_BOOT" || fail "Verification FAIL: cannot unmount boot partition"
-  umount "$VERIFY_ROOT" || fail "Verification FAIL: cannot unmount root partition"
-  rmdir "$VERIFY_ROOT" "$VERIFY_BOOT"
+  umount "$VERIFY_BOOT" 2>/dev/null || { sleep 1; umount -f "$VERIFY_BOOT" 2>/dev/null; } || umount -l "$VERIFY_BOOT" 2>/dev/null || fail "Verification FAIL: cannot unmount boot partition"
+  umount "$VERIFY_ROOT" 2>/dev/null || { sleep 1; umount -f "$VERIFY_ROOT" 2>/dev/null; } || umount -l "$VERIFY_ROOT" 2>/dev/null || fail "Verification FAIL: cannot unmount root partition"
+  rmdir "$VERIFY_ROOT" "$VERIFY_BOOT" 2>/dev/null || true
 fi
 
 # Emit Verification Summary JSON

@@ -88,11 +88,20 @@ while read -r pat; do
     [ "$found" = 1 ] || { echo "ERROR: initrd.list entry has no matching source: $pat" >&2; exit 4; }
 done < boot/initrd.list
 
-for extra_tool in findmnt lsblk; do
-    for tool_path in "/usr/bin/$extra_tool" "/bin/$extra_tool"; do
-        if [ -x "$tool_path" ] && [ ! -e "$W/usr/bin/$extra_tool" ] && [ ! -e "$W/bin/$extra_tool" ]; then
-            cp -a "$tool_path" "$W/usr/bin/$extra_tool"
-            chmod 0755 "$W/usr/bin/$extra_tool"
+for opt_applet in mknod mdev partx sfdisk; do
+    if "$W/bin/busybox" --list 2>/dev/null | grep -qx "$opt_applet"; then
+        ln -sf /bin/busybox "$W/bin/$opt_applet" 2>/dev/null || true
+        ln -sf /bin/busybox "$W/sbin/$opt_applet" 2>/dev/null || true
+    fi
+done
+
+for extra_tool in findmnt lsblk sfdisk sgdisk parted partprobe udevadm mknod partx wipefs; do
+    for tool_path in "/usr/sbin/$extra_tool" "/sbin/$extra_tool" "/usr/bin/$extra_tool" "/bin/$extra_tool"; do
+        if [ -x "$tool_path" ] && [ ! -e "$W/usr/bin/$extra_tool" ] && [ ! -e "$W/bin/$extra_tool" ] && [ ! -e "$W/sbin/$extra_tool" ]; then
+            dest_dir="$W/usr/bin"
+            case "$tool_path" in */sbin/*) dest_dir="$W/sbin" ;; esac
+            cp -a "$tool_path" "$dest_dir/$extra_tool"
+            chmod 0755 "$dest_dir/$extra_tool"
             break
         fi
     done

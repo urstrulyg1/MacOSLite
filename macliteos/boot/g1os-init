@@ -125,46 +125,72 @@ case " $CMDLINE " in
         while :; do /bin/sh </dev/console >/dev/console 2>&1 || sleep 2; done
         ;;
 esac
-ROOT_DEV=""
+HAS_ROOT_PARAM=0
 for param in $CMDLINE; do
     case "$param" in
-        root=UUID=*) ROOT_DEV=$(blkid -U "${param#root=UUID=}" 2>/dev/null || true) ;;
-        root=PARTUUID=*) ROOT_DEV=$(blkid -t PARTUUID="${param#root=PARTUUID=}" -o device 2>/dev/null || true) ;;
-        root=/dev/*) ROOT_DEV=${param#root=} ;;
+        root=*) HAS_ROOT_PARAM=1; break ;;
     esac
 done
-if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
-    status OK "Installed root resolved: $ROOT_DEV"
-    mount "$ROOT_DEV" /mnt || fatal "cannot mount installed root $ROOT_DEV"
-    [ -x /mnt/usr/bin/mica-comp ] || fatal "installed root is missing /usr/bin/mica-comp"
-    mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run
-    mount --bind /dev /mnt/dev || fatal "cannot bind /dev into installed root"
-    mount -t proc proc /mnt/proc || fatal "cannot mount /proc in installed root"
-    mount -t sysfs sysfs /mnt/sys || fatal "cannot mount /sys in installed root"
-    mount -t tmpfs -o mode=0755 tmpfs /mnt/run || fatal "cannot mount /run in installed root"
 
-    # The installed image uses a custom PID 1, so /etc/fstab is not consumed
-    # by a general-purpose init system. Mount the persistent data partition
-    # explicitly from the UUID written by the installer instead of silently
-    # running without it.
-    DATA_UUID=""
-    if [ -r /mnt/etc/fstab ]; then
-        DATA_UUID=$(awk '$2 == "/var/data" && $1 ~ /^UUID=/ {sub(/^UUID=/, "", $1); print $1; exit}' /mnt/etc/fstab 2>/dev/null || true)
-    fi
-    [ -n "$DATA_UUID" ] || fatal "installed /etc/fstab has no UUID for /var/data"
-    DATA_DEV=$(blkid -U "$DATA_UUID" 2>/dev/null || true)
-    if [ -z "$DATA_DEV" ] || [ ! -b "$DATA_DEV" ]; then
-        fatal "persistent data partition UUID $DATA_UUID could not be resolved"
-    fi
-    mkdir -p /mnt/var/data
-    mount "$DATA_DEV" /mnt/var/data || fatal "cannot mount persistent data partition $DATA_DEV"
-    status OK "Persistent data filesystem mounted: $DATA_DEV"
+if [ "$HAS_ROOT_PARAM" -eq 1 ]; then
+    ROOT_DEV=""
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        for param in $CMDLINE; do
+            case "$param" in
+                root=UUID=*) ROOT_DEV=$(blkid -U "${param#root=UUID=}" 2>/dev/null || true) ;;
+                root=PARTUUID=*) ROOT_DEV=$(blkid -t PARTUUID="${param#root=PARTUUID=}" -o device 2>/dev/null || true) ;;
+                root=/dev/*) ROOT_DEV=${param#root=} ;;
+            esac
+        done
+        if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
+            break
+        fi
+        sleep 1
+    done
 
-    status OK "Installed root filesystem verified"
-    silence_graphical_console
-    BACKEND=auto
-    status OK "Starting installed G1OS compositor ($BACKEND)"
-    exec chroot /mnt /usr/bin/mica-comp --session --backend "$BACKEND"
+    if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
+        status OK "Installed root resolved: $ROOT_DEV"
+        mount "$ROOT_DEV" /mnt || fatal "cannot mount installed root $ROOT_DEV"
+        [ -x /mnt/usr/bin/mica-comp ] || fatal "installed root is missing /usr/bin/mica-comp"
+        mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run /mnt/tmp
+        mount --bind /dev /mnt/dev || fatal "cannot bind /dev into installed root"
+        mount -t proc proc /mnt/proc || fatal "cannot mount /proc in installed root"
+        mount -t sysfs sysfs /mnt/sys || fatal "cannot mount /sys in installed root"
+        mount -t tmpfs -o mode=0755 tmpfs /mnt/run || fatal "cannot mount /run in installed root"
+        mount -t tmpfs -o mode=1777 tmpfs /mnt/tmp || fatal "cannot mount /tmp in installed root"
+
+        # The installed image uses a custom PID 1, so /etc/fstab is not consumed
+        # by a general-purpose init system. Mount the persistent data partition
+        # explicitly from the UUID written by the installer instead of silently
+        # running without it.
+        DATA_UUID=""
+        if [ -r /mnt/etc/fstab ]; then
+            DATA_UUID=$(awk '$2 == "/var/data" && $1 ~ /^UUID=/ {sub(/^UUID=/, "", $1); print $1; exit}' /mnt/etc/fstab 2>/dev/null || true)
+        fi
+        [ -n "$DATA_UUID" ] || fatal "installed /etc/fstab has no UUID for /var/data"
+        DATA_DEV=""
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            DATA_DEV=$(blkid -U "$DATA_UUID" 2>/dev/null || true)
+            if [ -n "$DATA_DEV" ] && [ -b "$DATA_DEV" ]; then
+                break
+            fi
+            sleep 1
+        done
+        if [ -z "$DATA_DEV" ] || [ ! -b "$DATA_DEV" ]; then
+            fatal "persistent data partition UUID $DATA_UUID could not be resolved"
+        fi
+        mkdir -p /mnt/var/data
+        mount "$DATA_DEV" /mnt/var/data || fatal "cannot mount persistent data partition $DATA_DEV"
+        status OK "Persistent data filesystem mounted: $DATA_DEV"
+
+        status OK "Installed root filesystem verified"
+        silence_graphical_console
+        BACKEND=auto
+        status OK "Starting installed G1OS compositor ($BACKEND)"
+        exec chroot /mnt /usr/bin/mica-comp --session --backend "$BACKEND"
+    else
+        fatal "installed root device specified in command line could not be resolved after 15 seconds: $CMDLINE"
+    fi
 fi
 status OK "Live-boot path selected"
 emit "Locating G1OS live installation media..."

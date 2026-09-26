@@ -404,6 +404,22 @@ def test_findmnt_resilience_and_cursor_blit_integrity():
     print("PASS: findmnt/lsblk runtime resilience and raster cursor blit integrity")
 
 
+def test_partition_node_resolution_resilience():
+    """Verify backend has robust partition node polling, sysfs fallback, and mknod recreation."""
+    backend_src = pathlib.Path("installer/maclite-installer-backend").read_text()
+    rootfs_backend = pathlib.Path("rootfs/usr/bin/maclite-installer-backend").read_text()
+    initrd_script = pathlib.Path("scripts/make-initrd.sh").read_text()
+
+    assert backend_src == rootfs_backend, "Rootfs backend must match installer backend"
+    assert 'while [ "$attempt" -le 15 ]; do' in backend_src, "require_partition_nodes must poll up to 15 attempts"
+    assert "/sys/class/block/" in backend_src, "require_partition_nodes must check sysfs for kernel-registered partitions"
+    assert "mknod " in backend_src, "require_partition_nodes must feature mknod fallback"
+    assert "udevadm settle" in backend_src, "Backend must trigger udevadm settle"
+    assert "partx" in backend_src, "Backend must attempt partx reread"
+    assert "mknod" in initrd_script, "make-initrd.sh must stage mknod into initramfs"
+    print("PASS: partition node resolution resilience, sysfs discovery, and mknod fallback")
+
+
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
@@ -427,6 +443,7 @@ def main():
     test_installer_error_buttons_and_recovery()
     test_iso_assembly_artifact_paths()
     test_findmnt_resilience_and_cursor_blit_integrity()
+    test_partition_node_resolution_resilience()
     print("All G1OS installer logic tests PASSED.\n")
     return 0
 

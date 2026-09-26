@@ -49,6 +49,7 @@ set_config() {
 set_config CONFIG_STATIC y
 set_config CONFIG_PIE n
 set_config CONFIG_CHROOT y
+set_config CONFIG_MKNOD y
 set_config CONFIG_TC n
 set_config CONFIG_FEATURE_TC_INGRESS n
 
