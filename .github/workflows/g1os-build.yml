@@ -7,6 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Cancel obsolete runs when a newer commit supersedes them.
+concurrency:
+  group: g1os-readiness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -26,25 +31,6 @@ jobs:
             bzip2 file genisoimage shellcheck qemu-system-x86 \
             dosfstools mtools ovmf
 
-      - name: Shell syntax and ShellCheck
-        working-directory: macliteos
-        run: |
-          set -eu
-          for f in $(find . -type f \( -name '*.sh' -o -path './installer/maclite-install' -o -path './installer/maclite-installer-backend' -o -path './boot/g1os-init' \)); do
-            sh -n "$f"
-            shellcheck -s sh "$f"
-          done
-
-      - name: Clean userspace build and tests
-        working-directory: macliteos
-        run: |
-          set -eu
-          make clean
-          ./configure
-          make -j"$(nproc)" all
-          sh scripts/audit-production.sh
-          sh scripts/run-tests.sh
-
       - name: Clean generated boot artifacts
         working-directory: macliteos
         run: |
@@ -54,16 +40,38 @@ jobs:
           rm -f out/g1os-kernel-manifest.txt out/g1os-kernel.sha256 out/g1os-initrd-manifest.txt
           rm -f out/kernel-version.txt out/kernel-source.sha256 out/iso-manifest.txt out/iso-file-list.txt
 
-      - name: Build G1OS kernel
-        working-directory: macliteos
-        run: |
-          set -eu
-          sh scripts/build-kernel.sh
-          test -s out/vmlinuz-maclite
-          test -s out/g1os-kernel-manifest.txt
-          grep -F "G1OS_KERNEL_MANIFEST=1" out/g1os-kernel-manifest.txt >/dev/null
-          grep -F "artifact_arch=x86_64" out/g1os-kernel-manifest.txt >/dev/null
-          grep -F "artifact_format=x86_64-bzImage" out/g1os-kernel-manifest.txt >/dev/null
+      # Independent checks/builds run concurrently so kernel compilation can
+      # overlap userspace compilation and shell validation.
+      - parallel:
+          - name: Shell syntax and ShellCheck
+            working-directory: macliteos
+            run: |
+              set -eu
+              for f in $(find . -type f \( -name '*.sh' -o -path './installer/maclite-install' -o -path './installer/maclite-installer-backend' -o -path './boot/g1os-init' \)); do
+                sh -n "$f"
+                shellcheck -s sh "$f"
+              done
+
+          - name: Clean userspace build and tests
+            working-directory: macliteos
+            run: |
+              set -eu
+              make clean
+              ./configure
+              make -j"$(nproc)" all
+              sh scripts/audit-production.sh
+              sh scripts/run-tests.sh
+
+          - name: Build G1OS kernel
+            working-directory: macliteos
+            run: |
+              set -eu
+              sh scripts/build-kernel.sh
+              test -s out/vmlinuz-maclite
+              test -s out/g1os-kernel-manifest.txt
+              grep -F "G1OS_KERNEL_MANIFEST=1" out/g1os-kernel-manifest.txt >/dev/null
+              grep -F "artifact_arch=x86_64" out/g1os-kernel-manifest.txt >/dev/null
+              grep -F "artifact_format=x86_64-bzImage" out/g1os-kernel-manifest.txt >/dev/null
 
       - name: Build initramfs
         working-directory: macliteos
