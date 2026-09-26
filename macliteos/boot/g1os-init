@@ -275,8 +275,12 @@ export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64:/run/maclite-base/lib:/ru
 # CI integration mode: execute the real installer backend against an isolated
 # virtual disk. This is intentionally opt-in via the kernel command line and
 # is never enabled by normal installer boots.
-case " $CMDLINE " in
-    *rd.maclite=ci-install*)
+CI_INSTALL=0
+case " $CMDLINE " in *rd.maclite=ci-install*) CI_INSTALL=1 ;; esac
+CI_MARKER_DEV=""
+if command -v blkid >/dev/null 2>&1; then CI_MARKER_DEV=$(blkid -t LABEL=G1OS_CI -o device 2>/dev/null | head -n 1 || true); fi
+[ -n "$CI_MARKER_DEV" ] && CI_INSTALL=1
+if [ "$CI_INSTALL" = 1 ]; then
     *rd.maclite=ci-install*)
         status OK "CI installation integration mode enabled"
         [ -x /usr/bin/maclite-installer-backend ] || fatal "CI integration backend is missing"
@@ -308,8 +312,8 @@ case " $CMDLINE " in
         else halt -f
         fi
         while :; do sleep 5; done
-        ;;
-esac
+        
+fi
 
 
 [ -x /usr/bin/mica-comp ] || fatal "graphical compositor /usr/bin/mica-comp is missing"
