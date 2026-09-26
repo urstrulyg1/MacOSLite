@@ -487,7 +487,7 @@ def test_iso_clean_staging_and_elf_scan():
     assert 'mksquashfs "$BASE_ST"' in make_iso, "make-iso.sh must squash from BASE_ST"
     assert 'rm -rf "$BASE_ST"' in make_iso, "make-iso.sh must clean up BASE_ST before xorriso"
     assert '"$W"/usr/bin/* "$W"/sbin/* "$W"/bin/*' in make_initrd, "make-initrd.sh must scan dependencies across bin, sbin, and usr/bin"
-    assert '"$TMP/initrd"/usr/bin/* "$TMP/initrd"/sbin/* "$TMP/initrd"/bin/*' in val_script, "validate-boot-artifacts.sh must inspect ELF across all bin/sbin directories"
+    assert '"$TMP/initrd"/usr/bin "$TMP/initrd"/sbin "$TMP/initrd"/bin' in val_script, "validate-boot-artifacts.sh must inspect ELF across all bin/sbin directories"
     assert 'export MICA_GL=off' in g1os_init, "g1os-init must configure software rendering for Safe Graphics"
     print("PASS: clean ISO staging (no leaked Joliet symlinks) and complete ELF dependency closure")
 
