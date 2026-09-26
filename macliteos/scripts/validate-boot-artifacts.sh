@@ -50,6 +50,9 @@ check_elf() {
     exe="$1"
     [ -x "$exe" ] || return 0
     file "$exe" | grep -Eq 'ELF' || return 0
+    if ! file "$exe" | grep -Eiq 'dynamically linked|shared object'; then
+        return 0
+    fi
     interp=$(file "$exe" | sed -n 's/.*interpreter \([^,]*\).*/\1/p')
     if [ -n "$interp" ]; then
         rel=${interp#/}
