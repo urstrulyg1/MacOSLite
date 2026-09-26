@@ -265,6 +265,47 @@ grep -F "G1OS_BOOT_MANIFEST=1" /run/live/boot/g1os-boot-manifest.txt >/dev/null 
 status OK "Live SquashFS located; authoritative kernel payload verified"
 mount -t squashfs -o ro,loop /run/live/live/maclite-base.sqfs /run/maclite-base || fatal "cannot mount live SquashFS (loop/squashfs path failed)"
 status OK "Live base filesystem mounted"
+
+# CI integration mode: execute the real installer backend against an isolated
+# virtual disk. This is intentionally opt-in via the kernel command line and
+# is never enabled by normal installer boots.
+case " $CMDLINE " in
+    *rd.maclite=ci-install*)
+        status OK "CI installation integration mode enabled"
+        [ -x /usr/bin/maclite-installer-backend ] || fatal "CI integration backend is missing"
+        export PATH=/usr/bin:/bin:/sbin:/usr/sbin
+        export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64:/run/maclite-base/lib:/run/maclite-base/lib64:/run/maclite-base/usr/lib:/run/maclite-base/usr/lib64
+        CI_TARGET=""
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            for dev in /dev/vda /dev/sda /dev/nvme0n1; do
+                if [ -b "$dev" ]; then CI_TARGET="$dev"; break; fi
+            done
+            [ -n "$CI_TARGET" ] && break
+            if command -v mdev >/dev/null 2>&1; then mdev -s 2>/dev/null || true; fi
+            sleep 1
+        done
+        [ -n "$CI_TARGET" ] || fatal "CI integration disk was not detected"
+        status OK "CI integration target detected: $CI_TARGET"
+        if /usr/bin/maclite-installer-backend --target "$CI_TARGET" --json >/run/g1os/ci-installer.log 2>&1; then
+            status OK "CI real installation backend completed successfully"
+        else
+            RC=$?
+            tail -200 /run/g1os/ci-installer.log >/dev/ttyS0 2>/dev/null || true
+            fatal "CI real installation backend failed with exit code $RC"
+        fi
+        grep -F '"state":"COMPLETED"' /run/g1os/ci-installer.log >/dev/null || fatal "CI installation did not reach COMPLETED state"
+        status OK "CI installation reached authoritative COMPLETED state"
+        sync
+        status OK "CI installation disk synchronized; integration test complete"
+        if command -v reboot >/dev/null 2>&1; then reboot -f
+        else halt -f
+        fi
+        while :; do sleep 5; done
+        ;;
+esac
+
+
+status OK "Live base filesystem mounted"
 if [ -d /run/maclite-base/etc ]; then cp -a /run/maclite-base/etc/. /etc/ || fatal "cannot import base /etc"; fi
 if [ -d /run/maclite-base/usr/share ]; then mkdir -p /usr/share; cp -a /run/maclite-base/usr/share/. /usr/share/ || fatal "cannot import base /usr/share"; fi
 export PATH=/usr/bin:/bin:/sbin:/usr/sbin
