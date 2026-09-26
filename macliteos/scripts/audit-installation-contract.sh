@@ -5,8 +5,8 @@ cd "$(dirname "$0")/.."
 FAIL=0
 pass(){ echo "INSTALL CONTRACT: PASS: $*"; }
 fail(){ echo "INSTALL CONTRACT: FAIL: $*" >&2; FAIL=1; }
-need(){ [ -e "$1" ] && pass "required source exists: $1" || fail "missing required source: $1"; }
-has(){ grep -F "$2" "$1" >/dev/null 2>&1 && pass "$3" || fail "$4"; }
+need(){ if [ -e "$1" ]; then pass "required source exists: $1"; else fail "missing required source: $1"; fi; }
+has(){ if grep -F "$2" "$1" >/dev/null 2>&1; then pass "$3"; else fail "$4"; fi; }
 BACKEND=installer/maclite-installer-backend
 GUI=installer/mica-installer.c
 INIT=boot/g1os-init
@@ -38,7 +38,9 @@ if [ -s "$ISO" ] && command -v unsquashfs >/dev/null 2>&1; then
   TMP=$(mktemp -d)
   trap 'chmod -R u+rwx "$TMP" 2>/dev/null || true; rm -rf "$TMP" 2>/dev/null || true' EXIT
   if xorriso -osirrox on -indev "$ISO" -extract / "$TMP/iso" >/dev/null 2>&1; then
-    for p in "$TMP/iso/boot/vmlinuz-maclite" "$TMP/iso/boot/initrd-maclite.img" "$TMP/iso/boot/g1os-boot-manifest.txt" "$TMP/iso/EFI/BOOT/BOOTX64.EFI"; do [ -s "$p" ] && pass "ISO boot artifact present: $p" || fail "ISO boot artifact missing/empty: $p"; done
+    for p in "$TMP/iso/boot/vmlinuz-maclite" "$TMP/iso/boot/initrd-maclite.img" "$TMP/iso/boot/g1os-boot-manifest.txt" "$TMP/iso/EFI/BOOT/BOOTX64.EFI"; do
+      if [ -s "$p" ]; then pass "ISO boot artifact present: $p"; else fail "ISO boot artifact missing/empty: $p"; fi
+    done
     unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/bin/mica-installer >/dev/null 2>&1 && pass "ISO contains mica-installer" || fail "ISO missing mica-installer"
     unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/bin/maclite-installer-backend >/dev/null 2>&1 && pass "ISO contains installer backend" || fail "ISO missing installer backend"
     unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/share/maca-lite/runtime-provenance.sha256 >/dev/null 2>&1 && pass "ISO contains runtime provenance" || fail "ISO missing runtime provenance"
@@ -88,5 +90,5 @@ else
   pass "backend rejects unknown option"
 fi
 
-[ "$FAIL" -eq 0 ] || { echo "INSTALLATION CONTRACT AUDIT: FAIL" >&2; exit 1; }
+if [ "$FAIL" -ne 0 ]; then echo "INSTALLATION CONTRACT AUDIT: FAIL" >&2; exit 1; fi
 echo "INSTALLATION CONTRACT AUDIT: PASS"
