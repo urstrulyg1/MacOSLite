@@ -18,8 +18,6 @@ static bool DIRTY;
 static void line_set(int i, const char *s) { ml_str_free(&L[i]); ml_str_init(&L[i]); ml_str_append(&L[i], s); }
 static void load(const char *path)
 {
-static void load(const char *path)
-{
     if (path && path != PATH) snprintf(PATH, sizeof PATH, "%s", path);
     char *txt = ml_read_file(path, NULL);
     NL = 0;
@@ -90,7 +88,7 @@ static void input(mica_win *w, const msg_input *in)
     bool ctrl = (in->mods & 4) != 0;
     if (ctrl && k == 's') { save(); draw(); return; }
     switch (k) {
-    case 0xff0d: { /* enter */
+    case 0xff0d: {
         if (NL >= MAXL) return;
         ml_str *l = &L[CUR_L];
         int len = (int)strlen(l->p);
@@ -105,7 +103,7 @@ static void input(mica_win *w, const msg_input *in)
         CUR_L++; CUR_C = 0; DIRTY = true;
         break;
     }
-    case 0xff08: { /* backspace */
+    case 0xff08: {
         ml_str *l = &L[CUR_L];
         int len = (int)strlen(l->p);
         if (CUR_C > 0 && CUR_C <= len) {
