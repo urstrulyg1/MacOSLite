@@ -266,10 +266,17 @@ status OK "Live SquashFS located; authoritative kernel payload verified"
 mount -t squashfs -o ro,loop /run/live/live/maclite-base.sqfs /run/maclite-base || fatal "cannot mount live SquashFS (loop/squashfs path failed)"
 status OK "Live base filesystem mounted"
 
+status OK "Live base filesystem mounted"
+if [ -d /run/maclite-base/etc ]; then cp -a /run/maclite-base/etc/. /etc/ || fatal "cannot import base /etc"; fi
+if [ -d /run/maclite-base/usr/share ]; then mkdir -p /usr/share; cp -a /run/maclite-base/usr/share/. /usr/share/ || fatal "cannot import base /usr/share"; fi
+export PATH=/usr/bin:/bin:/sbin:/usr/sbin
+export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64:/run/maclite-base/lib:/run/maclite-base/lib64:/run/maclite-base/usr/lib:/run/maclite-base/usr/lib64
+
 # CI integration mode: execute the real installer backend against an isolated
 # virtual disk. This is intentionally opt-in via the kernel command line and
 # is never enabled by normal installer boots.
 case " $CMDLINE " in
+    *rd.maclite=ci-install*)
     *rd.maclite=ci-install*)
         status OK "CI installation integration mode enabled"
         [ -x /usr/bin/maclite-installer-backend ] || fatal "CI integration backend is missing"
@@ -305,11 +312,6 @@ case " $CMDLINE " in
 esac
 
 
-status OK "Live base filesystem mounted"
-if [ -d /run/maclite-base/etc ]; then cp -a /run/maclite-base/etc/. /etc/ || fatal "cannot import base /etc"; fi
-if [ -d /run/maclite-base/usr/share ]; then mkdir -p /usr/share; cp -a /run/maclite-base/usr/share/. /usr/share/ || fatal "cannot import base /usr/share"; fi
-export PATH=/usr/bin:/bin:/sbin:/usr/sbin
-export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64:/run/maclite-base/lib:/run/maclite-base/lib64:/run/maclite-base/usr/lib:/run/maclite-base/usr/lib64
 [ -x /usr/bin/mica-comp ] || fatal "graphical compositor /usr/bin/mica-comp is missing"
 [ -x /usr/bin/mica-installer ] || fatal "graphical installer /usr/bin/mica-installer is missing"
 [ -x /usr/bin/g1os-ui-health ] || fatal "graphical UI health probe is missing"
