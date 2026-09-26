@@ -492,6 +492,20 @@ def test_iso_clean_staging_and_elf_scan():
     print("PASS: clean ISO staging (no leaked Joliet symlinks) and complete ELF dependency closure")
 
 
+def test_production_safety_gaps():
+    import pathlib
+    backend = pathlib.Path("installer/maclite-installer-backend").read_text()
+    installer = pathlib.Path("installer/mica-installer.c").read_text()
+    validator = pathlib.Path("scripts/validate-boot-artifacts.sh").read_text()
+
+    assert "validate_repair_layout" in backend
+    assert "dmsetup remove_all" not in backend
+    assert "swapoff -a" not in backend
+    assert "WNOHANG" in installer and "SIGKILL" in installer
+    assert 'for libdir in "$TMP/initrd"/lib "$TMP/initrd"/lib64 "$TMP/initrd"/usr/lib "$TMP/initrd"/usr/lib64' in validator
+    print("PASS: production safety gaps (repair validation, bounded cancellation, recursive ELF closure)")
+
+
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
@@ -519,6 +533,7 @@ def main():
     test_partition_node_resolution_resilience()
     test_partitioning_fallback_and_repair_resilience()
     test_iso_clean_staging_and_elf_scan()
+    test_production_safety_gaps()
     print("All G1OS installer logic tests PASSED.\n")
     return 0
 
