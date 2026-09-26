@@ -50,6 +50,7 @@ check_elf() {
     exe="$1"
     [ -x "$exe" ] || return 0
     file "$exe" | grep -Eq 'ELF' || return 0
+    if ! file "$exe" | grep -Eiq 'dynamically linked|shared object'; then return 0; fi
     interp=$(file "$exe" | sed -n 's/.*interpreter \([^,]*\).*/\1/p')
     if [ -n "$interp" ]; then
         rel=${interp#/}
@@ -64,7 +65,13 @@ check_elf() {
         [ -f "$TMP/initrd$lib" ] || fail "ELF dependency missing from initramfs: $lib (required by $exe)"
     done
 }
-for exe in "$TMP/initrd"/usr/bin/*; do check_elf "$exe"; done
+for dir in "$TMP/initrd"/usr/bin "$TMP/initrd"/sbin "$TMP/initrd"/bin; do
+    [ -d "$dir" ] || continue
+    for exe in "$dir"/*; do
+        [ -e "$exe" ] || continue
+        check_elf "$exe"
+    done
+done
 
 KERNEL=${G1OS_KERNEL:-$OUT/vmlinuz-maclite}
 [ -s "$KERNEL" ] || fail "kernel artifact missing: $KERNEL"

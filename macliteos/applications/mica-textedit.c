@@ -17,7 +17,7 @@ static bool DIRTY;
 static void line_set(int i, const char *s) { ml_str_free(&L[i]); ml_str_init(&L[i]); ml_str_append(&L[i], s); }
 static void load(const char *path)
 {
-    snprintf(PATH, sizeof PATH, "%s", path);
+    if (path && path != PATH) snprintf(PATH, sizeof PATH, "%s", path);
     char *txt = ml_read_file(path, NULL);
     NL = 0;
     if (txt) {

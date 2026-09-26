@@ -57,26 +57,27 @@ EXPECTED_INITRD_SIZE=$(sed -n 's/^artifact_size=//p' "$INITRD_MANIFEST")
 # silently replace a fresh binary with a tracked/rootfs copy later in staging.
 REQUIRED_BINS="mica-comp mica-shell mica-finder mica-terminal mica-viewer mica-settings mica-sysinfo mica-textedit mica-player mica-music mica-pdf maclite-browser maclite-video mica-installer"
 ST=out/iso-stage
-rm -rf "$ST"
-mkdir -p "$ST/boot" "$ST/live" "$ST/base/usr/bin" "$ST/base/usr/share/maca-lite/scripts" "$ST/base/usr/share/maca-lite/catalog"
+BASE_ST=out/base-stage
+rm -rf "$ST" "$BASE_ST"
+mkdir -p "$ST/boot" "$ST/live" "$BASE_ST/usr/bin" "$BASE_ST/usr/share/maca-lite/scripts" "$BASE_ST/usr/share/maca-lite/catalog"
 for b in $REQUIRED_BINS; do
   src="out/$b"
   [ -x "$src" ] || { echo "ERROR: current build output missing required binary: $src" >&2; exit 4; }
-  cp "$src" "$ST/base/usr/bin/"
+  cp "$src" "$BASE_ST/usr/bin/"
 done
 
 # Static installer helpers/resources are sourced from version-controlled files.
-cp installer/maclite-install "$ST/base/usr/bin/"
-cp installer/maclite-installer-backend "$ST/base/usr/bin/"
-chmod +x "$ST/base/usr/bin/maclite-install" "$ST/base/usr/bin/maclite-installer-backend"
-cp scripts/hardware-check.sh "$ST/base/usr/share/maca-lite/scripts/"
-chmod +x "$ST/base/usr/share/maca-lite/scripts/hardware-check.sh"
-[ -f drivers/catalog/maclite-offline.cat ] && cp drivers/catalog/maclite-offline.cat "$ST/base/usr/share/maca-lite/catalog/"
+cp installer/maclite-install "$BASE_ST/usr/bin/"
+cp installer/maclite-installer-backend "$BASE_ST/usr/bin/"
+chmod +x "$BASE_ST/usr/bin/maclite-install" "$BASE_ST/usr/bin/maclite-installer-backend"
+cp scripts/hardware-check.sh "$BASE_ST/usr/share/maca-lite/scripts/"
+chmod +x "$BASE_ST/usr/share/maca-lite/scripts/hardware-check.sh"
+[ -f drivers/catalog/maclite-offline.cat ] && cp drivers/catalog/maclite-offline.cat "$BASE_ST/usr/share/maca-lite/catalog/"
 
 # Copy static rootfs configuration/data first. Binary paths are restored from
 # the current out/ build afterwards so rootfs cannot overwrite fresh binaries.
-[ -d rootfs/etc ] && cp -rf rootfs/etc "$ST/base/"
-[ -d rootfs/usr/share ] && cp -rf rootfs/usr/share "$ST/base/usr/"
+[ -d rootfs/etc ] && cp -rf rootfs/etc "$BASE_ST/"
+[ -d rootfs/usr/share ] && cp -rf rootfs/usr/share "$BASE_ST/usr/"
 # The live SquashFS must use the exact runtime libraries from the initrd
 # produced in this build. Never depend on a stale /tmp extraction from an older
 # build, another machine, or another kernel/userspace combination.
@@ -98,16 +99,16 @@ if ! (cd "$INITRD_RUNTIME" && gzip -cd < "$INITRD" | cpio -idm --no-absolute-fil
 fi
 for libdir in lib lib64 usr/lib usr/lib64; do
   if [ -d "$INITRD_RUNTIME/$libdir" ]; then
-    mkdir -p "$ST/base/$libdir"
-    cp -a "$INITRD_RUNTIME/$libdir/." "$ST/base/$libdir/"
+    mkdir -p "$BASE_ST/$libdir"
+    cp -a "$INITRD_RUNTIME/$libdir/." "$BASE_ST/$libdir/"
   fi
 done
 if [ -s "$INITRD_RUNTIME/bin/busybox" ]; then
-  mkdir -p "$ST/base/bin" "$ST/base/sbin"
-  cp -a "$INITRD_RUNTIME/bin/busybox" "$ST/base/bin/busybox"
-  chmod +x "$ST/base/bin/busybox"
+  mkdir -p "$BASE_ST/bin" "$BASE_ST/sbin"
+  cp -a "$INITRD_RUNTIME/bin/busybox" "$BASE_ST/bin/busybox"
+  chmod +x "$BASE_ST/bin/busybox"
   for applet in sh bash cat ls cp mv rm mount umount mkdir grep sed awk sleep; do
-    ln -sf /bin/busybox "$ST/base/bin/$applet"
+    ln -sf /bin/busybox "$BASE_ST/bin/$applet"
   done
 fi
 cleanup_initrd_runtime
@@ -116,7 +117,7 @@ trap - EXIT HUP INT TERM
 
 # Re-apply the current build outputs after rootfs/usr was copied.
 for b in $REQUIRED_BINS; do
-  cp "out/$b" "$ST/base/usr/bin/$b"
+  cp "out/$b" "$BASE_ST/usr/bin/$b"
 done
 
 # Build a deterministic manifest of the exact input files without relying on
@@ -164,9 +165,11 @@ EOF
   for b in $REQUIRED_BINS; do
     printf '%s  %s\n' "$(sha256sum "out/$b" | cut -d' ' -f1)" "$b"
   done
-} > "$ST/base/usr/share/maca-lite/runtime-provenance.sha256"
+} > "$BASE_ST/usr/share/maca-lite/runtime-provenance.sha256"
 
-mksquashfs "$ST/base" "$ST/live/maclite-base.sqfs" -comp zstd -Xcompression-level 12 -no-progress
+mksquashfs "$BASE_ST" "$ST/live/maclite-base.sqfs" -comp zstd -Xcompression-level 12 -no-progress
+rm -rf "$BASE_ST"
+[ ! -e "$BASE_ST" ] || { echo "ERROR: rootfs staging leaked into ISO build tree" >&2; exit 6; }
 cp "$KERNEL" "$ST/boot/vmlinuz-maclite"
 cp "$INITRD" "$ST/boot/initrd-maclite.img"
 cp "$KERNEL_MANIFEST" "$ST/boot/g1os-kernel-manifest.txt"

@@ -5,6 +5,7 @@
 #include "ml/ipc.h"
 #include "../compositor/proto.h"
 #include <dirent.h>
+#include <unistd.h>
 
 /* Ask the running compositor for its frame statistics. Returns false when no
  * session is live (tools then report "no session"). */
