@@ -44,5 +44,49 @@ if [ -s "$ISO" ] && command -v unsquashfs >/dev/null 2>&1; then
     unsquashfs -cat "$TMP/iso/live/maclite-base.sqfs" usr/share/maca-lite/runtime-provenance.sha256 >/dev/null 2>&1 && pass "ISO contains runtime provenance" || fail "ISO missing runtime provenance"
   else fail "could not extract ISO for installation-contract inspection"; fi
 fi
+# Exercise the complete backend state machine in dry-run mode. This performs
+# no disk writes but must traverse the same PREPARING -> INSTALLING ->
+# FINALIZING -> VERIFYING -> COMPLETED contract used by a real install.
+DRYRUN_LOG=$(mktemp)
+cleanup_dryrun() { rm -f "$DRYRUN_LOG"; }
+trap cleanup_dryrun EXIT HUP INT TERM
+if timeout 45s sh "$BACKEND" --target /dev/g1os-ci-dryrun --dry-run --json >"$DRYRUN_LOG" 2>&1; then
+  pass "installer backend dry-run completed"
+else
+  fail "installer backend dry-run failed or timed out"
+fi
+for state in PREPARING INSTALLING FINALIZING VERIFYING COMPLETED; do
+  if grep -F '"state":"'"$state"'"' "$DRYRUN_LOG" >/dev/null 2>&1 || grep -F "=== STATE: $state ===" "$DRYRUN_LOG" >/dev/null 2>&1; then
+    pass "backend dry-run reached state $state"
+  else
+    fail "backend dry-run did not reach state $state"
+  fi
+done
+if grep -F '"state":"FAILED"' "$DRYRUN_LOG" >/dev/null 2>&1; then
+  fail "backend dry-run emitted FAILED state"
+else
+  pass "backend dry-run completed without FAILED state"
+fi
+if grep -F '"progress":100' "$DRYRUN_LOG" >/dev/null 2>&1 || grep -F '100%%' "$DRYRUN_LOG" >/dev/null 2>&1; then
+  pass "backend dry-run reached 100 percent"
+else
+  fail "backend dry-run did not reach 100 percent"
+fi
+rm -f "$DRYRUN_LOG"
+trap - EXIT HUP INT TERM
+
+# Negative argument tests: malformed targets must fail closed before any
+# installation action is attempted.
+if sh "$BACKEND" --target '../escape' --dry-run >/dev/null 2>&1; then
+  fail "backend accepted path traversal target"
+else
+  pass "backend rejects path traversal target"
+fi
+if sh "$BACKEND" --unknown-option >/dev/null 2>&1; then
+  fail "backend accepted unknown option"
+else
+  pass "backend rejects unknown option"
+fi
+
 [ "$FAIL" -eq 0 ] || { echo "INSTALLATION CONTRACT AUDIT: FAIL" >&2; exit 1; }
 echo "INSTALLATION CONTRACT AUDIT: PASS"
