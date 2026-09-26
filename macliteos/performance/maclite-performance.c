@@ -23,7 +23,9 @@ int main(int argc, char **argv)
     printf("  CPU:            %s\n", c.model);
     printf("                  %.1f%% busy over %d ms (%u cores / %u threads)\n",
            cpu_percent(&a, &b), sample_ms, c.cores, c.threads);
-    printf("  RAM:            %llu MB total, %llu MB available\n", m.total_kb / 1024, m.avail_kb / 1024);
+    printf("  RAM:            %llu MB total, %llu MB available\n",
+           (unsigned long long)(m.total_kb / 1024),
+           (unsigned long long)(m.avail_kb / 1024));
     printf("  GPU:            %s\n", g.present ? g.device : "(none detected)");
     printf("                  driver=%s kms=%d\n", g.driver[0] ? g.driver : "-", g.has_kms);
     printf("  VRAM:           %s\n", g.vram_bytes ? "reported by driver" : "unknown (sysfs silent pre-bind)");

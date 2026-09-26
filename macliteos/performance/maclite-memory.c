@@ -38,7 +38,9 @@ int main(void)
     printf("MacLiteOS memory report            (method: /proc RSS + PSS where available)\n");
     printf("-----------------------------------------------------------------------------\n");
     printf("Kernel:  total %llu MB   available %llu MB   used %llu MB\n",
-           mi.total_kb / 1024, mi.avail_kb / 1024, (mi.total_kb - mi.avail_kb) / 1024);
+           (unsigned long long)(mi.total_kb / 1024),
+           (unsigned long long)(mi.avail_kb / 1024),
+           (unsigned long long)((mi.total_kb - mi.avail_kb) / 1024));
     unsigned long long grand_rss = 0, grand_pss = 0;
     int grand_n = 0;
     for (size_t i = 0; i < ML_ARRAY_SIZE(comps); i++) {

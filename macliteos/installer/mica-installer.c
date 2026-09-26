@@ -150,7 +150,6 @@ static bool continue_button_hit(int x, int y)
 
 static bool back_button_hit(int x, int y)
 {
-    int w = WIN && WIN->surf ? WIN->surf->w : WIN_W;
     int h = WIN && WIN->surf ? WIN->surf->h : WIN_H;
     return (STAGE == STAGE_SELECT || STAGE == STAGE_CONFIRM) &&
            rect_contains_inclusive(x, y, 48, h - 68, 108, 36);
@@ -306,10 +305,8 @@ static bool sysfs_whole_physical_disk(const char *name, const char *devnode, uin
 
 static const char *transport_name(const char *name)
 {
-    static char transport[16];
     char link[PATH_MAX];
     char device[256];
-    transport[0] = 0;
     snprintf(device, sizeof device, "/sys/block/%s/device", name);
     if (!realpath(device, link)) return "Unknown";
     if (strstr(link, "/usb")) return "USB";

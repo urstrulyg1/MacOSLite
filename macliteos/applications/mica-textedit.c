@@ -1,6 +1,7 @@
 /* mica-textedit — plain-text editor (spec §46). No rich text, no daemon:
  * one buffer (capped at 1 MiB), damage-only redraw of changed rows. */
 #include <stdarg.h>
+#include <unistd.h>
 #include "ml/log.h"
 #include "../compositor/client/mica_client.h"
 #include "../compositor/client/shellkit.h"
@@ -17,8 +18,9 @@ static bool DIRTY;
 static void line_set(int i, const char *s) { ml_str_free(&L[i]); ml_str_init(&L[i]); ml_str_append(&L[i], s); }
 static void load(const char *path)
 {
-    snprintf(PATH, sizeof PATH, "%s", path);
-    char *txt = ml_read_file(path, NULL);
+    if (path && path != PATH)
+        snprintf(PATH, sizeof PATH, "%s", path);
+    char *txt = ml_read_file(PATH, NULL);
     NL = 0;
     if (txt) {
         char *p = txt;

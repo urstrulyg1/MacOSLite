@@ -11,6 +11,7 @@
 #include "ml/event.h"
 #include "ml/util.h"
 #include "ml/log.h"
+#include <unistd.h>
 #include <assert.h>
 
 static int failures;
