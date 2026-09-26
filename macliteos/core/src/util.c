@@ -194,9 +194,12 @@ char *ml_cache_dir(void)   { return xdg("XDG_CACHE_HOME", ".cache"); }
 char *ml_data_dir(void)    { return xdg("XDG_DATA_HOME", ".local/share"); }
 char *ml_runtime_dir(void)
 {
+    char *p = NULL;
     const char *v = getenv("XDG_RUNTIME_DIR");
-    if (v && *v) return ml_strdup(v);
-    char *p = ml_strdupf("/tmp/macliteos-%d", (int)getuid());
+    if (v && *v)
+        p = ml_strdup(v);
+    else
+        p = ml_strdupf("/tmp/macliteos-%d", (int)getuid());
     ml_mkdirs(p, 0700);
     return p;
 }

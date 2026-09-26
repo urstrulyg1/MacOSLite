@@ -135,10 +135,33 @@ done
 if [ "$HAS_ROOT_PARAM" -eq 1 ]; then
     ROOT_DEV=""
     for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        if command -v mdev >/dev/null 2>&1; then mdev -s 2>/dev/null || true; fi
         for param in $CMDLINE; do
             case "$param" in
-                root=UUID=*) ROOT_DEV=$(blkid -U "${param#root=UUID=}" 2>/dev/null || true) ;;
-                root=PARTUUID=*) ROOT_DEV=$(blkid -t PARTUUID="${param#root=PARTUUID=}" -o device 2>/dev/null || true) ;;
+                root=UUID=*)
+                    target_uuid="${param#root=UUID=}"
+                    ROOT_DEV=$(findfs "UUID=$target_uuid" 2>/dev/null || blkid -U "$target_uuid" 2>/dev/null || true)
+                    if [ -z "$ROOT_DEV" ]; then
+                        for b in /dev/sd* /dev/nvme* /dev/mmcblk*; do
+                            [ -b "$b" ] || continue
+                            if [ "$(blkid -s UUID -o value "$b" 2>/dev/null || true)" = "$target_uuid" ]; then
+                                ROOT_DEV="$b"; break
+                            fi
+                        done
+                    fi
+                    ;;
+                root=PARTUUID=*)
+                    target_partuuid="${param#root=PARTUUID=}"
+                    ROOT_DEV=$(findfs "PARTUUID=$target_partuuid" 2>/dev/null || blkid -t PARTUUID="$target_partuuid" -o device 2>/dev/null || true)
+                    if [ -z "$ROOT_DEV" ]; then
+                        for b in /dev/sd* /dev/nvme* /dev/mmcblk*; do
+                            [ -b "$b" ] || continue
+                            if [ "$(blkid -s PARTUUID -o value "$b" 2>/dev/null || true)" = "$target_partuuid" ]; then
+                                ROOT_DEV="$b"; break
+                            fi
+                        done
+                    fi
+                    ;;
                 root=/dev/*) ROOT_DEV=${param#root=} ;;
             esac
         done
@@ -152,12 +175,14 @@ if [ "$HAS_ROOT_PARAM" -eq 1 ]; then
         status OK "Installed root resolved: $ROOT_DEV"
         mount "$ROOT_DEV" /mnt || fatal "cannot mount installed root $ROOT_DEV"
         [ -x /mnt/usr/bin/mica-comp ] || fatal "installed root is missing /usr/bin/mica-comp"
-        mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run /mnt/tmp
+        mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run /mnt/tmp /mnt/var/data /mnt/boot/efi
         mount --bind /dev /mnt/dev || fatal "cannot bind /dev into installed root"
         mount -t proc proc /mnt/proc || fatal "cannot mount /proc in installed root"
         mount -t sysfs sysfs /mnt/sys || fatal "cannot mount /sys in installed root"
         mount -t tmpfs -o mode=0755 tmpfs /mnt/run || fatal "cannot mount /run in installed root"
         mount -t tmpfs -o mode=1777 tmpfs /mnt/tmp || fatal "cannot mount /tmp in installed root"
+        mkdir -p /mnt/tmp/macliteos-0 /mnt/run/g1os
+        chmod 0700 /mnt/tmp/macliteos-0 2>/dev/null || true
 
         # The installed image uses a custom PID 1, so /etc/fstab is not consumed
         # by a general-purpose init system. Mount the persistent data partition
@@ -170,7 +195,17 @@ if [ "$HAS_ROOT_PARAM" -eq 1 ]; then
         [ -n "$DATA_UUID" ] || fatal "installed /etc/fstab has no UUID for /var/data"
         DATA_DEV=""
         for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            DATA_DEV=$(blkid -U "$DATA_UUID" 2>/dev/null || true)
+            if command -v mdev >/dev/null 2>&1; then mdev -s 2>/dev/null || true; fi
+            DATA_DEV=$(findfs "UUID=$DATA_UUID" 2>/dev/null || blkid -U "$DATA_UUID" 2>/dev/null || true)
+            if [ -z "$DATA_DEV" ]; then
+                for b in /dev/sd* /dev/nvme* /dev/mmcblk*; do
+                    [ -b "$b" ] || continue
+                    if [ "$(blkid -s UUID -o value "$b" 2>/dev/null || true)" = "$DATA_UUID" ]; then
+                        DATA_DEV="$b"
+                        break
+                    fi
+                done
+            fi
             if [ -n "$DATA_DEV" ] && [ -b "$DATA_DEV" ]; then
                 break
             fi
@@ -185,7 +220,11 @@ if [ "$HAS_ROOT_PARAM" -eq 1 ]; then
 
         status OK "Installed root filesystem verified"
         silence_graphical_console
+        handoff_graphical_console
         BACKEND=auto
+        if [ "$SAFE" = 1 ]; then
+            export MICA_GL=off
+        fi
         status OK "Starting installed G1OS compositor ($BACKEND)"
         exec chroot /mnt /usr/bin/mica-comp --session --backend "$BACKEND"
     else
@@ -196,6 +235,7 @@ status OK "Live-boot path selected"
 emit "Locating G1OS live installation media..."
 LIVE_DEV=""
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if command -v mdev >/dev/null 2>&1; then mdev -s 2>/dev/null || true; fi
     for dev in /dev/sd[a-z] /dev/sd[a-z][0-9]* /dev/nvme*n1 /dev/nvme*n1p* /dev/mmcblk* /dev/sr*; do
         [ -b "$dev" ] || continue
         umount /run/g1os-probe 2>/dev/null || true

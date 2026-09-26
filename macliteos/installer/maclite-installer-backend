@@ -247,7 +247,19 @@ if [ "$DRY_RUN" = 0 ]; then
     mounted_parts=$(awk -v d="$DEV" '$1 ~ ("^" d) {print $1}' /proc/mounts 2>/dev/null || true)
   fi
   if [ -n "$mounted_parts" ]; then
-    fail "target disk or one of its partitions is mounted: $DEV"
+    # Verify that no mounted partition on the target is a critical live OS mountpoint
+    for p in $mounted_parts; do
+      mp=$(awk -v dev="$p" '$1 == dev {print $2; exit}' /proc/mounts 2>/dev/null || true)
+      case "$mp" in
+        /|/run/live|/run/maclite-base|/run/maclite-live|/cdrom|/mnt/live)
+          fail "refusing to install: target disk partition $p is mounted as active system mountpoint $mp"
+          ;;
+      esac
+    done
+    # Unmount lingering non-critical mounts cleanly
+    for p in $mounted_parts; do
+      umount "$p" 2>/dev/null || umount -f "$p" 2>/dev/null || umount -l "$p" 2>/dev/null || true
+    done
   fi
 fi
 
@@ -639,7 +651,8 @@ else
     fi
   fi
 
-  mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log"
+  mkdir -p "$BASE_MNT/etc" "$BASE_MNT/var/log" "$BASE_MNT/var/data" "$BASE_MNT/boot/efi" "$BASE_MNT/tmp" "$BASE_MNT/run" "$BASE_MNT/proc" "$BASE_MNT/sys" "$BASE_MNT/dev"
+  chmod 1777 "$BASE_MNT/tmp" 2>/dev/null || true
   cat > "$BASE_MNT/etc/fstab" <<EOF
 UUID=$BASE_UUID  /          ext4  rw,noatime,errors=remount-ro  0 1
 UUID=$DATA_UUID  /var/data  ext4  rw,noatime,errors=remount-ro  0 2
@@ -655,10 +668,10 @@ EOF
 fi
 
 is_boot_mounted=0
-if command -v findmnt >/dev/null 2>&1; then
-  findmnt -n -T "$BOOT_MNT" >/dev/null 2>&1 && is_boot_mounted=1
-elif [ -r /proc/mounts ]; then
-  grep -qs "[[:space:]]${BOOT_MNT}[[:space:]]" /proc/mounts && is_boot_mounted=1
+if [ -r /proc/mounts ] && grep -qs "[[:space:]]${BOOT_MNT}[[:space:]]" /proc/mounts; then
+  is_boot_mounted=1
+elif command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$BOOT_MNT"; then
+  is_boot_mounted=1
 fi
 if [ "$is_boot_mounted" = 0 ]; then
   run mount "$DEV_BOOT" "$BOOT_MNT"

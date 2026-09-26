@@ -779,6 +779,10 @@ static void install_gui_tick(void *ud)
 
 static bool start_backend(bool repair_flag)
 {
+    if (BACKEND_ACTIVE) {
+        add_log("INSTALL: start_backend ignored because backend is already running (pid=%d)", (int)INSTALL_PID);
+        return false;
+    }
     /* Re-enumerate and revalidate immediately before the destructive backend is spawned.
      * Device nodes can disappear/reappear between selection and installation. */
     if (TARGET_DISK_IDX < 0) return false;
@@ -1231,7 +1235,7 @@ static void input(mica_win *w, const msg_input *in)
                     BACKEND_VERIFIED && INSTALL_PROGRESS >= 100) {
                     add_log("RESTART: user requested reboot after verified installation.");
                     if (!TEST_MODE)
-                        system("reboot 2>/dev/null || systemctl reboot 2>/dev/null || shutdown -r now 2>/dev/null");
+                        system("sync 2>/dev/null; sync 2>/dev/null; reboot 2>/dev/null || systemctl reboot 2>/dev/null || shutdown -r now 2>/dev/null");
                     mica_quit(G, 0);
                 }
             } else if (STAGE == STAGE_ERROR) {
