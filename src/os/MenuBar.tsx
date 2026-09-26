@@ -28,15 +28,20 @@ function MenuList({ items, anchor }: { items: Item[]; anchor: React.ReactNode })
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => setMenuOpen(open ? null : id)}
         onMouseEnter={() => {
-          if (menuOpen && !["wifi", "vol", "sensors", "bell", "control_center"].includes(menuOpen)) setMenuOpen(id);
+          // macOS: open menus track with the cursor while one is open.
+          if (menuOpen) setMenuOpen(id);
         }}
-        className={`px-2.5 h-[26px] flex items-center rounded-[4px] text-[13px] ${open ? "bg-black/10" : ""}`}
-        style={{ lineHeight: 1 }}
+        className={`px-2 h-[22px] flex items-center rounded-[4px] text-[13px] leading-none transition-colors ${open ? "bg-black/[0.15]" : "hover:bg-black/[0.06]"}`}
       >
         {anchor}
       </button>
       {open && (
-        <div className="glass panel-in soft-shadow absolute left-0 top-[28px] min-w-[220px] rounded-lg bg-[rgba(242,242,247,0.85)] backdrop-blur-md p-1 shadow-[0_10px_36px_rgba(10,15,40,0.3),0_0_0_0.5px_rgba(0,0,0,0.15)] z-[999]">
+        <div className="glass panel-in absolute left-0 top-[22px] min-w-[232px] rounded-lg p-1 z-[999]" style={{
+          background: "rgba(246,246,250,0.88)",
+          boxShadow: "0 14px 40px rgba(10,15,40,0.3), 0 0 0 0.5px rgba(0,0,0,0.12)",
+          backdropFilter: "blur(24px) saturate(1.8)",
+          WebkitBackdropFilter: "blur(24px) saturate(1.8)",
+        }}>
           {items.map((it, i) =>
             it.sep ? (
               <div key={i} className="my-1 h-px bg-black/10" />
@@ -45,7 +50,7 @@ function MenuList({ items, anchor }: { items: Item[]; anchor: React.ReactNode })
                 key={i}
                 disabled={it.dim}
                 onClick={() => { it.run?.(); setMenuOpen(null); }}
-                className={`flex w-full items-center justify-between rounded-[5px] px-2.5 py-[3.5px] text-left text-[13px] ${it.dim ? "text-black/30" : "text-black/85 hover:bg-[var(--acc)] hover:text-white"}`}
+                className={`flex w-full items-center justify-between rounded-[5px] px-2.5 py-1 text-left text-[13px] transition-colors ${it.dim ? "text-black/30" : "text-black/85 hover:bg-[var(--acc)] hover:text-white"}`}
               >
                 <span>{it.label}</span>
                 {it.kbd && <span className="text-[11px] opacity-50">{it.kbd}</span>}
@@ -138,7 +143,8 @@ export default function MenuBar() {
 
   return (
     <div
-      className="menubar glass absolute inset-x-0 top-0 z-[500] flex h-7 items-center justify-between px-2 text-[13px] select-none"
+      className="menubar glass absolute inset-x-0 top-0 z-[500] flex items-center justify-between px-2 text-[13px] select-none"
+      style={{ height: 26 }}
       onMouseDown={() => os.setMenuOpen(null)}
     >
       {/* left */}
@@ -336,19 +342,27 @@ export default function MenuBar() {
   );
 }
 
-function TrayBtn({ id, icon, children, wide }: { id: string; icon: React.ReactNode; children: React.ReactNode; wide?: boolean }) {
+function TrayBtn({ id, icon, children }: { id: string; icon: React.ReactNode; children: React.ReactNode; wide?: boolean }) {
   const { menuOpen, setMenuOpen } = useOS();
   const open = menuOpen === id;
   return (
     <div className="relative">
       <button
         onClick={() => setMenuOpen(open ? null : id)}
-        className={`grid h-[26px] w-[26px] place-items-center rounded-[4px] text-black/75 cursor-pointer ${open ? "bg-black/10" : "hover:bg-black/5"}`}
+        className={`grid h-[22px] w-[22px] place-items-center rounded-[4px] text-black/80 transition-colors ${open ? "bg-black/15" : "hover:bg-black/05"}`}
       >
         {icon}
       </button>
       {open && (
-        <div className={`glass panel-in absolute right-0 top-[30px] z-[999] rounded-xl bg-[rgba(246,246,250,0.92)] backdrop-blur-md text-black shadow-[0_14px_44px_rgba(10,15,40,0.32),0_0_0_0.5px_rgba(0,0,0,0.15)] ${wide ? "" : ""}`}>
+        <div
+          className="glass panel-in absolute right-0 top-[24px] z-[999] rounded-xl text-black overflow-hidden"
+          style={{
+            background: "rgba(246,246,250,0.9)",
+            boxShadow: "0 16px 50px rgba(10,15,40,0.32), 0 0 0 0.5px rgba(0,0,0,0.12)",
+            backdropFilter: "blur(24px) saturate(1.8)",
+            WebkitBackdropFilter: "blur(24px) saturate(1.8)",
+          }}
+        >
           {children}
         </div>
       )}

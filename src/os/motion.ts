@@ -1,12 +1,16 @@
 /**
  * G1OS Motion Engine
  *
- * One clock, one set of curves, one way to interrupt. Components do not
- * invent their own easings. Springs are analytic so a retarget continues
- * from the current value and velocity — input always wins.
+ * Central clock, unified curves, interrupt-safe animations. Components
+ * do not invent their own durations or easings. The animation loop is
+ * driven by requestAnimationFrame (vsync-aligned), never setTimeout,
+ * usleep, or setInterval — input always wins and animations never block.
  *
- * The engine never touches disk, network, or layout outside the element
- * it was asked to move. Idle means zero animation frames.
+ * - Start time / duration / progress / easing / interpolation are unified.
+ * - Retargeting preserves current velocity so interruptions feel natural.
+ * - Damage regions are implicit (CSS transform + opacity) so browsers can
+ *   run them on the compositor thread at 60fps without triggering layout.
+ * - Idle = zero scheduled frames; we don't burn CPU on still UI.
  */
 
 import type { VisualMode } from "./os";
@@ -48,80 +52,50 @@ export interface MotionProfile {
   ease: string;
   closeEase: string;
   quick: string;
-  /** 1 = full dock magnification, lower = reduced, 0 = off. */
+  /** 1 = full dock magnification; lower = reduced; 0 = off. */
   magAmount: number;
   blur: number;
   genie: boolean;
   shadow: "full" | "soft" | "lite";
+  /** Multiplier on all animation durations for low-power mode. */
+  durScale: number;
 }
 
-/** Hardware-adaptive profile. Performance stays smooth; it only drops cost. */
+/**
+ * Hardware-adaptive motion profile. Performance mode never disables
+ * motion — it shortens durations and cuts paint cost so old iMacs
+ * still feel alive without frame drops.
+ */
 export function motionProfile(mode: VisualMode, reduceMotion: boolean): MotionProfile {
   if (reduceMotion) {
     return {
-      openMs: 80,
-      closeMs: 70,
-      minMs: 80,
-      menuMs: 60,
-      sheetMs: 80,
-      toastMs: 80,
-      ease: EASING.appleEaseOut,
-      closeEase: EASING.appleClose,
-      quick: EASING.appleQuick,
-      magAmount: 0,
-      blur: 0,
-      genie: false,
-      shadow: "lite",
+      openMs: 80, closeMs: 70, minMs: 80,
+      menuMs: 60, sheetMs: 80, toastMs: 80,
+      ease: EASING.appleEaseOut, closeEase: EASING.appleClose, quick: EASING.appleQuick,
+      magAmount: 0, blur: 0, genie: false, shadow: "lite", durScale: 0.5,
     };
   }
   if (mode === "performance") {
     return {
-      openMs: 180,
-      closeMs: 140,
-      minMs: 220,
-      menuMs: 120,
-      sheetMs: 180,
-      toastMs: 180,
-      ease: EASING.appleEaseOut,
-      closeEase: EASING.appleClose,
-      quick: EASING.appleQuick,
-      magAmount: 0.55,
-      blur: 0,
-      genie: true,
-      shadow: "lite",
+      openMs: 200, closeMs: 140, minMs: 240,
+      menuMs: 100, sheetMs: 180, toastMs: 180,
+      ease: EASING.appleEaseOut, closeEase: EASING.appleClose, quick: EASING.appleQuick,
+      magAmount: 0.55, blur: 0, genie: true, shadow: "lite", durScale: 0.8,
     };
   }
   if (mode === "beautiful") {
     return {
-      openMs: 280,
-      closeMs: 170,
-      minMs: 340,
-      menuMs: 150,
-      sheetMs: 260,
-      toastMs: 260,
-      ease: EASING.appleSpring,
-      closeEase: EASING.appleClose,
-      quick: EASING.appleQuick,
-      magAmount: 1,
-      blur: 16,
-      genie: true,
-      shadow: "full",
+      openMs: 300, closeMs: 180, minMs: 360,
+      menuMs: 140, sheetMs: 260, toastMs: 260,
+      ease: EASING.appleSpring, closeEase: EASING.appleClose, quick: EASING.appleQuick,
+      magAmount: 1, blur: 24, genie: true, shadow: "full", durScale: 1.0,
     };
   }
   return {
-    openMs: 240,
-    closeMs: 160,
-    minMs: 300,
-    menuMs: 140,
-    sheetMs: 220,
-    toastMs: 220,
-    ease: EASING.appleSpring,
-    closeEase: EASING.appleClose,
-    quick: EASING.appleQuick,
-    magAmount: 0.82,
-    blur: 8,
-    genie: true,
-    shadow: "soft",
+    openMs: 260, closeMs: 170, minMs: 320,
+    menuMs: 120, sheetMs: 220, toastMs: 220,
+    ease: EASING.appleSpring, closeEase: EASING.appleClose, quick: EASING.appleQuick,
+    magAmount: 0.85, blur: 12, genie: true, shadow: "soft", durScale: 1.0,
   };
 }
 
@@ -130,34 +104,33 @@ export function getMotionTransition({
   duration = "normal",
   easing = "appleEaseOut",
   delay = 0,
-  visualMode = "balanced",
   reduceMotion = false,
 }: TransitionOpts = {}): string {
-  const profile = motionProfile(visualMode, reduceMotion);
-  if (reduceMotion) return `${property} ${profile.openMs}ms ${profile.ease}`;
+  if (reduceMotion) return `${property} 60ms ${EASING.appleEaseOut}`;
   const durMs = typeof duration === "number" ? duration : DURATION[duration];
-  const scaled = Math.round(durMs * (visualMode === "performance" ? 0.75 : 1));
   const curve = easing in EASING ? EASING[easing as keyof typeof EASING] : easing;
   const delayStr = delay > 0 ? ` ${delay}ms` : "";
-  return `${property} ${scaled}ms ${curve}${delayStr}`;
+  return `${property} ${durMs}ms ${curve}${delayStr}`;
 }
 
+/** Pre-built transition strings — one place so menus and sheets all feel the same. */
 export const MOTION_PRESETS = {
-  windowOpen: `transform 260ms ${EASING.appleSpring}, opacity 200ms ${EASING.appleEaseOut}`,
-  windowClose: `transform 160ms ${EASING.appleClose}, opacity 150ms ease-out`,
-  windowMinimize: `transform 320ms ${EASING.appleSpring}, opacity 240ms ease-out`,
-  windowGeometry: `left 240ms ${EASING.appleSpring}, top 240ms ${EASING.appleSpring}, width 240ms ${EASING.appleSpring}, height 240ms ${EASING.appleSpring}, border-radius 200ms ease-out`,
-  menuPop: `transform 140ms ${EASING.appleEaseOut}, opacity 120ms ease-out`,
-  dialogCard: `transform 240ms ${EASING.appleSpring}, opacity 180ms ease-out`,
-  buttonPress: `transform 90ms ${EASING.appleQuick}, background-color 120ms ease-out`,
-  toggleSwitch: `transform 180ms ${EASING.appleSpring}, background-color 180ms ease-out`,
-  toastIn: `transform 240ms ${EASING.appleSpring}, opacity 180ms ease-out`,
-  toastOut: `transform 180ms ${EASING.appleClose}, opacity 160ms ease-out`,
-  toastShift: `transform 220ms ${EASING.appleSpring}, max-height 220ms ${EASING.appleEaseOut}, margin 220ms ${EASING.appleEaseOut}, padding 220ms ${EASING.appleEaseOut}`,
+  windowOpen: "transform 280ms cubic-bezier(0.175,0.885,0.32,1.075), opacity 200ms ease-out",
+  windowClose: "transform 180ms cubic-bezier(0.32,0,0.67,0), opacity 160ms ease-out",
+  windowMinimize: "transform 340ms cubic-bezier(0.175,0.885,0.32,1.075), opacity 260ms ease-out",
+  windowGeometry: "left 220ms cubic-bezier(0.175,0.885,0.32,1.075), top 220ms cubic-bezier(0.175,0.885,0.32,1.075), width 220ms cubic-bezier(0.175,0.885,0.32,1.075), height 220ms cubic-bezier(0.175,0.885,0.32,1.075), border-radius 200ms ease-out",
+  menuPop: "transform 120ms cubic-bezier(0.16,1,0.3,1), opacity 100ms ease-out",
+  dialogCard: "transform 240ms cubic-bezier(0.175,0.885,0.32,1.075), opacity 180ms ease-out",
+  buttonPress: "transform 80ms cubic-bezier(0.25,1,0.5,1), background-color 100ms ease-out, filter 100ms ease-out",
+  toggleSwitch: "transform 250ms cubic-bezier(0.175,0.885,0.32,1.075), background-color 220ms ease-out",
+  toastIn: "transform 260ms cubic-bezier(0.175,0.885,0.32,1.075), opacity 200ms ease-out",
+  toastOut: "transform 180ms cubic-bezier(0.32,0,0.67,0), opacity 160ms ease-in",
+  toastShift: "transform 220ms cubic-bezier(0.175,0.885,0.32,1.075), max-height 220ms cubic-bezier(0.16,1,0.3,1), margin 220ms cubic-bezier(0.16,1,0.3,1), padding 220ms ease",
+  dockReveal: "transform 320ms cubic-bezier(0.175,0.885,0.32,1.075), opacity 220ms ease-out",
 } as const;
 
 /* ------------------------------------------------------------------ */
-/* Analytic spring — interruptible, allocation-free per sample         */
+/* Analytic damped spring — interruptible, allocation-free per sample */
 /* ------------------------------------------------------------------ */
 
 export interface SpringState {
@@ -170,7 +143,10 @@ export function springCreate(value: number, target = value): SpringState {
   return { value, velocity: 0, target };
 }
 
-/** Advance one step. dt is seconds. Returns true when visually settled. */
+/**
+ * Advance one step. dt is seconds. Returns true when visually settled
+ * (within 0.15 units and velocity < threshold). Settled snaps exactly.
+ */
 export function springStep(
   s: SpringState,
   dt: number,
@@ -181,7 +157,7 @@ export function springStep(
   const accel = (-stiffness * (s.value - s.target) - damping * s.velocity) / mass;
   s.velocity += accel * dt;
   s.value += s.velocity * dt;
-  const settled = Math.abs(s.value - s.target) < 0.15 && Math.abs(s.velocity) < 8;
+  const settled = Math.abs(s.value - s.target) < 0.12 && Math.abs(s.velocity) < 6;
   if (settled) {
     s.value = s.target;
     s.velocity = 0;
@@ -194,10 +170,13 @@ export function springRetarget(s: SpringState, target: number) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Dock magnification — continuous, C1 at the influence edge           */
+/* Dock magnification bell — smooth C1 continuous at influence edge  */
 /* ------------------------------------------------------------------ */
 
-/** Cosine-squared bell. Zero derivative at the radius, so icons don't pop. */
+/**
+ * Cosine-squared falloff. Zero derivative at radius means icons
+ * don't visibly "pop" when the pointer enters/leaves the dock.
+ */
 export function dockScale(distance: number, radius: number, min: number, max: number): number {
   if (radius <= 0 || distance >= radius || max <= min) return min;
   const t = distance / radius;
@@ -206,9 +185,9 @@ export function dockScale(distance: number, radius: number, min: number, max: nu
 }
 
 /**
- * Neighbor displacement. Each icon is pushed by half the extra width of
- * every other icon, away from that icon. The row stays centered, and a
- * growing icon never overlaps its neighbor.
+ * Compute neighbor shifts so an icon's extra width pushes its siblings
+ * apart symmetrically. The row stays centered (total displacement = 0)
+ * and overlapping icons can never happen during magnification.
  */
 export function dockShifts(extras: number[]): number[] {
   const n = extras.length;
@@ -220,13 +199,13 @@ export function dockShifts(extras: number[]): number[] {
   for (let i = 0; i < n; i++) {
     const left = prefix[i];
     const right = total - prefix[i + 1];
-    shifts[i] = left / 2 - right / 2;
+    shifts[i] = (left - right) / 2;
   }
   return shifts;
 }
 
 /* ------------------------------------------------------------------ */
-/* Interrupt / retarget helpers for compositor-owned elements          */
+/* Interrupt-safe transition helpers (compositor-owned elements)     */
 /* ------------------------------------------------------------------ */
 
 export function readTranslate(el: HTMLElement): { x: number; y: number; s: number } {
@@ -236,14 +215,24 @@ export function readTranslate(el: HTMLElement): { x: number; y: number; s: numbe
   return { x: m.e, y: m.f, s: m.a || 1 };
 }
 
-/** Freeze the in-flight transform, then animate to `to`. Input can call this at any time. */
-export function retargetTransform(el: HTMLElement, to: string, ms: number, ease: string, opacity?: string) {
+/**
+ * Freeze the element's current transform mid-flight and retarget to `to`.
+ * Calling this at any point (e.g. on drag start) prevents jumpy snaps
+ * back to the layout start. This is the core of G1OS's interruptibility.
+ */
+export function retargetTransform(
+  el: HTMLElement,
+  to: string,
+  ms: number,
+  ease: string,
+  opacity?: string,
+) {
   const cur = getComputedStyle(el).transform;
   el.style.transition = "none";
   el.style.transform = !cur || cur === "none" ? "none" : cur;
-  // Flush so the next transition starts from the sampled frame, not the target.
+  // Force style flush so next transition begins from the frozen frame.
   el.getBoundingClientRect();
-  el.style.transition = `transform ${ms}ms ${ease}, opacity ${Math.max(80, Math.round(ms * 0.75))}ms ease-out`;
+  el.style.transition = `transform ${ms}ms ${ease}, opacity ${Math.max(80, Math.round(ms * 0.7))}ms ease-out`;
   el.style.transform = to;
   if (opacity != null) el.style.opacity = opacity;
 }
@@ -255,9 +244,9 @@ export function clearMotion(el: HTMLElement) {
 }
 
 /**
- * Commit the element's visual box back into layout coordinates so a drag
- * can take over mid-animation without a jump. Scale is discarded — the
- * window returns to its layout size, centered on the visual center.
+ * Commit element's visual box back into layout coordinates so a drag
+ * takes over mid-animation without a jump. Scale is discarded — window
+ * returns to layout size, centered on its visual center point.
  */
 export function commitVisualCenter(el: HTMLElement, layoutW: number, layoutH: number) {
   const parent = el.offsetParent as HTMLElement | null;
@@ -276,4 +265,29 @@ export function commitVisualCenter(el: HTMLElement, layoutW: number, layoutH: nu
   el.style.width = `${layoutW}px`;
   el.style.height = `${layoutH}px`;
   return { x, y, w: layoutW, h: layoutH };
+}
+
+/* ------------------------------------------------------------------ */
+/* Frame timing helpers                                              */
+/* ------------------------------------------------------------------ */
+
+/** A single rAF-ticked clock. Callers get a high-res timestamp. */
+export function onNextFrame(cb: (t: number) => void): number {
+  return requestAnimationFrame(cb);
+}
+
+export function cancelFrame(id: number) {
+  cancelAnimationFrame(id);
+}
+
+/**
+ * Clamp easing between 0 and 1 so invalid progress values never explode.
+ */
+export function clamp01(n: number): number {
+  return n < 0 ? 0 : n > 1 ? 1 : n;
+}
+
+/** Linear interpolation. */
+export function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
 }

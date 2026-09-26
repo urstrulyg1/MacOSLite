@@ -11,12 +11,43 @@ import TerminalApp from "./apps/TerminalApp";
 import InstallerApp from "./apps/InstallerApp";
 import BrowserApp from "./apps/BrowserApp";
 import { CalcApp, MusicApp, PhotosApp, PlayerApp, SysInfoApp, TextEditApp } from "./apps/MediaApps";
+import AppSwitcher from "./AppSwitcher";
+import DevOverlay from "./DevOverlay";
 import type { Win } from "./os";
 
+/**
+ * Wallpapers. The first entry is a layered CSS-composited macOS
+ * Sequoia-inspired scene so we don't depend on a JPG asset; the
+ * others are gradient variants. The CSS gradients are cheap
+ * (no image decode cost) — good for the old-iMac target.
+ */
 const WALLPAPERS = [
   { backgroundImage: "url(./wall.jpg)" },
-  { background: "linear-gradient(135deg,#134e5e,#71b280)" },
-  { background: "linear-gradient(150deg,#232526,#ff8f5e 130%)" },
+  // Sequoia-style blue mountains
+  {
+    background: `
+      radial-gradient(ellipse 80% 55% at 22% 18%, rgba(140, 180, 255, 0.45), transparent 55%),
+      radial-gradient(ellipse 70% 50% at 88% 22%, rgba(255, 190, 140, 0.28), transparent 55%),
+      radial-gradient(ellipse 120% 70% at 50% 115%, rgba(50, 80, 135, 0.9), transparent 70%),
+      linear-gradient(180deg, #7898c8 0%, #506d99 45%, #2b3f5e 100%)
+    `,
+  },
+  // Sonoma warm sunset
+  {
+    background: `
+      radial-gradient(ellipse 70% 50% at 80% 20%, rgba(255, 180, 100, 0.5), transparent 55%),
+      radial-gradient(ellipse 80% 60% at 20% 80%, rgba(80, 40, 60, 0.6), transparent 65%),
+      linear-gradient(180deg, #3a3050 0%, #804860 40%, #d88060 75%, #f4c480 100%)
+    `,
+  },
+  // Ventura teal
+  {
+    background: `
+      radial-gradient(ellipse 90% 60% at 50% 0%, rgba(120, 220, 220, 0.35), transparent 55%),
+      radial-gradient(ellipse 100% 60% at 50% 110%, rgba(20, 80, 90, 0.85), transparent 60%),
+      linear-gradient(180deg, #2d6a70 0%, #1c4850 50%, #0f2c38 100%)
+    `,
+  },
 ];
 
 function AppBody({ win }: { win: Win }) {
@@ -70,9 +101,18 @@ function Spotlight() {
   };
 
   return (
-    <div className="absolute inset-0 z-[600] flex items-start justify-center pt-[16vh]" onClick={() => os.setSpotlight(false)}>
+    <div
+      className="absolute inset-0 z-[600] flex items-start justify-center pt-[18vh]"
+      onClick={() => os.setSpotlight(false)}
+      style={{
+        animation: "fade-in 0.2s ease-out both",
+        background: "rgba(0,0,0,0.18)",
+        backdropFilter: "blur(6px)",
+        WebkitBackdropFilter: "blur(6px)",
+      }}
+    >
       <div
-        className="glass panel-in w-[560px] max-w-[86%] overflow-hidden rounded-2xl bg-[rgba(248,248,252,0.85)] shadow-[0_28px_90px_rgba(10,15,40,0.45),0_0_0_0.5px_rgba(0,0,0,0.2)]"
+        className="spotlight-card glass panel-in w-[600px] max-w-[90%] overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 px-4 py-3.5">
@@ -123,8 +163,11 @@ function Launchpad() {
   if (!os.launchpad) return null;
   const apps = Object.values(APPS).filter((a) => a.id !== "launchpad" && a.name.toLowerCase().includes(q.toLowerCase()));
   return (
-    <div className="glass absolute inset-0 z-[590] bg-[rgba(30,35,50,0.65)] backdrop-blur-md pt-[9vh]" onClick={() => os.setLaunchpad(false)}>
-      <div className="mx-auto mb-8 flex w-64 items-center gap-2 rounded-full bg-white/20 border border-white/20 px-4 py-2 backdrop-blur" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="launchpad glass absolute inset-0 z-[590] pt-[8vh]"
+      onClick={() => os.setLaunchpad(false)}
+    >
+      <div className="mx-auto mb-10 flex w-64 items-center gap-2 rounded-full bg-white/15 border border-white/15 px-4 py-2 backdrop-blur" onClick={(e) => e.stopPropagation()}>
         <Search size={15} className="text-white/80" />
         <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search G1OS Apps" className="w-full bg-transparent text-[13px] text-white outline-none placeholder:text-white/60" />
       </div>
@@ -401,10 +444,34 @@ function Stage() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.code === "Space") {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.code === "Space") {
         e.preventDefault();
         os.setSpotlight(!os.spotlight);
+      } else if (mod && e.key === "Tab") {
+        // ⌘-Tab = open/advance app switcher
+        e.preventDefault();
+        if (!os.switcherOpen) {
+          os.setSwitcherIdx(0);
+          os.setSwitcherOpen(true);
+        } else {
+          os.setSwitcherIdx((os.switcherIdx + 1) % Math.max(1, os.switcherApps.length));
+        }
+      } else if (mod && e.altKey && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        os.setDevOverlay(!os.devOverlay);
+      } else if (mod && e.key === "w") {
+        // Close front window
+        const front = os.wins.filter((w) => !w.min).sort((a, b) => b.z - a.z)[0];
+        if (front) { e.preventDefault(); os.closeWin(front.id); }
+      } else if (mod && e.key === "m") {
+        const front = os.wins.filter((w) => !w.min).sort((a, b) => b.z - a.z)[0];
+        if (front) { e.preventDefault(); os.setMin(front.id, true); }
+      } else if (mod && e.key === "f") {
+        const front = os.wins.filter((w) => !w.min).sort((a, b) => b.z - a.z)[0];
+        if (front) { e.preventDefault(); os.toggleFull(front.id); }
       } else if (e.key === "Escape") {
+        if (os.switcherOpen) { os.setSwitcherOpen(false); return; }
         os.setSpotlight(false);
         os.setLaunchpad(false);
         os.setMenuOpen(null);
@@ -417,7 +484,7 @@ function Stage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [os.spotlight]);
+  }, [os]);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -650,6 +717,8 @@ function Stage() {
       <Hud />
       <Spotlight />
       <Launchpad />
+      <AppSwitcher />
+      <DevOverlay />
       <SystemDialogModal />
       <PowerOverlay />
       <LockScreen />

@@ -8,13 +8,13 @@ import { LogoMark } from "./os/MenuBar";
 import { ChevronDown } from "lucide-react";
 
 const BOOT_LINES = [
-  "Apple EFI 1.10 · 64-bit fallback loader verified",
+  "G1OS EFI · 64-bit fallback loader verified",
   "probing RV730 framebuffer · 1920×1080 native modeset",
   "brcmfmac: BCM43224 AirPort Extreme loaded",
   "applesmc: 3 fans, 9 thermal zones armed (quiet mode)",
   "vdpau: G3DVL (r600) — 1080p hardware decode online",
   "ext4: root=UUID=78FA-C9B2 mounted clean (0.02s)",
-  "G1OS compositor ready in 38 MB",
+  "G1OS compositor ready in 38 MB · 60 fps",
 ];
 
 export default function App() {
@@ -84,7 +84,14 @@ export default function App() {
 
         {/* ---------------- 1. BOOT SEQUENCE: JeevanOS -> G1OS ---------------- */}
         {(bootPhase === "jeevan" || bootPhase === "g1os") && (
-          <div className="absolute inset-0 z-[700] grid place-items-center bg-[#050608] select-none">
+          <div
+            className="absolute inset-0 z-[700] grid place-items-center bg-[#050608] select-none"
+            style={{
+              animation: bootPhase === "g1os"
+                ? "boot-fade 0.5s cubic-bezier(0.16,1,0.3,1) forwards"
+                : "fade-in 0.3s ease-out both",
+            }}
+          >
             <div className="flex w-[340px] flex-col items-center text-center animate-in fade-in duration-500">
               <div className="relative mb-6">
                 <LogoMark size={78} />
