@@ -147,6 +147,87 @@ jobs:
           set -eu
           sh scripts/audit-installation-contract.sh out/G1OS.iso
 
+      - name: Real disk installation integration test (UEFI QEMU)
+        working-directory: macliteos
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          DISK="$PWD/out/ci-install-disk.raw"
+          MARKER="$PWD/out/ci-install-marker.raw"
+          LOG="$PWD/out/qemu-real-install.log"
+          rm -f "$DISK" "$MARKER" "$LOG"
+          qemu-img create -f raw "$DISK" 12G
+          qemu-img create -f raw "$MARKER" 32M
+          mkfs.ext4 -F -L G1OS_CI "$MARKER" >/dev/null
+
+          cleanup() {
+            if [ -n "${LOOP_DEV:-}" ]; then
+              sudo umount /mnt/g1os-ci-root 2>/dev/null || true
+              sudo umount /mnt/g1os-ci-efi 2>/dev/null || true
+              sudo losetup -d "$LOOP_DEV" 2>/dev/null || true
+            fi
+            rm -f "$DISK" "$MARKER"
+          }
+          trap cleanup EXIT HUP INT TERM
+
+          # Boot the real ISO under UEFI with a completely blank virtual target.
+          # The marker disk opts the initrd into CI mode; the blank disk is the
+          # actual installation target. No host disk can be touched.
+          set +e
+          timeout 240s qemu-system-x86_64             -machine q35,accel=tcg             -m 4096             -smp 2             -vga std             -bios /usr/share/OVMF/OVMF_CODE_4M.fd             -drive format=raw,file="$DISK",if=virtio             -drive format=raw,file="$MARKER",if=virtio             -drive format=raw,file=out/G1OS.iso,if=ide,media=cdrom             -boot d             -serial stdio             -display none             -no-reboot             2>&1 | tee "$LOG"
+          QEMU_RC=${PIPESTATUS[0]}
+          set -e
+          [ "$QEMU_RC" -eq 0 ] || [ "$QEMU_RC" -eq 124 ] || {
+            echo "ERROR: real installation VM failed with exit code $QEMU_RC" >&2
+            exit "$QEMU_RC"
+          }
+          grep -F "CI real installation backend completed successfully" "$LOG" >/dev/null
+          grep -F "CI installation reached authoritative COMPLETED state" "$LOG" >/dev/null
+          grep -F "CI installation disk synchronized; integration test complete" "$LOG" >/dev/null
+
+          # Independently inspect the disk produced by the real installer.
+          LOOP_DEV="$(sudo losetup --find --show --partscan "$DISK")"
+          sudo udevadm settle --timeout=5 || true
+          sudo mkdir -p /mnt/g1os-ci-efi /mnt/g1os-ci-root
+          sudo mount -o ro "${LOOP_DEV}p1" /mnt/g1os-ci-efi
+          sudo mount -o ro "${LOOP_DEV}p3" /mnt/g1os-ci-root
+          test -s /mnt/g1os-ci-efi/EFI/BOOT/BOOTX64.EFI
+          test -s /mnt/g1os-ci-efi/EFI/BOOT/grub.cfg
+          test -s /mnt/g1os-ci-efi/boot/vmlinuz-g1os
+          test -s /mnt/g1os-ci-efi/boot/initrd-g1os.img
+          test -s /mnt/g1os-ci-efi/boot/g1os-boot-manifest.txt
+          test -s /mnt/g1os-ci-root/etc/g1os-installed
+          test -s /mnt/g1os-ci-root/etc/fstab
+          grep -F "G1OS_BUILD_ID=" /mnt/g1os-ci-root/etc/g1os-installed >/dev/null
+          grep -F "/var/data" /mnt/g1os-ci-root/etc/fstab >/dev/null
+          grep -F "root=UUID=" /mnt/g1os-ci-efi/EFI/BOOT/grub.cfg >/dev/null
+          grep -F "initrd /boot/initrd-g1os.img" /mnt/g1os-ci-efi/EFI/BOOT/grub.cfg >/dev/null
+          umount /mnt/g1os-ci-root
+          umount /mnt/g1os-ci-efi
+          sudo losetup -d "$LOOP_DEV"
+          LOOP_DEV=""
+
+          # Second boot is from the installed disk only. This validates the
+          # actual installed UEFI -> GRUB -> kernel -> initramfs -> root/data
+          # resolution path, rather than only validating the live ISO.
+          set +e
+          timeout 180s qemu-system-x86_64             -machine q35,accel=tcg             -m 4096             -smp 2             -vga std             -bios /usr/share/OVMF/OVMF_CODE_4M.fd             -drive format=raw,file="$DISK",if=virtio             -serial stdio             -display none             -no-reboot             2>&1 | tee -a "$LOG"
+          QEMU_BOOT_RC=${PIPESTATUS[0]}
+          set -e
+          grep -F "Installed root filesystem verified" "$LOG" >/dev/null
+          grep -F "Persistent data filesystem mounted" "$LOG" >/dev/null
+          grep -F "Starting installed G1OS compositor" "$LOG" >/dev/null
+          if grep -Eiq "kernel panic|kernel BUG|cannot mount installed root|persistent data filesystem.*could not be resolved|real G1OS kernel image not found|initramfs.*not found" "$LOG"; then
+            echo "ERROR: installed-boot integration log contains a fatal boot/install error." >&2
+            exit 1
+          fi
+          [ "$QEMU_BOOT_RC" -eq 0 ] || [ "$QEMU_BOOT_RC" -eq 124 ] || {
+            echo "ERROR: installed-disk UEFI boot failed with exit code $QEMU_BOOT_RC" >&2
+            exit "$QEMU_BOOT_RC"
+          }
+          echo "PASS: real ISO installation + installed-disk UEFI boot integration test completed."
+          echo "PASS: no host disk was used; target was isolated QEMU virtual storage."
+
       - name: Boot ISO under real UEFI QEMU and require graphical installer readiness
         working-directory: macliteos
         run: |
