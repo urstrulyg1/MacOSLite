@@ -13,6 +13,7 @@
 #include "ml/log.h"
 #include <unistd.h>
 #include <assert.h>
+#include <unistd.h>
 
 static int failures;
 #define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, msg); failures++; } } while (0)

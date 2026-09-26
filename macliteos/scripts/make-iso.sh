@@ -169,6 +169,7 @@ EOF
 
 mksquashfs "$BASE_ST" "$ST/live/maclite-base.sqfs" -comp zstd -Xcompression-level 12 -no-progress
 rm -rf "$BASE_ST"
+[ ! -e "$BASE_ST" ] || { echo "ERROR: rootfs staging leaked into ISO build tree" >&2; exit 6; }
 cp "$KERNEL" "$ST/boot/vmlinuz-maclite"
 cp "$INITRD" "$ST/boot/initrd-maclite.img"
 cp "$KERNEL_MANIFEST" "$ST/boot/g1os-kernel-manifest.txt"
