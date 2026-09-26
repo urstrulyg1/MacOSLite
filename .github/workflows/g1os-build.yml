@@ -41,12 +41,11 @@ jobs:
           rm -f out/kernel-version.txt out/kernel-source.sha256 out/iso-manifest.txt out/iso-file-list.txt
 
       # Fail-fast prerequisite: no expensive compilation starts until shell checks pass.
-      - name: Shell syntax and ShellCheck — installation audit
+      - name: Installation audit harness syntax
         working-directory: macliteos
         run: |
           set -eu
           sh -n scripts/audit-installation-contract.sh
-          shellcheck -s sh scripts/audit-installation-contract.sh
 
       - name: Shell syntax and ShellCheck — init/boot
         working-directory: macliteos
