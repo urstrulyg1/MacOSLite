@@ -258,6 +258,7 @@ const BADGE_SYMBOL: Record<string, { from: string; to: string; symbol: string }>
   storage: { from: "#c5c8d0", to: "#6e7480", symbol: "hard-drive" },
   keyboard: { from: "#8e93a0", to: "#3e4450", symbol: "keyboard" },
   access: { from: "#4d7dff", to: "#2a2fbf", symbol: "eye" },
+  dev: { from: "#ff8a3d", to: "#e25c00", symbol: "cpu" },
   power: { from: "#5ee0a0", to: "#149a72", symbol: "battery" },
   updates: { from: "#ffd15a", to: "#f07a00", symbol: "download" },
   users: { from: "#6aa7ff", to: "#3a46d6", symbol: "user" },

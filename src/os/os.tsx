@@ -143,6 +143,8 @@ interface OSCtx {
   toggleFull: (id: number) => void;
   moveWin: (id: number, x: number, y: number) => void;
   resizeWin: (id: number, w: number, h: number) => void;
+  snapWindow: (id: number, x: number, y: number, w: number, h: number) => { x: number; y: number; w: number; h: number };
+  switcherApps: AppId[];
   notify: (app: string, title: string, body: string, icon?: string) => void;
   dismissNote: (id: number) => void;
   clearNotes: () => void;
@@ -169,6 +171,9 @@ interface OSCtx {
   isLoggedIn: boolean; setIsLoggedIn: (v: boolean) => void;
   locked: boolean; setLocked: (v: boolean) => void;
   bouncingApp: AppId | null; triggerAppBounce: (a: AppId) => void;
+  switcherOpen: boolean; switcherIdx: number;
+  setSwitcherOpen: (v: boolean) => void; setSwitcherIdx: (n: number) => void;
+  devOverlay: boolean; setDevOverlay: (v: boolean) => void;
   fs: Record<string, FSItem[]>;
   emptyTrash: () => void;
   moveToTrash: (item: FSItem, from?: string) => void;
@@ -213,6 +218,9 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
   const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [locked, setLocked] = useState(false);
   const [bouncingApp, setBouncingApp] = useState<AppId | null>(null);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [switcherIdx, setSwitcherIdx] = useState(0);
+  const [devOverlay, setDevOverlay] = useState(false);
   const [fs, setFs] = useState<Record<string, FSItem[]>>(INITIAL_FS);
 
   const zTop = useRef(10);
@@ -338,7 +346,7 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
         return {
           ...x, full: true, animState: "active" as const,
           saved: { x: x.x, y: x.y, w: x.w, h: x.h },
-          x: 0, y: 0, w: stageW, h: stageH - 28, z: zTop.current,
+          x: 0, y: 26, w: stageW, h: stageH - 26, z: zTop.current,
         };
       }
       const s = x.saved ?? { x: 80, y: 48, w: 720, h: 480 };
@@ -401,14 +409,50 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
     return visible.reduce((a, b) => (a.z > b.z ? a : b)).app;
   }, [wins, ws]);
 
+  /** macOS-style window snap: drag to edges = half/full tile. */
+  const snapWindow = useCallback((id: number, x: number, y: number, w: number, h: number) => {
+    const EDGE = 4;
+    let newX = x, newY = y, newW = w, newH = h, makeFull = false;
+    // Top edge = maximize
+    if (y <= EDGE) { newX = 0; newY = 26; newW = stageW; newH = stageH - 26; makeFull = true; }
+    // Left half
+    else if (x <= EDGE) { newX = 0; newY = 26; newW = Math.floor(stageW / 2); newH = stageH - 26; }
+    // Right half
+    else if (x + w >= stageW - EDGE) { newX = Math.ceil(stageW / 2); newY = 26; newW = Math.floor(stageW / 2); newH = stageH - 26; }
+    setWins((prev) => prev.map((p) => {
+      if (p.id !== id) return p;
+      if (makeFull && !p.full) {
+        return {
+          ...p, full: true,
+          saved: { x: p.x, y: p.y, w: p.w, h: p.h },
+          x: newX, y: newY, w: newW, h: newH,
+        };
+      }
+      return { ...p, full: false, x: newX, y: newY, w: newW, h: newH };
+    }));
+    return { x: newX, y: newY, w: newW, h: newH };
+  }, [stageW, stageH]);
+
+  // App switcher: list of running apps in z-order, most-recent first, always with Finder.
+  const switcherApps = useMemo(() => {
+    const seen = new Set<AppId>();
+    const ordered = [...wins]
+      .filter((w) => w.ws === ws && w.animState !== "closing")
+      .sort((a, b) => b.z - a.z)
+      .map((w) => w.app)
+      .filter((a) => (seen.has(a) ? false : (seen.add(a), true)));
+    if (!ordered.includes("finder")) ordered.push("finder");
+    return ordered;
+  }, [wins, ws]);
+
   useEffect(() => () => {
     closeTimers.current.forEach((t) => window.clearTimeout(t));
     window.clearTimeout(hudTimer.current);
   }, []);
 
   const val: OSCtx = {
-    wins, notes, openApp, closeWin, focusWin, setMin, finishMin, settleAnim, toggleFull, moveWin, resizeWin,
-    notify, dismissNote, clearNotes, activeApp,
+    wins, notes, openApp, closeWin, focusWin, setMin, finishMin, settleAnim, toggleFull, moveWin, resizeWin, snapWindow,
+    notify, dismissNote, clearNotes, activeApp, switcherApps,
     menuOpen, setMenuOpen, spotlight, setSpotlight, launchpad, setLaunchpad,
     ws, setWs, accent, setAccent, perfMode, setPerfMode, visualMode, setVisualMode,
     appearance, setAppearance, contrast, setContrast,
@@ -417,7 +461,10 @@ export function OSProvider({ children, stageW, stageH }: { children: React.React
     soundVol, setSoundVol, brightness, setBrightness, kbBrightness, setKbBrightness,
     hud, pulseHud,
     powerState, setPowerState, isLoggedIn, setIsLoggedIn, locked, setLocked,
-    bouncingApp, triggerAppBounce, fs, emptyTrash, moveToTrash, addFsItem, renameFsItem,
+    bouncingApp, triggerAppBounce,
+    switcherOpen, switcherIdx, setSwitcherOpen, setSwitcherIdx,
+    devOverlay, setDevOverlay,
+    fs, emptyTrash, moveToTrash, addFsItem, renameFsItem,
   };
 
   return <Ctx.Provider value={val}>{children}</Ctx.Provider>;

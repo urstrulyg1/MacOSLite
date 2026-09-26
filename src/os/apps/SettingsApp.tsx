@@ -17,6 +17,7 @@ const PANELS = [
   { id: "storage", name: "Storage", icon: HardDrive },
   { id: "keyboard", name: "Keyboard & Shortcuts", icon: Keyboard },
   { id: "access", name: "Accessibility", icon: Eye },
+  { id: "dev", name: "Developer", icon: Cpu },
   { id: "power", name: "Energy & SMC Fans", icon: BatteryCharging },
   { id: "updates", name: "Software Update", icon: DownloadCloud },
   { id: "users", name: "Users & Accounts", icon: CircleUserRound },
@@ -26,9 +27,10 @@ const PANELS = [
 
 const ACCENTS = ["#0a84ff", "#30b0c7", "#bf5af2", "#ff9f0a", "#32d74b"];
 const WALLS = [
-  { name: "Sonoma Drift", src: "./wall.jpg" },
-  { name: "Lagoon", css: "linear-gradient(135deg,#134e5e,#71b280)" },
-  { name: "Ember Dusk", css: "linear-gradient(150deg,#232526,#ff8f5e 130%)" },
+  { name: "Desert Dune", src: "./wall.jpg" },
+  { name: "Sequoia Blue", css: "sequoia" },
+  { name: "Sonoma Sunset", css: "sunset" },
+  { name: "Ventura Teal", css: "teal" },
 ];
 
 export default function SettingsApp() {
@@ -81,6 +83,7 @@ export default function SettingsApp() {
           {panel === "storage" && <StoragePanel />}
           {panel === "keyboard" && <KeyboardPanel />}
           {panel === "access" && <AccessPanel />}
+          {panel === "dev" && <DevPanel />}
           {panel === "power" && <PowerPanel />}
           {panel === "updates" && <UpdatesPanel />}
           {panel === "users" && <UsersPanel />}
@@ -342,9 +345,39 @@ function AccessPanel() {
         <Toggle on={os.reduceMotion} onChange={os.setReduceMotion} />
       </Row>
       <Row label="Increase Contrast" hint="Emphasizes window borders and control outlines">
-        <Toggle on={false} onChange={() => {}} />
+        <Toggle on={os.contrast} onChange={os.setContrast} />
       </Row>
     </Card>
+  );
+}
+
+function DevPanel() {
+  const os = useOS();
+  return (
+    <>
+      <Card title="Performance Overlay" sub="Real-time FPS, frame-time and dropped-frame meter (⌥⌘D).">
+        <Row label="Show FPS / Frame Time" hint="Adds a compact heads-up meter in the top-left corner">
+          <Toggle on={os.devOverlay} onChange={os.setDevOverlay} />
+        </Row>
+      </Card>
+      <Card title="Rendering Mode" sub="G1OS adapts to available hardware automatically. Manual override.">
+        <div className="grid grid-cols-3 gap-2">
+          {(["performance", "balanced", "beautiful"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => os.setVisualMode(m)}
+              className={`rounded-lg border px-3 py-2 text-[12px] font-medium capitalize transition ${
+                os.visualMode === m
+                  ? "border-[var(--acc)] bg-[var(--acc)]/10 text-[var(--acc)]"
+                  : "border-black/10 hover:bg-black/5"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </Card>
+    </>
   );
 }
 

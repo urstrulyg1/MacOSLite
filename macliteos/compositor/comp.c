@@ -176,7 +176,7 @@ static void detach_framebuffer_console(void)
     while ((e = readdir(d))) {
         if (strncmp(e->d_name, "vtcon", 5) != 0) continue;
 
-        char name_path[256], bind_path[256], name[128] = {0};
+        char name_path[512], bind_path[512], name[128] = {0};
         snprintf(name_path, sizeof name_path, "%s/%s/name", root, e->d_name);
         snprintf(bind_path, sizeof bind_path, "%s/%s/bind", root, e->d_name);
 
@@ -1072,7 +1072,7 @@ static void handle_client(void *ud, int fd, uint32_t type, const void *payload, 
         st.accel = 0;
         st.screen_w = C.screen_w; st.screen_h = C.screen_h;
         st.cur_ws = (uint32_t)C.cur_ws; st.n_ws = N_WS;
-        snprintf(st.gpu_name, sizeof st.gpu_name, "%s", C.gpu.device[0] ? C.gpu.device : "software");
+        snprintf(st.gpu_name, sizeof st.gpu_name, "%.*s", (int)(sizeof st.gpu_name - 1), C.gpu.device[0] ? C.gpu.device : "software");
         mlipc_send(fd, MS_STATS, &st, sizeof st);
         break;
     }
@@ -1113,7 +1113,7 @@ static void accept_client(void *ud, uint32_t events)
     cl->pid = (pid_t)h->pid;
     cl->alive = true;
     cl->is_tool = strncmp(h->name, "tool:", 5) == 0;
-    snprintf(cl->name, sizeof cl->name, "%s", h->name);
+    snprintf(cl->name, sizeof cl->name, "%.*s", (int)(sizeof cl->name - 1), h->name);
     msg_welcome w = { .version = MICA_PROTO_VERSION, .screen_w = C.screen_w, .screen_h = C.screen_h,
                       .scale = 1, .mode = C.mode, .nworkspaces = N_WS, .cur_ws = (uint32_t)C.cur_ws };
     snprintf(w.name, sizeof w.name, "mica-comp");
@@ -1274,7 +1274,7 @@ static void input_scroll(int dx, int dy)
  */
 typedef struct {
     int fd;
-    char path[64];
+    char path[320];
     char name[128];
     ml_source *src;
     bool pointer;
@@ -1518,7 +1518,7 @@ static void input_scan(void *ud)
     struct dirent *ent;
     while ((ent = readdir(dir))) {
         if (strncmp(ent->d_name, "event", 5) != 0) continue;
-        char path[64];
+        char path[320];
         snprintf(path, sizeof path, "/dev/input/%s", ent->d_name);
         if (access(path, R_OK) != 0) continue;
 
@@ -1557,7 +1557,7 @@ static void input_scan(void *ud)
         d->keyboard = keyboard;
         snprintf(d->path, sizeof d->path, "%s", path);
         if (ioctl(fd, EVIOCGNAME(sizeof d->name), d->name) < 0)
-            snprintf(d->name, sizeof d->name, "%s", path);
+            snprintf(d->name, sizeof d->name, "%.*s", (int)(sizeof d->name - 1), path);
         input_resync_state(d);
         d->src = ml_loop_add_fd(C.loop, fd, EPOLLIN | EPOLLERR | EPOLLHUP, input_event_fd, d);
         ML_INFO("input device: %s (%s)%s%s", d->path, d->name,
