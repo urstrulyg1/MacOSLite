@@ -457,6 +457,15 @@ step 2 20 "Confirming target partitions are not mounted"
 emit_state "INSTALLING"
 save_state "RUNNING" "INSTALLING" 30 "Partitioning target disk"
 
+validate_repair_layout() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  boot_type=$(blkid -c /dev/null -s TYPE -o value "$DEV_BOOT" 2>/dev/null || true)
+  data_type=$(blkid -c /dev/null -s TYPE -o value "$DEV_DATA" 2>/dev/null || true)
+  base_type=$(blkid -c /dev/null -s TYPE -o value "$DEV_BASE" 2>/dev/null || true)
+  case "$boot_type" in vfat|fat|msdos) ;; *) fail "Repair FAIL: EFI partition is not FAT/vfat" ;; esac
+  [ "$data_type" = "ext4" ] || fail "Repair FAIL: persistent data partition is not ext4"
+  [ "$base_type" = "ext4" ] || fail "Repair FAIL: G1OS root partition is not ext4"
+}
 if [ "$REPAIR_MODE" = 1 ]; then
   step 3 30 "Repair mode: checking existing partitions on target"
   has_partitions=1
@@ -481,6 +490,8 @@ if [ "$REPAIR_MODE" = 1 ]; then
     echo "Notice: Target disk /dev/$TARGET has no existing partition layout to repair. Proceeding with fresh partitioning..."
     REPAIR_MODE=0
   else
+    step 3 30 "Repair mode: validating existing partition layout"
+    validate_repair_layout
     step 3 30 "Repair mode: preserving existing partitions on target"
     require_partition_nodes
     BOOT_UUID=$(read_block_tag "$DEV_BOOT" UUID)
@@ -501,12 +512,6 @@ if [ "$REPAIR_MODE" = 0 ]; then
         swapoff "$p" 2>/dev/null || true
       fi
     done
-    if command -v swapoff >/dev/null 2>&1; then
-      swapoff -a 2>/dev/null || true
-    fi
-    if command -v dmsetup >/dev/null 2>&1; then
-      dmsetup remove_all -f 2>/dev/null || true
-    fi
     if command -v wipefs >/dev/null 2>&1; then
       wipefs -a -f "$DEV" 2>/dev/null || wipefs -a "$DEV" 2>/dev/null || true
     fi
