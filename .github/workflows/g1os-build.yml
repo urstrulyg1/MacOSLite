@@ -67,14 +67,24 @@ jobs:
           done
 
 
-      - name: Clean userspace build and tests
+      - name: Clean userspace build
         working-directory: macliteos
         run: |
           set -eu
           make clean
           ./configure
           make -j"$(nproc)" all
+
+      - name: Production userspace audit
+        working-directory: macliteos
+        run: |
+          set -eu
           sh scripts/audit-production.sh
+
+      - name: Full userspace runtime regression suite
+        working-directory: macliteos
+        run: |
+          set -eu
           sh scripts/run-tests.sh
 
 
