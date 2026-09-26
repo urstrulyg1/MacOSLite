@@ -355,6 +355,9 @@ require_partition_nodes() {
     if command -v mdev >/dev/null 2>&1; then
       mdev -s 2>/dev/null || true
     fi
+    if command -v blockdev >/dev/null 2>&1; then
+      blockdev --rereadpt "$DEV" 2>/dev/null || true
+    fi
     if command -v partx >/dev/null 2>&1; then
       partx -u "$DEV" 2>/dev/null || partx -a "$DEV" 2>/dev/null || true
     fi
@@ -369,16 +372,16 @@ require_partition_nodes() {
 
 # Detect partitioning utility
 PART_TOOL=""
-if command -v sgdisk >/dev/null 2>&1; then
-  PART_TOOL="sgdisk"
-elif command -v sfdisk >/dev/null 2>&1; then
+if command -v sfdisk >/dev/null 2>&1; then
   PART_TOOL="sfdisk"
 elif command -v parted >/dev/null 2>&1; then
   PART_TOOL="parted"
+elif command -v sgdisk >/dev/null 2>&1; then
+  PART_TOOL="sgdisk"
 elif command -v fdisk >/dev/null 2>&1; then
   PART_TOOL="fdisk"
 fi
-[ -n "$PART_TOOL" ] || [ "$DRY_RUN" = 1 ] || fail "required partitioning tool missing (need sgdisk, sfdisk, parted, or fdisk)"
+[ -n "$PART_TOOL" ] || [ "$DRY_RUN" = 1 ] || fail "required partitioning tool missing (need sfdisk, parted, sgdisk, or fdisk)"
 
 # Detect filesystem formatters
 if ! command -v mkfs.vfat >/dev/null 2>&1 && ! command -v mkdosfs >/dev/null 2>&1; then
@@ -441,47 +444,110 @@ step 2 20 "Confirming target partitions are not mounted"
 
 emit_state "INSTALLING"
 save_state "RUNNING" "INSTALLING" 30 "Partitioning target disk"
+
 if [ "$REPAIR_MODE" = 1 ]; then
-  step 3 30 "Repair mode: preserving existing partitions on target"
-  require_partition_nodes
-  BOOT_UUID=$(read_block_tag "$DEV_BOOT" UUID)
-  DATA_UUID=$(read_block_tag "$DEV_DATA" UUID)
-  BASE_UUID=$(read_block_tag "$DEV_BASE" UUID)
-  BASE_PARTUUID=$(read_block_tag "$DEV_BASE" PARTUUID)
-  step 4 40 "Repair mode: retaining existing filesystem data"
-else
+  step 3 30 "Repair mode: checking existing partitions on target"
+  has_partitions=1
+  for p in "$DEV_BOOT" "$DEV_DATA" "$DEV_BASE"; do
+    if [ ! -b "$p" ]; then
+      has_partitions=0
+      break
+    fi
+  done
+  if [ "$has_partitions" = 0 ]; then
+    require_partition_nodes 2>/dev/null || true
+    has_partitions=1
+    for p in "$DEV_BOOT" "$DEV_DATA" "$DEV_BASE"; do
+      if [ ! -b "$p" ]; then
+        has_partitions=0
+        break
+      fi
+    done
+  fi
+
+  if [ "$has_partitions" = 0 ]; then
+    echo "Notice: Target disk /dev/$TARGET has no existing partition layout to repair. Proceeding with fresh partitioning..."
+    REPAIR_MODE=0
+  else
+    step 3 30 "Repair mode: preserving existing partitions on target"
+    require_partition_nodes
+    BOOT_UUID=$(read_block_tag "$DEV_BOOT" UUID)
+    DATA_UUID=$(read_block_tag "$DEV_DATA" UUID)
+    BASE_UUID=$(read_block_tag "$DEV_BASE" UUID)
+    BASE_PARTUUID=$(read_block_tag "$DEV_BASE" PARTUUID)
+    step 4 40 "Repair mode: retaining existing filesystem data"
+  fi
+fi
+
+if [ "$REPAIR_MODE" = 0 ]; then
   step 3 30 "Repartitioning target with EFI, persistent data and root partitions ($PART_TOOL)"
   if [ "$DRY_RUN" = 0 ]; then
     for p in "${DEV}"* "${DEV}"p*; do
       [ -b "$p" ] || continue
-      umount -f "$p" 2>/dev/null || true
+      umount "$p" 2>/dev/null || umount -f "$p" 2>/dev/null || umount -l "$p" 2>/dev/null || true
       if command -v swapoff >/dev/null 2>&1; then
         swapoff "$p" 2>/dev/null || true
       fi
     done
-    if command -v wipefs >/dev/null 2>&1; then
-      wipefs -a "$DEV" 2>/dev/null || true
+    if command -v swapoff >/dev/null 2>&1; then
+      swapoff -a 2>/dev/null || true
     fi
+    if command -v dmsetup >/dev/null 2>&1; then
+      dmsetup remove_all -f 2>/dev/null || true
+    fi
+    if command -v wipefs >/dev/null 2>&1; then
+      wipefs -a -f "$DEV" 2>/dev/null || wipefs -a "$DEV" 2>/dev/null || true
+    fi
+    # Wipe first 4MB (primary GPT, protective MBR)
     dd if=/dev/zero of="$DEV" bs=1M count=4 conv=notrunc 2>/dev/null || true
+    # Wipe last 4MB (secondary backup GPT at the end of the disk)
+    dev_size_sec=$(blockdev --getsz "$DEV" 2>/dev/null || true)
+    if [ -n "$dev_size_sec" ] && [ "$dev_size_sec" -gt 8192 ]; then
+      seek_sec=$((dev_size_sec - 8192))
+      dd if=/dev/zero of="$DEV" bs=512 seek="$seek_sec" count=8192 conv=notrunc 2>/dev/null || true
+    fi
+    if command -v sgdisk >/dev/null 2>&1; then
+      sgdisk --zap-all "$DEV" >/dev/null 2>&1 || true
+    fi
     sync
 
-    if [ "$PART_TOOL" = "sgdisk" ]; then
-      run sgdisk --zap-all "$DEV"
-      run sgdisk -n 1:0:+256M -t 1:ef00 -c 1:MACLITE_BOOT "$DEV"
-      run sgdisk -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA "$DEV"
-      run sgdisk -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE "$DEV"
-    elif [ "$PART_TOOL" = "sfdisk" ]; then
-      run sh -c 'printf "label: gpt\n,256M,U\n,4G,L\n,,L\n" | sfdisk --wipe always --wipe-partitions always "$1"' sh "$DEV" 2>/dev/null || \
-      run sh -c 'printf "label: gpt\n,256M,U\n,4G,L\n,,L\n" | sfdisk "$1"' sh "$DEV"
-    elif [ "$PART_TOOL" = "parted" ]; then
-      run parted -s "$DEV" mklabel gpt
-      run parted -s "$DEV" mkpart MACLITE_BOOT fat32 1MiB 257MiB
-      run parted -s "$DEV" set 1 esp on
-      run parted -s "$DEV" mkpart MACLITE_DATA ext4 257MiB 4353MiB
-      run parted -s "$DEV" mkpart MACLITE_BASE ext4 4353MiB 100%
-    else
-      run sh -c 'printf "%s\\n" "g" "n" "1" "" "+256M" "t" "1" "1" "n" "2" "" "+4G" "t" "2" "20" "n" "3" "" "" "t" "3" "20" "w" | fdisk "$1"' sh "$DEV"
+    # Multi-tier partitioning with automatic fallback across available tools
+    partition_ok=0
+    if [ "$partition_ok" = 0 ] && command -v sfdisk >/dev/null 2>&1; then
+      if printf 'label: gpt\n,256M,U\n,4G,L\n,,L\n' | sfdisk --wipe always --wipe-partitions always "$DEV" 2>/dev/null || \
+         printf 'label: gpt\n,256M,U\n,4G,L\n,,L\n' | sfdisk "$DEV" 2>/dev/null; then
+        partition_ok=1
+      fi
     fi
+    if [ "$partition_ok" = 0 ] && command -v parted >/dev/null 2>&1; then
+      if parted -s "$DEV" mklabel gpt 2>/dev/null && \
+         parted -s "$DEV" mkpart MACLITE_BOOT fat32 1MiB 257MiB 2>/dev/null && \
+         parted -s "$DEV" set 1 esp on 2>/dev/null && \
+         parted -s "$DEV" mkpart MACLITE_DATA ext4 257MiB 4353MiB 2>/dev/null && \
+         parted -s "$DEV" mkpart MACLITE_BASE ext4 4353MiB 100% 2>/dev/null; then
+        partition_ok=1
+      fi
+    fi
+    if [ "$partition_ok" = 0 ] && command -v sgdisk >/dev/null 2>&1; then
+      if sgdisk -o \
+           -n 1:2048:+256M -t 1:ef00 -c 1:MACLITE_BOOT \
+           -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA \
+           -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE "$DEV" 2>/dev/null || \
+         sgdisk \
+           -n 1:2048:+256M -t 1:ef00 -c 1:MACLITE_BOOT \
+           -n 2:0:+4G -t 2:8300 -c 2:MACLITE_DATA \
+           -n 3:0:0 -t 3:8300 -c 3:MACLITE_BASE "$DEV" 2>/dev/null; then
+        partition_ok=1
+      fi
+    fi
+    if [ "$partition_ok" = 0 ] && command -v fdisk >/dev/null 2>&1; then
+      if printf '%s\n' "g" "n" "1" "" "+256M" "t" "1" "1" "n" "2" "" "+4G" "t" "2" "20" "n" "3" "" "" "t" "3" "20" "w" | fdisk "$DEV"; then
+        partition_ok=1
+      fi
+    fi
+
+    [ "$partition_ok" = 1 ] || fail "failed to partition $DEV with all available tools (sfdisk, parted, sgdisk, fdisk)"
+
     sync
     if command -v partprobe >/dev/null 2>&1; then
       run partprobe "$DEV"

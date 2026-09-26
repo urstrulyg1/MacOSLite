@@ -420,6 +420,20 @@ def test_partition_node_resolution_resilience():
     print("PASS: partition node resolution resilience, sysfs discovery, and mknod fallback")
 
 
+def test_partitioning_fallback_and_repair_resilience():
+    """Verify backend has multi-tool partitioning fallback, wipes both disk headers, and falls back from unpartitioned repair."""
+    backend_src = pathlib.Path("installer/maclite-installer-backend").read_text()
+    rootfs_backend = pathlib.Path("rootfs/usr/bin/maclite-installer-backend").read_text()
+
+    assert backend_src == rootfs_backend, "Rootfs backend must match installer backend"
+    assert "sfdisk" in backend_src and "parted" in backend_src and "sgdisk" in backend_src, \
+        "Backend must support sfdisk, parted, and sgdisk fallback hierarchy"
+    assert "seek_sec=" in backend_src, "Backend must wipe secondary GPT header at end of disk"
+    assert "has_partitions=" in backend_src, "Backend repair mode must check whether partitions exist"
+    assert "REPAIR_MODE=0" in backend_src, "Backend repair mode must fall back to fresh partitioning if target is unpartitioned"
+    print("PASS: partitioning multi-tool fallback, dual-header wipe, and repair mode resilience")
+
+
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
@@ -444,9 +458,11 @@ def main():
     test_iso_assembly_artifact_paths()
     test_findmnt_resilience_and_cursor_blit_integrity()
     test_partition_node_resolution_resilience()
+    test_partitioning_fallback_and_repair_resilience()
     print("All G1OS installer logic tests PASSED.\n")
     return 0
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
