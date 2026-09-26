@@ -82,6 +82,48 @@ def test_continue_state_machine():
     assert "selected disk is unavailable" in installer
     print("PASS: Continue/Back state transitions and invalid-target diagnostics")
 
+def test_summary_complete_state_machine():
+    import pathlib
+    installer = pathlib.Path("installer/mica-installer.c").read_text()
+
+    # Production hitbox must remain exactly aligned with the rendered Complete button.
+    assert "rect_contains_inclusive(x, y, cx - 100, h - 64, 200, 38)" in installer,         "Complete hitbox must remain aligned with the existing 200x38 SUMMARY button"
+
+    # The transition is a dedicated state-machine action, not a rendering workaround.
+    assert "static void activate_complete(void)" in installer
+    assert "STAGE = STAGE_COMPLETE;" in installer
+    assert 'persist_installer_state("summary_to_complete")' in installer
+
+    # Completion is fail-closed: only a fully verified, quiescent backend can transition.
+    assert "BACKEND_VERIFIED" in installer
+    assert "BACKEND_ACTIVE" in installer
+    assert "INSTALL_PID > 0" in installer
+    assert "INSTALL_PROGRESS < 100" in installer
+    assert "SUMMARY_CHECKS[i].passed" in installer
+
+    # A real physical click requires DOWN capture followed by matching UP dispatch.
+    assert "COMPLETE_BUTTON_PRESSED = true;" in installer
+    assert "bool was_complete = COMPLETE_BUTTON_PRESSED;" in installer
+    assert "if (was_complete && STAGE == STAGE_SUMMARY" in installer
+    assert "activate_complete();" in installer
+
+    down_start = installer.index("if (in->kind == IN_DOWN && in->button == 1)")
+    up_start = installer.index("if (in->kind == IN_UP && in->button == 1)")
+    down_path = installer[down_start:up_start]
+    assert "activate_complete();" not in down_path,         "SUMMARY Complete must never transition on mouse DOWN alone"
+
+    # Movement cannot activate the state transition; it only redraws pressed state.
+    move_start = installer.index("if (in->kind == IN_MOVE")
+    move_path = installer[move_start:]
+    assert "activate_complete();" not in move_path.split("/* Compatibility", 1)[0],         "Mouse movement must never activate Complete"
+
+    # The Complete button must be one-shot: its pressed state is cleared on UP,
+    # and the action itself requires STAGE_SUMMARY.
+    assert "COMPLETE_BUTTON_PRESSED = false;" in installer
+    assert "STAGE == STAGE_SUMMARY &&" in installer
+
+    print("PASS: SUMMARY Complete click regression: physical DOWN/UP -> STAGE_COMPLETE, with verification gate")
+
 
 def test_usb_protection():
     disks = [
@@ -438,6 +480,7 @@ def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
     test_continue_state_machine()
+    test_summary_complete_state_machine()
     test_usb_protection()
     test_storage_candidate_policy()
     test_console_handoff_architecture()

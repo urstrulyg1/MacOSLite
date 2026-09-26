@@ -82,6 +82,7 @@ static bool TEST_MODE = false;
 static bool BUTTON_PRESSED = false;
 static bool BACK_BUTTON_PRESSED = false;
 static bool AUX_BUTTON_PRESSED = false;
+static bool COMPLETE_BUTTON_PRESSED = false;
 static int ERROR_BTN_PRESSED = 0; /* 0 = none, 1 = retry, 2 = repair, 3 = details */
 static int BUTTON_PRESSED_X = -1, BUTTON_PRESSED_Y = -1;
 
@@ -154,6 +155,44 @@ static bool back_button_hit(int x, int y)
     int h = WIN && WIN->surf ? WIN->surf->h : WIN_H;
     return (STAGE == STAGE_SELECT || STAGE == STAGE_CONFIRM) &&
            rect_contains_inclusive(x, y, 48, h - 68, 108, 36);
+}
+
+static bool complete_button_hit(int x, int y)
+{
+    int w = WIN && WIN->surf ? WIN->surf->w : WIN_W;
+    int h = WIN && WIN->surf ? WIN->surf->h : WIN_H;
+    int cx = w / 2;
+    return STAGE == STAGE_SUMMARY &&
+           rect_contains_inclusive(x, y, cx - 100, h - 64, 200, 38);
+}
+
+static bool summary_verification_ready(void)
+{
+    if (STAGE != STAGE_SUMMARY ||
+        !BACKEND_VERIFIED ||
+        BACKEND_ACTIVE ||
+        INSTALL_PID > 0 ||
+        INSTALL_PROGRESS < 100)
+        return false;
+
+    for (int i = 0; i < 10; i++)
+        if (!SUMMARY_CHECKS[i].passed)
+            return false;
+    return true;
+}
+
+static void activate_complete(void)
+{
+    if (!summary_verification_ready()) {
+        add_log("UI: Complete activation blocked: installation verification is not ready.");
+        return;
+    }
+
+    STAGE = STAGE_COMPLETE;
+    COMPLETE_BUTTON_PRESSED = false;
+    persist_installer_state("summary_to_complete");
+    add_log("UI: Complete activated -> installation complete screen.");
+    draw();
 }
 
 static void activate_continue(void)
@@ -1015,7 +1054,7 @@ static void draw(void)
         }
 
         ml_rect b = ml_rect_make(cx - 100, s->h - 64, 200, 38);
-        ml_fill_rounded(&c, b, 12, ml_rgb(52, 133, 242));
+        ml_fill_rounded(&c, b, 12, COMPLETE_BUTTON_PRESSED ? ml_rgb(35, 105, 205) : ml_rgb(52, 133, 242));
         ml_draw_text(&c, fb, cx - 44, s->h - 40, "Complete", 13, ml_rgb(255, 255, 255));
 
     } else if (STAGE == STAGE_COMPLETE) {
@@ -1114,6 +1153,7 @@ static void input(mica_win *w, const msg_input *in)
         BUTTON_PRESSED = false;
         BACK_BUTTON_PRESSED = false;
         AUX_BUTTON_PRESSED = false;
+        COMPLETE_BUTTON_PRESSED = false;
 
         if (continue_button_hit(in->x, in->y)) {
             BUTTON_PRESSED = true;
@@ -1161,6 +1201,12 @@ static void input(mica_win *w, const msg_input *in)
                 draw();
                 return;
             }
+        } else if (STAGE == STAGE_SUMMARY && complete_button_hit(in->x, in->y) &&
+                   summary_verification_ready()) {
+            COMPLETE_BUTTON_PRESSED = true;
+            BUTTON_PRESSED_X = in->x;
+            BUTTON_PRESSED_Y = in->y;
+            add_log("UI: Complete DOWN local=%d,%d stage=%d", in->x, in->y, STAGE);
         } else if (STAGE == STAGE_SUMMARY) {
             if (rect_contains_inclusive(in->x, in->y, 48, 350, (WIN && WIN->surf ? WIN->surf->w : WIN_W) - 96, 26)) {
                 SHOW_DETAILS = !SHOW_DETAILS;
@@ -1205,11 +1251,13 @@ static void input(mica_win *w, const msg_input *in)
     if (in->kind == IN_UP && in->button == 1) {
         bool was_continue = BUTTON_PRESSED;
         bool was_back = BACK_BUTTON_PRESSED;
+        bool was_complete = COMPLETE_BUTTON_PRESSED;
         bool was_aux = AUX_BUTTON_PRESSED;
         int was_error_btn = ERROR_BTN_PRESSED;
         BUTTON_PRESSED = false;
         BACK_BUTTON_PRESSED = false;
         AUX_BUTTON_PRESSED = false;
+        COMPLETE_BUTTON_PRESSED = false;
         ERROR_BTN_PRESSED = 0;
 
         if (was_continue && continue_button_hit(in->x, in->y)) {
@@ -1220,6 +1268,13 @@ static void input(mica_win *w, const msg_input *in)
         if (was_back && back_button_hit(in->x, in->y)) {
             add_log("UI: Back UP/hit local=%d,%d -> activate", in->x, in->y);
             activate_back();
+            return;
+        }
+
+        if (was_complete && STAGE == STAGE_SUMMARY &&
+            complete_button_hit(in->x, in->y) && summary_verification_ready()) {
+            add_log("UI: Complete UP/hit local=%d,%d -> activate", in->x, in->y);
+            activate_complete();
             return;
         }
 
@@ -1274,6 +1329,9 @@ static void input(mica_win *w, const msg_input *in)
             activate_continue();
         } else if (back_button_hit(in->x, in->y)) {
             activate_back();
+        } else if (complete_button_hit(in->x, in->y) && summary_verification_ready()) {
+            add_log("UI: legacy IN_CLICK -> Complete activation");
+            activate_complete();
         }
     }
 }
