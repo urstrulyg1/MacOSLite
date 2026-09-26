@@ -41,11 +41,28 @@ jobs:
           rm -f out/kernel-version.txt out/kernel-source.sha256 out/iso-manifest.txt out/iso-file-list.txt
 
       # Fail-fast prerequisite: no expensive compilation starts until shell checks pass.
-      - name: Shell syntax and ShellCheck
+      - name: Shell syntax and ShellCheck — installation audit
         working-directory: macliteos
         run: |
           set -eu
-          for f in $(find . -type f \( -name '*.sh' -o -path './installer/maclite-install' -o -path './installer/maclite-installer-backend' -o -path './boot/g1os-init' \)); do
+          sh -n scripts/audit-installation-contract.sh
+          shellcheck -s sh scripts/audit-installation-contract.sh
+
+      - name: Shell syntax and ShellCheck — init/boot
+        working-directory: macliteos
+        run: |
+          set -eu
+          sh -n boot/g1os-init
+          shellcheck -s sh boot/g1os-init
+
+      - name: Shell syntax and ShellCheck — all remaining scripts
+        working-directory: macliteos
+        run: |
+          set -eu
+          for f in $(find . -type f \( -name '*.sh' -o -path './installer/maclite-install' -o -path './installer/maclite-installer-backend' \)); do
+            case "$f" in
+              ./scripts/audit-installation-contract.sh|./boot/g1os-init) continue ;;
+            esac
             sh -n "$f"
             shellcheck -s sh "$f"
           done
