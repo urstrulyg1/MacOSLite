@@ -106,6 +106,11 @@ if [ -n "$ISO" ]; then
     for p in boot/vmlinuz-maclite boot/initrd-maclite.img live/maclite-base.sqfs EFI/BOOT/BOOTX64.EFI; do
       if grep -Fi "$p" "$LIST" >/dev/null; then pass "ISO contains $p"; else fail "ISO missing $p"; fi
     done
+    if grep -Fi "/base/" "$LIST" >/dev/null; then
+      fail "ISO contains leaked uncompressed rootfs staging tree (/base)"
+    else
+      pass "ISO does not contain leaked staging tree (/base)"
+    fi
   else
     fail "xorriso is required for ISO inspection"
   fi

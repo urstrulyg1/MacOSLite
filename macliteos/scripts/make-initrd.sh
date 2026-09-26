@@ -158,7 +158,7 @@ iteration=0
 while :; do
     iteration=$((iteration + 1))
     before=$(find "$W/lib" "$W/lib64" "$W/usr/lib" "$W/usr/lib64" -path "*/lib/modules" -prune -o -type f -print 2>/dev/null | wc -l | tr -d ' ')
-    for exe in "$W"/usr/bin/*; do
+    for exe in "$W"/usr/bin/* "$W"/sbin/* "$W"/bin/*; do
         [ -f "$exe" ] || continue
         scan_deps "$exe"
     done

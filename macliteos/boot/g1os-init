@@ -107,6 +107,7 @@ emit "Kernel command line: $CMDLINE"
 SAFE=0
 case " $CMDLINE " in *nomodeset*|*radeon.modeset=0*|*maclite.gl=off*) SAFE=1 ;; esac
 if [ "$SAFE" = 1 ]; then
+    export MICA_GL=off
     status OK "Safe Graphics selected (software compositor; KMS preferred, fbdev fallback)"
 else
     status OK "Normal Graphics selected (Radeon KMS requested)"

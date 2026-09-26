@@ -25,7 +25,9 @@ static void test_ram(void)
     for (size_t i = 0; i < n; i += 64) p[i] = 0xA5;
     double ms = ml_elapsed_ms(t0);
     printf("[RAM]      %llu MB total, %llu MB available; write bandwidth %.1f GB/s\n",
-           m.total_kb / 1024, m.avail_kb / 1024, (double)n / ms / 1e6);
+           (unsigned long long)(m.total_kb / 1024),
+           (unsigned long long)(m.avail_kb / 1024),
+           (double)n / ms / 1e6);
     ml_free((void *)p);
 }
 static void test_disk(void)

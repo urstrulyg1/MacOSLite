@@ -91,6 +91,9 @@ if [ -s "$ISO" ]; then
     for required in /boot/vmlinuz-maclite /boot/initrd-maclite.img /boot/g1os-kernel-manifest.txt /boot/g1os-initrd-manifest.txt /boot/g1os-boot-manifest.txt /boot/grub.cfg /live/maclite-base.sqfs /EFI/BOOT/BOOTX64.EFI; do
         grep -F "$required" "$TMP/iso-files" >/dev/null || fail "ISO missing required path: $required"
     done
+    if grep -Fi "/base/" "$TMP/iso-files" >/dev/null; then
+        fail "ISO contains leaked uncompressed staging path (/base)"
+    fi
     xorriso -osirrox on -indev "$ISO" -extract / "$TMP/iso" >/dev/null 2>&1 || fail "ISO extraction failed"
     chmod -R u+rwx "$TMP/iso" 2>/dev/null || true
     [ -s "$TMP/iso/boot/initrd-maclite.img" ] || fail "extracted ISO initramfs missing"

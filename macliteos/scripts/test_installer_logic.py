@@ -476,6 +476,22 @@ def test_partitioning_fallback_and_repair_resilience():
     print("PASS: partitioning multi-tool fallback, dual-header wipe, and repair mode resilience")
 
 
+def test_iso_clean_staging_and_elf_scan():
+    """Verify ISO does not leak base staging, and initrd scans all bin/sbin dirs."""
+    make_iso = pathlib.Path("scripts/make-iso.sh").read_text()
+    make_initrd = pathlib.Path("scripts/make-initrd.sh").read_text()
+    val_script = pathlib.Path("scripts/validate-boot-artifacts.sh").read_text()
+    g1os_init = pathlib.Path("boot/g1os-init").read_text()
+
+    assert "BASE_ST=" in make_iso, "make-iso.sh must use a distinct staging directory for the base rootfs"
+    assert 'mksquashfs "$BASE_ST"' in make_iso, "make-iso.sh must squash from BASE_ST"
+    assert 'rm -rf "$BASE_ST"' in make_iso, "make-iso.sh must clean up BASE_ST before xorriso"
+    assert '"$W"/usr/bin/* "$W"/sbin/* "$W"/bin/*' in make_initrd, "make-initrd.sh must scan dependencies across bin, sbin, and usr/bin"
+    assert '"$TMP/initrd"/usr/bin "$TMP/initrd"/sbin "$TMP/initrd"/bin' in val_script, "validate-boot-artifacts.sh must inspect ELF across all bin/sbin directories"
+    assert 'export MICA_GL=off' in g1os_init, "g1os-init must configure software rendering for Safe Graphics"
+    print("PASS: clean ISO staging (no leaked Joliet symlinks) and complete ELF dependency closure")
+
+
 def main():
     print("=== Running G1OS Installer Logic Tests ===")
     test_pointer_capture_and_click_path()
@@ -502,6 +518,7 @@ def main():
     test_findmnt_resilience_and_cursor_blit_integrity()
     test_partition_node_resolution_resilience()
     test_partitioning_fallback_and_repair_resilience()
+    test_iso_clean_staging_and_elf_scan()
     print("All G1OS installer logic tests PASSED.\n")
     return 0
 
